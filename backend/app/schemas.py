@@ -81,16 +81,16 @@ class PlanningPolicyBase(BaseModel):
     sku: str
     warehouse_code: str
     mode: PlanningMode = PlanningMode.WOS_TARGET
-    target_weeks: Decimal = 4
+    target_weeks: Decimal = Decimal("4")
     safety_stock_method: SafetyStockMethod = SafetyStockMethod.WEEKS
-    safety_stock_weeks: Decimal = 1
-    service_level: Decimal = 0.95
+    safety_stock_weeks: Decimal = Decimal("1")
+    service_level: Decimal = Decimal("0.95")
     forecast_window_weeks: int = 8
-    lead_time_production_weeks: Decimal = 2
-    lead_time_slot_wait_weeks: Decimal = 0
-    lead_time_haulage_weeks: Decimal = 1
-    lead_time_putaway_weeks: Decimal = 0
-    lead_time_padding_weeks: Decimal = 0
+    lead_time_production_weeks: Decimal = Decimal("2")
+    lead_time_slot_wait_weeks: Decimal = Decimal("0")
+    lead_time_haulage_weeks: Decimal = Decimal("1")
+    lead_time_putaway_weeks: Decimal = Decimal("0")
+    lead_time_padding_weeks: Decimal = Decimal("0")
     include_samples: bool = True
 
 
@@ -109,7 +109,7 @@ class InventorySnapshotBase(BaseModel):
     week_start: date
     sku: str
     warehouse_code: str
-    on_hand_qty: Decimal = 0
+    on_hand_qty: Decimal = Decimal("0")
 
 
 class InventorySnapshot(InventorySnapshotBase):

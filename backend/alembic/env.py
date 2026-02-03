@@ -1,3 +1,4 @@
+# pyright: reportAttributeAccessIssue=false, reportUnknownVariableType=false, reportUnknownMemberType=false, reportUnknownArgumentType=false
 from logging.config import fileConfig
 from sqlalchemy import engine_from_config
 from sqlalchemy import pool

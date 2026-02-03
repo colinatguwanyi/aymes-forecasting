@@ -8,11 +8,13 @@ Weekly supply planning logic (corrected):
 - Lead time: ceil(sum(components)) weeks to arrival.
 """
 from __future__ import annotations
+
 import logging
 import math
 from collections import defaultdict
 from datetime import date, timedelta
 from decimal import Decimal
+from typing import Any, cast
 
 from sqlalchemy.orm import Session
 
@@ -55,18 +57,24 @@ def run_plan(db: Session, scenario_name: str, run_at: date | None = None) -> Pla
     latest_week_per_key: dict[tuple[str, str], date] = {}
     starting_inv: dict[tuple[str, str], tuple[date, Decimal]] = {}
     for row in all_inv:
-        key = (row.sku, row.warehouse_code)
-        if key not in latest_week_per_key or row.week_start > latest_week_per_key[key]:
-            latest_week_per_key[key] = row.week_start
-            starting_inv[key] = (row.week_start, row.on_hand_qty)
-        elif row.week_start == latest_week_per_key[key]:
-            starting_inv[key] = (row.week_start, row.on_hand_qty)
+        sku_val = cast(str, row.sku)
+        wh_val = cast(str, row.warehouse_code)
+        key = (sku_val, wh_val)
+        ws = cast(date, row.week_start)
+        qty_val = cast(Decimal | None, row.on_hand_qty) or Decimal("0")
+        if key not in latest_week_per_key or ws > latest_week_per_key[key]:
+            latest_week_per_key[key] = ws
+            starting_inv[key] = (ws, qty_val)
+        elif ws == latest_week_per_key[key]:
+            starting_inv[key] = (ws, qty_val)
 
     # 2) Receipts: (week_start, sku, warehouse_code) -> qty (sum)
     receipts_rows = db.query(Receipt).all()
     receipts: defaultdict[tuple[date, str, str], Decimal] = defaultdict(lambda: Decimal("0"))
     for r in receipts_rows:
-        receipts[(r.week_start, r.sku, r.warehouse_code)] += r.qty
+        receipts[(cast(date, r.week_start), cast(str, r.sku), cast(str, r.warehouse_code))] += cast(
+            Decimal, r.qty
+        )
 
     # 3) Demand actuals: (week_start, sku, warehouse_code, demand_type) -> qty (sum)
     demand_rows = db.query(DemandActual).all()
@@ -74,16 +82,25 @@ def run_plan(db: Session, scenario_name: str, run_at: date | None = None) -> Pla
         lambda: Decimal("0")
     )
     for d in demand_rows:
-        demand_by_type[(d.week_start, d.sku, d.warehouse_code, d.demand_type)] += d.qty
+        demand_by_type[
+            (
+                cast(date, d.week_start),
+                cast(str, d.sku),
+                cast(str, d.warehouse_code),
+                cast(DemandType, d.demand_type),
+            )
+        ] += cast(Decimal, d.qty)
 
     policies = db.query(PlanningPolicy).all()
-    policy_by_key = {(p.sku, p.warehouse_code): p for p in policies}
+    policy_by_key: dict[tuple[str, str], PlanningPolicy] = {
+        (cast(str, p.sku), cast(str, p.warehouse_code)): p for p in policies
+    }
 
     # 4) Forecast: history_weeks = demand where week_start <= run_week; trailing mean = last forecast_window_weeks
     forecast_customer: dict[tuple[str, str], Decimal] = {}
     forecast_samples: dict[tuple[str, str], Decimal] = {}
     for (sku, wh_code), policy in policy_by_key.items():
-        n = policy.forecast_window_weeks or 8
+        n = cast(int | None, policy.forecast_window_weeks) or 8
         history_c: list[tuple[date, Decimal]] = []
         history_s: list[tuple[date, Decimal]] = []
         for (w, s, wc, dt), qty in demand_by_type.items():
@@ -115,8 +132,8 @@ def run_plan(db: Session, scenario_name: str, run_at: date | None = None) -> Pla
         receipts_plus_orders[k] += v
 
     sku_wh_set = set(policy_by_key.keys()) | set(starting_inv.keys())
-    projected_rows: list[dict] = []
-    planned_order_rows: list[dict] = []
+    projected_rows: list[dict[str, Any]] = []
+    planned_order_rows: list[dict[str, Any]] = []
 
     for (sku, wh_code) in sku_wh_set:
         policy = policy_by_key.get((sku, wh_code))
@@ -126,26 +143,30 @@ def run_plan(db: Session, scenario_name: str, run_at: date | None = None) -> Pla
         if not start_data:
             continue
         snapshot_week, start_qty = start_data
-        total_lt_float = float(
-            (policy.lead_time_production_weeks or 0)
-            + (policy.lead_time_slot_wait_weeks or 0)
-            + (policy.lead_time_haulage_weeks or 0)
-            + (policy.lead_time_putaway_weeks or 0)
-            + (policy.lead_time_padding_weeks or 0)
-        )
+        lt_prod = float(cast(Decimal | None, policy.lead_time_production_weeks) or 0)
+        lt_slot = float(cast(Decimal | None, policy.lead_time_slot_wait_weeks) or 0)
+        lt_haul = float(cast(Decimal | None, policy.lead_time_haulage_weeks) or 0)
+        lt_put = float(cast(Decimal | None, policy.lead_time_putaway_weeks) or 0)
+        lt_pad = float(cast(Decimal | None, policy.lead_time_padding_weeks) or 0)
+        total_lt_float = lt_prod + lt_slot + lt_haul + lt_put + lt_pad
         lt_weeks_int = max(0, math.ceil(total_lt_float))
-        include_samples = getattr(policy, "include_samples", True)
-        fc_c = forecast_customer.get((sku, wh_code), Decimal("0"))
-        fc_s = forecast_samples.get((sku, wh_code), Decimal("0")) if include_samples else Decimal("0")
-        total_forecast_per_week = fc_c + fc_s
-        safety_weeks = float(policy.safety_stock_weeks or 0)
-        safety_stock_qty = (
+        include_samples: bool = cast(bool, getattr(policy, "include_samples", True))
+        fc_c: Decimal = forecast_customer.get((sku, wh_code), Decimal("0"))
+        fc_s: Decimal = (
+            forecast_samples.get((sku, wh_code), Decimal("0")) if include_samples else Decimal("0")
+        )
+        total_forecast_per_week: Decimal = fc_c + fc_s
+        safety_weeks = float(cast(Decimal | None, policy.safety_stock_weeks) or 0)
+        ss_method: SafetyStockMethod = cast(
+            SafetyStockMethod | None, policy.safety_stock_method
+        ) or SafetyStockMethod.WEEKS
+        safety_stock_qty: Decimal = (
             total_forecast_per_week * Decimal(str(safety_weeks))
-            if policy.safety_stock_method == SafetyStockMethod.WEEKS and total_forecast_per_week > 0
+            if ss_method == SafetyStockMethod.WEEKS and total_forecast_per_week > 0
             else Decimal("0")
         )
-        target_weeks = float(policy.target_weeks or 4)
-        mode = policy.mode or PlanningMode.WOS_TARGET
+        target_weeks = float(cast(Decimal | None, policy.target_weeks) or 4)
+        mode: PlanningMode = cast(PlanningMode | None, policy.mode) or PlanningMode.WOS_TARGET
 
         inv = start_qty
         # Build projection weeks: from snapshot_week forward only (next 52 weeks)
@@ -156,22 +177,26 @@ def run_plan(db: Session, scenario_name: str, run_at: date | None = None) -> Pla
             w = _next_monday(w)
 
         for w in proj_weeks:
-            rec = receipts_plus_orders.get((w, sku, wh_code), Decimal("0"))
-            d_c = demand_by_type.get((w, sku, wh_code, DemandType.CUSTOMER))
-            d_s = demand_by_type.get((w, sku, wh_code, DemandType.SAMPLES)) if include_samples else None
-            d_adj = demand_by_type.get((w, sku, wh_code, DemandType.ADJUSTMENT), Decimal("0"))
+            rec: Decimal = receipts_plus_orders.get((w, sku, wh_code), Decimal("0"))
+            d_c: Decimal | None = demand_by_type.get((w, sku, wh_code, DemandType.CUSTOMER))
+            d_s: Decimal | None = (
+                demand_by_type.get((w, sku, wh_code, DemandType.SAMPLES)) if include_samples else None
+            )
+            d_adj: Decimal = demand_by_type.get(
+                (w, sku, wh_code, DemandType.ADJUSTMENT), Decimal("0")
+            )
             demand_c = d_c if d_c is not None else fc_c
             demand_s = d_s if d_s is not None else (fc_s if include_samples else Decimal("0"))
-            demand = demand_c + demand_s + d_adj
-            start_qty_week = inv
+            demand: Decimal = demand_c + demand_s + d_adj
+            start_qty_week: Decimal = inv
             inv = inv + rec - demand
-            end_qty_week = inv
+            end_qty_week: Decimal = inv
 
             if total_forecast_per_week > 0:
-                woc = float(inv) / float(total_forecast_per_week)
+                woc: float = float(inv) / float(total_forecast_per_week)
             else:
                 woc = 999.0 if inv > 0 else 0.0
-            stockout = inv < 0
+            stockout: bool = inv < 0
 
             projected_rows.append({
                 "plan_run_id": plan_run.id,
@@ -187,18 +212,19 @@ def run_plan(db: Session, scenario_name: str, run_at: date | None = None) -> Pla
             })
 
             # Planned order
-            order_qty = Decimal("0")
+            order_qty: Decimal = Decimal("0")
             if mode == PlanningMode.WOS_TARGET:
                 if woc < target_weeks and total_forecast_per_week > 0:
                     shortfall_weeks = target_weeks - woc
                     order_qty = Decimal(
-                        str(round(float(shortfall_weeks * total_forecast_per_week), 4))
+                        str(round(shortfall_weeks * float(total_forecast_per_week), 4))
                     )
             else:
-                rop = (total_forecast_per_week * Decimal(str(lt_weeks_int))) + safety_stock_qty
+                rop: Decimal = (
+                    total_forecast_per_week * Decimal(str(lt_weeks_int))
+                ) + safety_stock_qty
                 if inv < rop and total_forecast_per_week > 0:
-                    order_qty = rop - inv
-                    order_qty = max(order_qty, Decimal("0"))
+                    order_qty = max(rop - inv, Decimal("0"))
                     order_qty = Decimal(str(round(float(order_qty), 4)))
 
             if order_qty > 0:
@@ -221,9 +247,10 @@ def run_plan(db: Session, scenario_name: str, run_at: date | None = None) -> Pla
                         if total_forecast_per_week > 0
                         else 999.0
                     )
-                    projected_rows[-1]["projected_qty"] = inv
-                    projected_rows[-1]["weeks_of_cover"] = Decimal(str(round(woc, 2)))
-                    projected_rows[-1]["stockout"] = inv < 0
+                    last_proj: dict[str, Any] = projected_rows[-1]
+                    last_proj["projected_qty"] = inv
+                    last_proj["weeks_of_cover"] = Decimal(str(round(woc, 2)))
+                    last_proj["stockout"] = inv < 0
 
     for r in projected_rows:
         db.add(ProjectedInventory(**r))

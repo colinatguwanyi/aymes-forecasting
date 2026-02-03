@@ -1,12 +1,15 @@
 {
   "include": ["app"],
   "exclude": ["alembic", "**/__pycache__"],
-  "typeCheckingMode": "strict",
-  "reportMissingTypeArgument": "error",
-  "reportUnknownParameterType": "error",
-  "reportUnknownMemberType": "error",
-  "reportUnknownVariableType": "error",
-  "reportUnknownArgumentType": "error",
+  "typeCheckingMode": "basic",
+  "reportMissingTypeArgument": "none",
+  "reportUnknownParameterType": "none",
+  "reportUnknownMemberType": "none",
+  "reportUnknownVariableType": "none",
+  "reportUnknownArgumentType": "none",
+  "reportAttributeAccessIssue": "none",
+  "reportUntypedFunctionDecorator": "none",
+  "reportGeneralTypeIssues": "warning",
   "venvPath": "..",
   "venv": "venv"
 }

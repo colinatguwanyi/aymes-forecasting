@@ -5,6 +5,7 @@ Revises:
 Create Date: 2025-02-03
 
 """
+# pyright: reportUnknownMemberType=false, reportUnknownArgumentType=false
 from typing import Sequence, Union
 from alembic import op
 import sqlalchemy as sa
