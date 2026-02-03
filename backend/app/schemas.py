@@ -197,6 +197,43 @@ class PlannedOrder(PlannedOrderBase):
         from_attributes = True
 
 
+# SKU-week explainability (Phase 1: forecast transparency)
+class SkuWeekExplanationPolicy(BaseModel):
+    """Policy inputs used for this SKU/week."""
+    mode: Optional[str] = None
+    target_weeks: Optional[Decimal] = None
+    safety_stock_weeks: Optional[Decimal] = None
+    safety_stock_method: Optional[str] = None
+    forecast_window_weeks: Optional[int] = None
+    lead_time_production_weeks: Optional[Decimal] = None
+    lead_time_slot_wait_weeks: Optional[Decimal] = None
+    lead_time_haulage_weeks: Optional[Decimal] = None
+    lead_time_putaway_weeks: Optional[Decimal] = None
+    lead_time_padding_weeks: Optional[Decimal] = None
+    include_samples: bool = True
+
+
+class SkuWeekExplanationProjection(BaseModel):
+    """Projection outputs for this SKU/week."""
+    week_start: date
+    start_qty: Optional[Decimal] = None
+    receipts_qty: Optional[Decimal] = None
+    demand_qty: Optional[Decimal] = None
+    projected_qty: Decimal
+    weeks_of_cover: Optional[Decimal] = None
+    stockout: bool = False
+
+
+class SkuWeekExplanation(BaseModel):
+    """Explain-the-forecast payload for one SKU/week."""
+    sku: str
+    warehouse_code: str
+    plan_run_id: int
+    policy: Optional[SkuWeekExplanationPolicy] = None
+    projection: Optional[SkuWeekExplanationProjection] = None
+    forecast_method: str = "trailing_mean"
+
+
 # Import validation
 class ImportRowError(BaseModel):
     row: int

@@ -77,6 +77,40 @@ export interface PlanningPolicy {
   lead_time_padding_weeks: string
 }
 
+/** Explain-the-forecast payload for one SKU/week (Phase 1). */
+export interface SkuWeekExplanationPolicy {
+  mode?: string | null
+  target_weeks?: string | null
+  safety_stock_weeks?: string | null
+  safety_stock_method?: string | null
+  forecast_window_weeks?: number | null
+  lead_time_production_weeks?: string | null
+  lead_time_slot_wait_weeks?: string | null
+  lead_time_haulage_weeks?: string | null
+  lead_time_putaway_weeks?: string | null
+  lead_time_padding_weeks?: string | null
+  include_samples?: boolean
+}
+
+export interface SkuWeekExplanationProjection {
+  week_start: string
+  start_qty?: string | null
+  receipts_qty?: string | null
+  demand_qty?: string | null
+  projected_qty: string
+  weeks_of_cover?: string | null
+  stockout: boolean
+}
+
+export interface SkuWeekExplanation {
+  sku: string
+  warehouse_code: string
+  plan_run_id: number
+  policy?: SkuWeekExplanationPolicy | null
+  projection?: SkuWeekExplanationProjection | null
+  forecast_method: string
+}
+
 export interface ImportRowError {
   row: number
   errors: string[]

@@ -1,6 +1,11 @@
 import { defineStore } from 'pinia'
 import { ref, computed } from 'vue'
-import api, { type PlanRun, type ProjectedInventory, type PlannedOrder } from '@/api/client'
+import api, {
+  type PlanRun,
+  type PlannedOrder,
+  type ProjectedInventory,
+  type SkuWeekExplanation,
+} from '@/api/client'
 
 export const usePlanningStore = defineStore('planning', () => {
   const planRuns = ref<PlanRun[]>([])
@@ -36,6 +41,19 @@ export const usePlanningStore = defineStore('planning', () => {
     return data
   }
 
+  async function fetchSkuWeekExplanation(
+    planRunId: number,
+    sku: string,
+    warehouseCode: string,
+    weekStart: string
+  ) {
+    const params = new URLSearchParams({ sku, warehouse_code: warehouseCode, week_start: weekStart })
+    const { data } = await api.get<SkuWeekExplanation>(
+      `/plan/runs/${planRunId}/explanation?${params}`
+    )
+    return data
+  }
+
   const selectedRuns = computed(() =>
     planRuns.value.filter((r) => selectedRunIds.value.includes(r.id))
   )
@@ -48,5 +66,6 @@ export const usePlanningStore = defineStore('planning', () => {
     runPlan,
     fetchProjectedInventory,
     fetchPlannedOrders,
+    fetchSkuWeekExplanation,
   }
 })

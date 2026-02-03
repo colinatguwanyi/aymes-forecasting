@@ -7,6 +7,7 @@
       <span class="nav-section">MAIN</span>
       <router-link to="/" class="nav-item" active-class="active">Dashboard</router-link>
       <router-link to="/inventory-projection" class="nav-item" active-class="active">Inventory Projection</router-link>
+      <router-link to="/planning-grid" class="nav-item" active-class="active">Weekly Planning Grid</router-link>
       <router-link to="/planned-orders" class="nav-item" active-class="active">Planned Orders</router-link>
       <span class="nav-section">DATA</span>
       <router-link to="/admin" class="nav-item" active-class="active">Admin</router-link>
