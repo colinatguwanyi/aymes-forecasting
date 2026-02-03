@@ -3,6 +3,7 @@ import { ref, computed } from 'vue'
 import api, {
   type PlanRun,
   type PlannedOrder,
+  type PlanningException,
   type ProjectedInventory,
   type Receipt,
   type DemandActual,
@@ -57,6 +58,21 @@ export const usePlanningStore = defineStore('planning', () => {
     return data
   }
 
+  async function fetchExceptions(
+    planRunId: number,
+    withinWeeks: number = 12,
+    includeLowCover: boolean = true
+  ) {
+    const params = new URLSearchParams({
+      within_weeks: String(withinWeeks),
+      include_low_cover: String(includeLowCover),
+    })
+    const { data } = await api.get<PlanningException[]>(
+      `/plan/runs/${planRunId}/exceptions?${params}`
+    )
+    return data
+  }
+
   async function fetchReceipts(sku: string, warehouseCode: string) {
     const params = new URLSearchParams({ sku, warehouse_code: warehouseCode })
     const { data } = await api.get<Receipt[]>(`/receipts?${params}`)
@@ -88,6 +104,7 @@ export const usePlanningStore = defineStore('planning', () => {
     fetchProjectedInventory,
     fetchPlannedOrders,
     fetchSkuWeekExplanation,
+    fetchExceptions,
     fetchReceipts,
     fetchDemandActuals,
     fetchInventorySnapshots,

@@ -234,6 +234,20 @@ class SkuWeekExplanation(BaseModel):
     forecast_method: str = "trailing_mean"
 
 
+# Exceptions (Phase 3: derived from projected inventory)
+class PlanningException(BaseModel):
+    """One planning exception (stockout or low cover) for the exceptions queue."""
+    type: str  # "stockout" | "low_cover"
+    severity: str  # "error" | "warning"
+    sku: str
+    warehouse_code: str
+    week_start: date
+    message: str
+    projected_qty: Optional[Decimal] = None
+    weeks_of_cover: Optional[Decimal] = None
+    plan_run_id: int
+
+
 # Import validation
 class ImportRowError(BaseModel):
     row: int

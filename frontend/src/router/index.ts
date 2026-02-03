@@ -8,6 +8,7 @@ const router = createRouter({
     { path: '/planning-grid', name: 'WeeklyPlanningGrid', meta: { title: 'Weekly Planning Grid' }, component: () => import('../views/WeeklyPlanningGridView.vue') },
     { path: '/sku-detail', name: 'SkuDetail', meta: { title: 'SKU Detail' }, component: () => import('../views/SkuDetailView.vue') },
     { path: '/planned-orders', name: 'PlannedOrders', meta: { title: 'Planned Orders' }, component: () => import('../views/PlannedOrdersView.vue') },
+    { path: '/exceptions', name: 'Exceptions', meta: { title: 'Exceptions' }, component: () => import('../views/ExceptionsView.vue') },
     { path: '/admin', name: 'Admin', meta: { title: 'Admin' }, component: () => import('../views/AdminView.vue') },
     { path: '/imports', name: 'Imports', meta: { title: 'Imports' }, component: () => import('../views/ImportsView.vue') },
     { path: '/exports', name: 'Exports', meta: { title: 'Exports' }, component: () => import('../views/ExportsView.vue') },

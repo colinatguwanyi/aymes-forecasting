@@ -94,12 +94,14 @@
 
 <script setup lang="ts">
 import { ref, computed, watch, onMounted } from 'vue'
+import { useRoute } from 'vue-router'
 import { useLayoutStore } from '@/stores/layout'
 import { usePlanningStore } from '@/stores/planning'
 import type { ProjectedInventory, SkuWeekExplanation } from '@/api/client'
 
 const LOW_COVER_WEEKS = 2
 
+const route = useRoute()
 const store = usePlanningStore()
 const layout = useLayoutStore()
 const loading = ref(true)
@@ -215,7 +217,12 @@ watch(
 )
 onMounted(async () => {
   await store.fetchPlanRuns()
-  if (store.planRuns.length) selectedRunId.value = store.planRuns[0].id
+  const q = route.query.plan_run_id
+  if (typeof q === 'string' && q) {
+    const id = parseInt(q, 10)
+    if (!isNaN(id) && store.planRuns.some((r) => r.id === id)) selectedRunId.value = id
+  }
+  if (selectedRunId.value == null && store.planRuns.length) selectedRunId.value = store.planRuns[0].id
   loading.value = false
   await load()
 })

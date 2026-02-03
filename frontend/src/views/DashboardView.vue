@@ -60,6 +60,42 @@
       </section>
 
       <section class="content-section">
+        <h2>Compare scenarios</h2>
+        <p class="muted">Compare exception counts between two runs (within 26 weeks).</p>
+        <div class="compare-controls">
+          <div class="form-row">
+            <label class="form-label">Scenario A</label>
+            <select v-model="compareRunA" class="app-select" style="max-width: 18rem;">
+              <option :value="null">Select</option>
+              <option v-for="r in planRuns" :key="r.id" :value="r.id">{{ r.scenario_name }} ({{ r.created_at }})</option>
+            </select>
+          </div>
+          <div class="form-row">
+            <label class="form-label">Scenario B</label>
+            <select v-model="compareRunB" class="app-select" style="max-width: 18rem;">
+              <option :value="null">Select</option>
+              <option v-for="r in planRuns" :key="r.id" :value="r.id">{{ r.scenario_name }} ({{ r.created_at }})</option>
+            </select>
+          </div>
+        </div>
+        <div v-if="compareRunA && compareRunB" class="compare-summary">
+          <div class="compare-card">
+            <h3>{{ runAName }}</h3>
+            <p>Stockouts: {{ exceptionsA.filter(e => e.type === 'stockout').length }}</p>
+            <p>Low cover: {{ exceptionsA.filter(e => e.type === 'low_cover').length }}</p>
+            <router-link :to="{ path: '/planning-grid', query: { plan_run_id: String(compareRunA) } }" class="app-btn">View in Planning Grid</router-link>
+          </div>
+          <div class="compare-card">
+            <h3>{{ runBName }}</h3>
+            <p>Stockouts: {{ exceptionsB.filter(e => e.type === 'stockout').length }}</p>
+            <p>Low cover: {{ exceptionsB.filter(e => e.type === 'low_cover').length }}</p>
+            <router-link :to="{ path: '/planning-grid', query: { plan_run_id: String(compareRunB) } }" class="app-btn">View in Planning Grid</router-link>
+          </div>
+        </div>
+        <p v-else class="muted">Select two scenarios to compare.</p>
+      </section>
+
+      <section class="content-section">
         <h2>Plan runs</h2>
         <div class="app-table-wrap">
           <table class="app-table">
@@ -87,12 +123,16 @@
 <script setup lang="ts">
 import { ref, computed, onMounted, watch } from 'vue'
 import { usePlanningStore } from '@/stores/planning'
-import type { ProjectedInventory } from '@/api/client'
+import type { ProjectedInventory, PlanningException } from '@/api/client'
 
 const store = usePlanningStore()
 const loading = ref(true)
 const scenarioName = ref('baseline')
 const selectedRunId = ref<number | null>(null)
+const compareRunA = ref<number | null>(null)
+const compareRunB = ref<number | null>(null)
+const exceptionsA = ref<PlanningException[]>([])
+const exceptionsB = ref<PlanningException[]>([])
 
 const planRuns = computed(() => store.planRuns)
 
@@ -146,6 +186,9 @@ const topRisks = computed(() => {
     .slice(0, 20)
 })
 
+const runAName = computed(() => planRuns.value.find((r) => r.id === compareRunA.value)?.scenario_name ?? '—')
+const runBName = computed(() => planRuns.value.find((r) => r.id === compareRunB.value)?.scenario_name ?? '—')
+
 async function runScenario() {
   await store.runPlan(scenarioName.value)
   await store.fetchPlanRuns()
@@ -165,9 +208,29 @@ watch(selectedRunId, async (id) => {
     projected.value = []
   }
 }, { immediate: true })
+
+watch(compareRunA, async (id) => {
+  if (id) exceptionsA.value = await store.fetchExceptions(id, 26, true)
+  else exceptionsA.value = []
+})
+watch(compareRunB, async (id) => {
+  if (id) exceptionsB.value = await store.fetchExceptions(id, 26, true)
+  else exceptionsB.value = []
+})
 </script>
 
 <style scoped>
 .form-inline { display: flex; gap: 0.5rem; align-items: center; flex-wrap: wrap; }
 .risk-summary p { margin: 0.25rem 0; font-size: 0.875rem; }
+.compare-controls { display: flex; flex-wrap: wrap; gap: 1rem 1.5rem; margin-bottom: 0.75rem; }
+.compare-summary { display: flex; gap: 1.5rem; flex-wrap: wrap; }
+.compare-card {
+  min-width: 200px;
+  padding: 1rem;
+  border: 1px solid var(--border);
+  background: var(--main-bg);
+}
+.compare-card h3 { font-size: 0.9375rem; margin-bottom: 0.5rem; }
+.compare-card p { margin: 0.25rem 0; font-size: 0.875rem; }
+.compare-card .app-btn { margin-top: 0.5rem; text-decoration: none; display: inline-block; }
 </style>

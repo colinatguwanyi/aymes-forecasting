@@ -1,7 +1,8 @@
 from __future__ import annotations
 
 import logging
-from datetime import date
+from datetime import date, timedelta
+from decimal import Decimal
 from typing import Any, cast
 
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -13,6 +14,7 @@ from app.schemas import (
     PlanRun as PlanRunSchema,
     PlannedOrder as PlannedOrderSchema,
     ProjectedInventory as ProjectedInventorySchema,
+    PlanningException,
     SkuWeekExplanation,
     SkuWeekExplanationPolicy,
     SkuWeekExplanationProjection,
@@ -75,6 +77,72 @@ def get_planned_orders(
     if warehouse_code:
         q = q.filter(PlannedOrder.warehouse_code == warehouse_code)
     return q.order_by(PlannedOrder.week_start, PlannedOrder.sku).all()
+
+
+@router.get("/runs/{plan_run_id}/exceptions", response_model=list[PlanningException])
+def get_plan_exceptions(
+    plan_run_id: int,
+    within_weeks: int = Query(12, ge=1, le=52, description="Only weeks within this many weeks from today"),
+    include_low_cover: bool = Query(True, description="Include low weeks-of-cover as warnings"),
+    db: Session = Depends(get_db),
+) -> list[PlanningException]:
+    """Exceptions queue: stockout and optionally low-cover SKU-weeks within horizon."""
+    run = db.query(PlanRun).filter(PlanRun.id == plan_run_id).first()
+    if not run:
+        raise HTTPException(status_code=404, detail="Plan run not found")
+    run_at: date = cast(date, run.run_at)
+    cutoff = run_at + timedelta(weeks=within_weeks)
+    q = (
+        db.query(ProjectedInventory)
+        .filter(
+            ProjectedInventory.plan_run_id == plan_run_id,
+            ProjectedInventory.week_start >= run_at,
+            ProjectedInventory.week_start <= cutoff,
+        )
+    )
+    rows = q.order_by(ProjectedInventory.week_start, ProjectedInventory.sku).all()
+    out: list[PlanningException] = []
+    for r in rows:
+        r_stockout: bool = cast(bool, r.stockout)
+        r_sku: str = cast(str, r.sku)
+        r_wh: str = cast(str, r.warehouse_code)
+        r_week: date = cast(date, r.week_start)
+        r_proj: Decimal | None = cast(Decimal | None, r.projected_qty)
+        r_woc: Decimal | None = cast(Decimal | None, r.weeks_of_cover)
+        if r_stockout:
+            out.append(
+                PlanningException(
+                    type="stockout",
+                    severity="error",
+                    sku=r_sku,
+                    warehouse_code=r_wh,
+                    week_start=r_week,
+                    message=f"Projected stockout week {r_week}",
+                    projected_qty=r_proj,
+                    weeks_of_cover=r_woc,
+                    plan_run_id=plan_run_id,
+                )
+            )
+        elif include_low_cover and r_woc is not None:
+            try:
+                woc = float(r_woc)
+                if woc < 2:
+                    out.append(
+                        PlanningException(
+                            type="low_cover",
+                            severity="warning",
+                            sku=r_sku,
+                            warehouse_code=r_wh,
+                            week_start=r_week,
+                            message=f"Low cover ({r_woc} weeks) week {r_week}",
+                            projected_qty=r_proj,
+                            weeks_of_cover=r_woc,
+                            plan_run_id=plan_run_id,
+                        )
+                    )
+            except (TypeError, ValueError):
+                pass
+    return out
 
 
 @router.get("/runs/{plan_run_id}/explanation", response_model=SkuWeekExplanation)

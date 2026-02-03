@@ -77,6 +77,19 @@ export interface PlanningPolicy {
   lead_time_padding_weeks: string
 }
 
+/** Planning exception for exceptions queue (Phase 3). */
+export interface PlanningException {
+  type: 'stockout' | 'low_cover'
+  severity: 'error' | 'warning'
+  sku: string
+  warehouse_code: string
+  week_start: string
+  message: string
+  projected_qty?: string | null
+  weeks_of_cover?: string | null
+  plan_run_id: number
+}
+
 /** Explain-the-forecast payload for one SKU/week (Phase 1). */
 export interface SkuWeekExplanationPolicy {
   mode?: string | null
