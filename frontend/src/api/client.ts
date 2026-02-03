@@ -111,6 +111,32 @@ export interface SkuWeekExplanation {
   forecast_method: string
 }
 
+export interface Receipt {
+  id: number
+  week_start: string
+  sku: string
+  warehouse_code: string
+  qty: string
+  source_type: string | null
+}
+
+export interface DemandActual {
+  id: number
+  week_start: string
+  sku: string
+  warehouse_code: string
+  demand_type: string
+  qty: string
+}
+
+export interface InventorySnapshot {
+  id: number
+  week_start: string
+  sku: string
+  warehouse_code: string
+  on_hand_qty: string
+}
+
 export interface ImportRowError {
   row: number
   errors: string[]

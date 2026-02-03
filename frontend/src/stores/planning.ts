@@ -4,6 +4,9 @@ import api, {
   type PlanRun,
   type PlannedOrder,
   type ProjectedInventory,
+  type Receipt,
+  type DemandActual,
+  type InventorySnapshot,
   type SkuWeekExplanation,
 } from '@/api/client'
 
@@ -54,6 +57,24 @@ export const usePlanningStore = defineStore('planning', () => {
     return data
   }
 
+  async function fetchReceipts(sku: string, warehouseCode: string) {
+    const params = new URLSearchParams({ sku, warehouse_code: warehouseCode })
+    const { data } = await api.get<Receipt[]>(`/receipts?${params}`)
+    return data
+  }
+
+  async function fetchDemandActuals(sku: string, warehouseCode: string) {
+    const params = new URLSearchParams({ sku, warehouse_code: warehouseCode })
+    const { data } = await api.get<DemandActual[]>(`/demand?${params}`)
+    return data
+  }
+
+  async function fetchInventorySnapshots(sku: string, warehouseCode: string) {
+    const params = new URLSearchParams({ sku, warehouse_code: warehouseCode })
+    const { data } = await api.get<InventorySnapshot[]>(`/inventory?${params}`)
+    return data
+  }
+
   const selectedRuns = computed(() =>
     planRuns.value.filter((r) => selectedRunIds.value.includes(r.id))
   )
@@ -67,5 +88,8 @@ export const usePlanningStore = defineStore('planning', () => {
     fetchProjectedInventory,
     fetchPlannedOrders,
     fetchSkuWeekExplanation,
+    fetchReceipts,
+    fetchDemandActuals,
+    fetchInventorySnapshots,
   }
 })

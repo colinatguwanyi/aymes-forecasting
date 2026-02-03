@@ -37,7 +37,13 @@
             </thead>
             <tbody>
               <tr v-for="row in rows" :key="row.key">
-                <td class="sticky-col row-label">{{ row.sku }} / {{ row.warehouse_code }}</td>
+                <td class="sticky-col row-label">
+                  <router-link
+                    :to="{ path: '/sku-detail', query: selectedRunId ? { sku: row.sku, warehouse_code: row.warehouse_code, plan_run_id: String(selectedRunId) } : { sku: row.sku, warehouse_code: row.warehouse_code } }"
+                    class="row-label-link"
+                    @click.stop
+                  >{{ row.sku }} / {{ row.warehouse_code }}</router-link>
+                </td>
                 <td
                   v-for="week in weekColumns"
                   :key="week"
@@ -268,6 +274,13 @@ onMounted(async () => {
 }
 .planning-grid .row-label {
   font-size: 0.8125rem;
+}
+.row-label-link {
+  color: var(--accent);
+  text-decoration: none;
+}
+.row-label-link:hover {
+  text-decoration: underline;
 }
 .planning-grid .grid-cell {
   min-width: 64px;
