@@ -1,81 +1,84 @@
 <template>
-  <div class="dashboard">
-    <h1>Dashboard</h1>
+  <div class="page-content-inner">
     <p class="muted">Stockout risk next 8 / 13 weeks and top SKUs by risk.</p>
 
-    <section v-if="loading" class="card">Loading...</section>
+    <section v-if="loading" class="content-section">Loading...</section>
     <template v-else>
-      <section class="card">
+      <section class="content-section">
         <h2>Run a scenario</h2>
         <form @submit.prevent="runScenario" class="form-inline">
-          <input v-model="scenarioName" placeholder="Scenario name" required />
-          <button type="submit">Run plan</button>
+          <input v-model="scenarioName" class="app-input" placeholder="Scenario name" required style="max-width: 12rem;" />
+          <button type="submit" class="app-btn app-btn-primary">Run plan</button>
         </form>
       </section>
 
-      <section class="card">
+      <section class="content-section">
         <h2>Stockout risk (next 8 weeks)</h2>
         <p v-if="!selectedRunId" class="muted">Select a scenario below to see risk.</p>
         <div v-else class="risk-summary">
-          <p><strong>Stockouts:</strong> {{ stockoutCount8 }}</p>
-          <p><strong>SKU/Warehouse combinations at risk:</strong> {{ atRiskSkus8.length }}</p>
+          <p>Stockouts: {{ stockoutCount8 }}</p>
+          <p>SKU/Warehouse combinations at risk: {{ atRiskSkus8.length }}</p>
         </div>
       </section>
 
-      <section class="card">
+      <section class="content-section">
         <h2>Stockout risk (next 13 weeks)</h2>
         <p v-if="!selectedRunId" class="muted">Select a scenario below.</p>
         <div v-else class="risk-summary">
-          <p><strong>Stockouts:</strong> {{ stockoutCount13 }}</p>
-          <p><strong>SKU/Warehouse at risk:</strong> {{ atRiskSkus13.length }}</p>
+          <p>Stockouts: {{ stockoutCount13 }}</p>
+          <p>SKU/Warehouse at risk: {{ atRiskSkus13.length }}</p>
         </div>
       </section>
 
-      <section class="card">
+      <section class="content-section">
         <h2>Top SKUs by risk</h2>
-        <select v-model="selectedRunId" class="select">
+        <select v-model="selectedRunId" class="app-select" style="max-width: 20rem; margin-bottom: 0.5rem;">
           <option :value="null">Select scenario</option>
           <option v-for="r in planRuns" :key="r.id" :value="r.id">{{ r.scenario_name }} ({{ r.created_at }})</option>
         </select>
-        <table v-if="selectedRunId && topRisks.length" class="table">
-          <thead>
-            <tr>
-              <th>SKU</th>
-              <th>Warehouse</th>
-              <th>Weeks at risk</th>
-              <th>Min weeks of cover</th>
-            </tr>
-          </thead>
-          <tbody>
-            <tr v-for="(row, i) in topRisks" :key="i">
-              <td>{{ row.sku }}</td>
-              <td>{{ row.warehouse_code }}</td>
-              <td>{{ row.stockoutWeeks }}</td>
-              <td>{{ row.minWoc }}</td>
-            </tr>
-          </tbody>
-        </table>
+        <div v-if="selectedRunId && topRisks.length" class="app-table-wrap">
+          <table class="app-table">
+            <thead>
+              <tr>
+                <th>SKU</th>
+                <th>Warehouse</th>
+                <th>Weeks at risk</th>
+                <th>Min weeks of cover</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr v-for="(row, i) in topRisks" :key="i">
+                <td>{{ row.sku }}</td>
+                <td>{{ row.warehouse_code }}</td>
+                <td>{{ row.stockoutWeeks }}</td>
+                <td>{{ row.minWoc }}</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
         <p v-else-if="selectedRunId && !topRisks.length" class="muted">No stockout risk in projection.</p>
       </section>
 
-      <section class="card">
+      <section class="content-section">
         <h2>Plan runs</h2>
-        <table class="table">
-          <thead>
-            <tr>
-              <th>Scenario</th>
-              <th>Run at</th>
-              <th>Created</th>
-            </tr>
-          </thead>
-          <tbody>
-            <tr v-for="r in planRuns" :key="r.id">
-              <td>{{ r.scenario_name }}</td>
-              <td>{{ r.run_at }}</td>
-              <td>{{ r.created_at }}</td>
-            </tr>
-          </tbody>
-        </table>
+        <div class="app-table-wrap">
+          <table class="app-table">
+            <thead>
+              <tr>
+                <th>Scenario</th>
+                <th>Run at</th>
+                <th>Created</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr v-for="r in planRuns" :key="r.id">
+                <td>{{ r.scenario_name }}</td>
+                <td>{{ r.run_at }}</td>
+                <td>{{ r.created_at }}</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
       </section>
     </template>
   </div>
@@ -165,15 +168,6 @@ watch(selectedRunId, async (id) => {
 </script>
 
 <style scoped>
-.dashboard { display: flex; flex-direction: column; gap: 1rem; }
-.card { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 1rem; }
-.card h2 { margin: 0 0 0.5rem 0; font-size: 1rem; }
-.muted { color: var(--muted); margin: 0.5rem 0; }
 .form-inline { display: flex; gap: 0.5rem; align-items: center; flex-wrap: wrap; }
-.form-inline input { padding: 0.35rem 0.5rem; border: 1px solid var(--border); border-radius: var(--radius); background: var(--bg); color: var(--text); min-width: 160px; }
-.form-inline button { padding: 0.35rem 0.75rem; background: var(--accent); color: var(--bg); border: none; border-radius: var(--radius); cursor: pointer; }
-.select { padding: 0.35rem 0.5rem; border: 1px solid var(--border); border-radius: var(--radius); background: var(--bg); color: var(--text); margin-bottom: 0.5rem; }
-.table { width: 100%; border-collapse: collapse; }
-.table th, .table td { text-align: left; padding: 0.5rem; border-bottom: 1px solid var(--border); }
-.risk-summary p { margin: 0.25rem 0; }
+.risk-summary p { margin: 0.25rem 0; font-size: 0.875rem; }
 </style>

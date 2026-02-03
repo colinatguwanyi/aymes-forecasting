@@ -50,6 +50,32 @@ npm run dev
 
 Open http://localhost:5173 (Vite proxies `/api` to the backend).
 
+## Local build and deploy
+
+Single-server deploy: build the frontend, then run the backend. The backend serves both the API and the built Vue app from `frontend/dist`.
+
+1. **Build frontend**
+   ```bash
+   cd frontend
+   npm install
+   npm run build
+   ```
+   Output: `frontend/dist/`
+
+2. **Run backend** (from project root or `backend/`)
+   ```bash
+   cd backend
+   uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
+   ```
+
+3. **Open** http://localhost:8000 — app and API on one origin. API docs: http://localhost:8000/docs
+
+Or run the script (build only; you still start uvicorn yourself):
+- **Windows:** `.\scripts\build-and-deploy.ps1`
+- **Linux/macOS:** `./scripts/build-and-deploy.sh`
+
+Ensure Postgres is running and migrations are applied (see Quick start) before using the app.
+
 ## Folder structure
 
 ```

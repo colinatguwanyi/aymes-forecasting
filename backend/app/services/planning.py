@@ -1,12 +1,15 @@
 """
-Weekly supply planning logic:
-- Baseline demand forecast: trailing mean over forecast_window_weeks for CUSTOMER; SAMPLES from trailing mean or overrides.
-- Project inventory: end = start + receipts - demand.
-- Weeks of cover, stockout flags.
-- Planned orders: WOS_TARGET (order to reach target weeks) or ROP (order when below ROP).
+Weekly supply planning logic (corrected):
+- Starting snapshot: max(week_start) where week_start <= run_week per (sku, warehouse).
+- Forecast: trailing mean over last forecast_window_weeks of history (week_start <= run_week only).
+- Project: from snapshot week forward; end_qty = start_qty + receipts_qty - demand_qty.
+- WOS_TARGET: order to reach target weeks of cover.
+- ROP: order_qty = ROP - position when position < ROP; ROP = (avg_weekly_demand * lt_weeks_int) + safety_stock_qty.
+- Lead time: ceil(sum(components)) weeks to arrival.
 """
 from __future__ import annotations
 import logging
+import math
 from collections import defaultdict
 from datetime import date, timedelta
 from decimal import Decimal
@@ -34,13 +37,6 @@ def _monday_before(d: date) -> date:
     return d - timedelta(days=d.weekday())
 
 
-def _weeks_between(start: date, end: date) -> int:
-    """Number of full weeks (Monday boundaries) between start and end (inclusive of end week)."""
-    m_start = _monday_before(start)
-    m_end = _monday_before(end)
-    return max(0, (m_end - m_start).days // 7 + 1)
-
-
 def _next_monday(d: date) -> date:
     return _monday_before(d) + timedelta(days=7)
 
@@ -48,136 +44,129 @@ def _next_monday(d: date) -> date:
 def run_plan(db: Session, scenario_name: str, run_at: date | None = None) -> PlanRun:
     if run_at is None:
         run_at = date.today()
+    run_week = _monday_before(run_at)
 
-    # Latest inventory snapshot per (sku, warehouse) - use latest week_start
-    inv_q = (
-        db.query(InventorySnapshotWeekly.week_start, InventorySnapshotWeekly.sku, InventorySnapshotWeekly.warehouse_code, InventorySnapshotWeekly.on_hand_qty)
-        .distinct(InventorySnapshotWeekly.sku, InventorySnapshotWeekly.warehouse_code)
-        .order_by(InventorySnapshotWeekly.sku, InventorySnapshotWeekly.warehouse_code, InventorySnapshotWeekly.week_start.desc())
+    # 1) Starting snapshot per (sku, warehouse): max(week_start) where week_start <= run_week
+    all_inv = (
+        db.query(InventorySnapshotWeekly)
+        .filter(InventorySnapshotWeekly.week_start <= run_week)
+        .all()
     )
-    # Simpler: get max week per sku/wh then lookup
-    all_inv = db.query(InventorySnapshotWeekly).all()
-    latest_week = {}
+    latest_week_per_key: dict[tuple[str, str], date] = {}
+    starting_inv: dict[tuple[str, str], tuple[date, Decimal]] = {}
     for row in all_inv:
         key = (row.sku, row.warehouse_code)
-        if key not in latest_week or row.week_start > latest_week[key]:
-            latest_week[key] = row.week_start
-    starting_inv = {}
-    for row in all_inv:
-        key = (row.sku, row.warehouse_code)
-        if row.week_start == latest_week[key]:
-            starting_inv[key] = row.on_hand_qty
+        if key not in latest_week_per_key or row.week_start > latest_week_per_key[key]:
+            latest_week_per_key[key] = row.week_start
+            starting_inv[key] = (row.week_start, row.on_hand_qty)
+        elif row.week_start == latest_week_per_key[key]:
+            starting_inv[key] = (row.week_start, row.on_hand_qty)
 
-    # Receipts by (week_start, sku, warehouse_code) -> qty (sum if multiple)
+    # 2) Receipts: (week_start, sku, warehouse_code) -> qty (sum)
     receipts_rows = db.query(Receipt).all()
-    receipts = defaultdict(lambda: Decimal("0"))
+    receipts: defaultdict[tuple[date, str, str], Decimal] = defaultdict(lambda: Decimal("0"))
     for r in receipts_rows:
         receipts[(r.week_start, r.sku, r.warehouse_code)] += r.qty
 
-    # Demand actuals by (week_start, sku, warehouse_code, demand_type) -> qty
+    # 3) Demand actuals: (week_start, sku, warehouse_code, demand_type) -> qty (sum)
     demand_rows = db.query(DemandActual).all()
-    demand_by_type = defaultdict(lambda: Decimal("0"))
+    demand_by_type: defaultdict[tuple[date, str, str, DemandType], Decimal] = defaultdict(
+        lambda: Decimal("0")
+    )
     for d in demand_rows:
         demand_by_type[(d.week_start, d.sku, d.warehouse_code, d.demand_type)] += d.qty
 
-    # All (sku, warehouse_code) from policies
     policies = db.query(PlanningPolicy).all()
     policy_by_key = {(p.sku, p.warehouse_code): p for p in policies}
 
-    # Build set of week_starts we need (from min start to max needed for projection)
-    min_week = min(latest_week.values()) if latest_week else run_at
-    all_weeks_set = set()
-    for (w_start, sku, wh) in receipts:
-        all_weeks_set.add(w_start)
-    for (w_start, sku, wh, _) in demand_by_type:
-        all_weeks_set.add(w_start)
-    all_weeks = sorted(all_weeks_set)
-    if not all_weeks:
-        # No data: use run_at and 52 weeks forward
-        start_monday = _monday_before(run_at)
-        all_weeks = [start_monday + timedelta(days=7 * i) for i in range(53)]
-    else:
-        max_week = max(all_weeks)
-        w = _next_monday(max_week)
-        for _ in range(52):
-            all_weeks.append(w)
-            w = _next_monday(w)
-
-    # Demand forecast: trailing mean per (sku, warehouse_code) for CUSTOMER and SAMPLES
-    forecast_customer = {}
-    forecast_samples = {}
-    for (sku, wh_code) in policy_by_key:
-        policy = policy_by_key[(sku, wh_code)]
+    # 4) Forecast: history_weeks = demand where week_start <= run_week; trailing mean = last forecast_window_weeks
+    forecast_customer: dict[tuple[str, str], Decimal] = {}
+    forecast_samples: dict[tuple[str, str], Decimal] = {}
+    for (sku, wh_code), policy in policy_by_key.items():
         n = policy.forecast_window_weeks or 8
-        customer_vals = []
-        sample_vals = []
-        for w in all_weeks:
-            c = demand_by_type.get((w, sku, wh_code, DemandType.CUSTOMER), Decimal("0"))
-            s = demand_by_type.get((w, sku, wh_code, DemandType.SAMPLES), Decimal("0"))
-            customer_vals.append((w, float(c)))
-            sample_vals.append((w, float(s)))
-        if len(customer_vals) >= n:
-            customer_vals = customer_vals[-n:]
-            sample_vals = sample_vals[-n:]
-        avg_c = sum(v for _, v in customer_vals) / len(customer_vals) if customer_vals else 0
-        avg_s = sum(v for _, v in sample_vals) / len(sample_vals) if sample_vals else 0
+        history_c: list[tuple[date, Decimal]] = []
+        history_s: list[tuple[date, Decimal]] = []
+        for (w, s, wc, dt), qty in demand_by_type.items():
+            if s != sku or wc != wh_code:
+                continue
+            if w > run_week:
+                continue
+            if dt == DemandType.CUSTOMER:
+                history_c.append((w, qty))
+            elif dt == DemandType.SAMPLES:
+                history_s.append((w, qty))
+        history_c.sort(key=lambda x: x[0])
+        history_s.sort(key=lambda x: x[0])
+        last_n_c = history_c[-n:] if len(history_c) >= n else history_c
+        last_n_s = history_s[-n:] if len(history_s) >= n else history_s
+        avg_c = sum(float(q) for _, q in last_n_c) / len(last_n_c) if last_n_c else Decimal("0")
+        avg_s = sum(float(q) for _, q in last_n_s) / len(last_n_s) if last_n_s else Decimal("0")
         forecast_customer[(sku, wh_code)] = Decimal(str(round(avg_c, 4)))
         forecast_samples[(sku, wh_code)] = Decimal(str(round(avg_s, 4)))
 
-    # Create plan run
     plan_run = PlanRun(scenario_name=scenario_name, run_at=run_at, created_at=run_at)
     db.add(plan_run)
     db.flush()
 
-    # Mutable receipts: base receipts + planned order arrivals (updated as we place orders)
-    receipts_plus_orders = defaultdict(lambda: Decimal("0"))
+    receipts_plus_orders: defaultdict[tuple[date, str, str], Decimal] = defaultdict(
+        lambda: Decimal("0")
+    )
     for k, v in receipts.items():
         receipts_plus_orders[k] += v
 
-    # Project per (sku, warehouse_code) week by week
     sku_wh_set = set(policy_by_key.keys()) | set(starting_inv.keys())
-    projected_rows = []
-    planned_order_rows = []
+    projected_rows: list[dict] = []
+    planned_order_rows: list[dict] = []
 
     for (sku, wh_code) in sku_wh_set:
         policy = policy_by_key.get((sku, wh_code))
         if not policy:
             continue
-        start_qty = starting_inv.get((sku, wh_code), Decimal("0"))
-        total_lt_weeks = float(
+        start_data = starting_inv.get((sku, wh_code))
+        if not start_data:
+            continue
+        snapshot_week, start_qty = start_data
+        total_lt_float = float(
             (policy.lead_time_production_weeks or 0)
             + (policy.lead_time_slot_wait_weeks or 0)
             + (policy.lead_time_haulage_weeks or 0)
             + (policy.lead_time_putaway_weeks or 0)
             + (policy.lead_time_padding_weeks or 0)
         )
+        lt_weeks_int = max(0, math.ceil(total_lt_float))
+        include_samples = getattr(policy, "include_samples", True)
         fc_c = forecast_customer.get((sku, wh_code), Decimal("0"))
-        fc_s = forecast_samples.get((sku, wh_code), Decimal("0"))
+        fc_s = forecast_samples.get((sku, wh_code), Decimal("0")) if include_samples else Decimal("0")
         total_forecast_per_week = fc_c + fc_s
         safety_weeks = float(policy.safety_stock_weeks or 0)
+        safety_stock_qty = (
+            total_forecast_per_week * Decimal(str(safety_weeks))
+            if policy.safety_stock_method == SafetyStockMethod.WEEKS and total_forecast_per_week > 0
+            else Decimal("0")
+        )
         target_weeks = float(policy.target_weeks or 4)
         mode = policy.mode or PlanningMode.WOS_TARGET
 
         inv = start_qty
+        # Build projection weeks: from snapshot_week forward only (next 52 weeks)
+        proj_weeks: list[date] = []
+        w = snapshot_week
+        for _ in range(53):
+            proj_weeks.append(w)
+            w = _next_monday(w)
 
-        for w in all_weeks:
+        for w in proj_weeks:
             rec = receipts_plus_orders.get((w, sku, wh_code), Decimal("0"))
-            # Demand: use actuals if present for that week, else forecast
             d_c = demand_by_type.get((w, sku, wh_code, DemandType.CUSTOMER))
-            d_s = demand_by_type.get((w, sku, wh_code, DemandType.SAMPLES))
+            d_s = demand_by_type.get((w, sku, wh_code, DemandType.SAMPLES)) if include_samples else None
             d_adj = demand_by_type.get((w, sku, wh_code, DemandType.ADJUSTMENT), Decimal("0"))
-            if d_c is not None:
-                demand_c = d_c
-            else:
-                demand_c = fc_c
-            if d_s is not None:
-                demand_s = d_s
-            else:
-                demand_s = fc_s
+            demand_c = d_c if d_c is not None else fc_c
+            demand_s = d_s if d_s is not None else (fc_s if include_samples else Decimal("0"))
             demand = demand_c + demand_s + d_adj
+            start_qty_week = inv
             inv = inv + rec - demand
+            end_qty_week = inv
 
-            # Weeks of cover
             if total_forecast_per_week > 0:
                 woc = float(inv) / float(total_forecast_per_week)
             else:
@@ -189,29 +178,32 @@ def run_plan(db: Session, scenario_name: str, run_at: date | None = None) -> Pla
                 "week_start": w,
                 "sku": sku,
                 "warehouse_code": wh_code,
-                "projected_qty": inv,
+                "start_qty": start_qty_week,
+                "receipts_qty": rec,
+                "demand_qty": demand,
+                "projected_qty": end_qty_week,
                 "weeks_of_cover": Decimal(str(round(woc, 2))),
                 "stockout": stockout,
             })
 
-            # Planned order: order placed this week arrives in total_lt_weeks
+            # Planned order
             order_qty = Decimal("0")
             if mode == PlanningMode.WOS_TARGET:
                 if woc < target_weeks and total_forecast_per_week > 0:
                     shortfall_weeks = target_weeks - woc
-                    order_qty = Decimal(str(round(float(shortfall_weeks * total_forecast_per_week), 4)))
+                    order_qty = Decimal(
+                        str(round(float(shortfall_weeks * total_forecast_per_week), 4))
+                    )
             else:
-                demand_during_lt = total_forecast_per_week * Decimal(str(total_lt_weeks))
-                safety_stock = total_forecast_per_week * Decimal(str(safety_weeks)) if policy.safety_stock_method == SafetyStockMethod.WEEKS else Decimal("0")
-                rop = demand_during_lt + safety_stock
+                rop = (total_forecast_per_week * Decimal(str(lt_weeks_int))) + safety_stock_qty
                 if inv < rop and total_forecast_per_week > 0:
-                    order_qty = rop - inv + (total_forecast_per_week * Decimal(str(total_lt_weeks)))
+                    order_qty = rop - inv
                     order_qty = max(order_qty, Decimal("0"))
                     order_qty = Decimal(str(round(float(order_qty), 4)))
 
             if order_qty > 0:
                 arrival_week = w
-                for _ in range(int(total_lt_weeks)):
+                for _ in range(lt_weeks_int):
                     arrival_week = _next_monday(arrival_week)
                 receipts_plus_orders[(arrival_week, sku, wh_code)] += order_qty
                 planned_order_rows.append({
@@ -221,9 +213,14 @@ def run_plan(db: Session, scenario_name: str, run_at: date | None = None) -> Pla
                     "warehouse_code": wh_code,
                     "order_qty": order_qty,
                 })
-                if total_lt_weeks == 0:
+                if lt_weeks_int == 0:
                     inv += order_qty
-                    woc = float(inv) / float(total_forecast_per_week) if total_forecast_per_week > 0 else 999.0
+                    end_qty_week = inv
+                    woc = (
+                        float(inv) / float(total_forecast_per_week)
+                        if total_forecast_per_week > 0
+                        else 999.0
+                    )
                     projected_rows[-1]["projected_qty"] = inv
                     projected_rows[-1]["weeks_of_cover"] = Decimal(str(round(woc, 2)))
                     projected_rows[-1]["stockout"] = inv < 0

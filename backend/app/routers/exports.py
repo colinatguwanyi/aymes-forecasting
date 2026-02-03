@@ -45,13 +45,20 @@ def export_projected_inventory(
             "week_start": r.week_start,
             "sku": r.sku,
             "warehouse_code": r.warehouse_code,
+            "start_qty": getattr(r, "start_qty", None),
+            "receipts_qty": getattr(r, "receipts_qty", None),
+            "demand_qty": getattr(r, "demand_qty", None),
             "projected_qty": r.projected_qty,
             "weeks_of_cover": r.weeks_of_cover,
             "stockout": r.stockout,
         }
         for r in rows
     ]
-    cols = ["scenario_name", "week_start", "sku", "warehouse_code", "projected_qty", "weeks_of_cover", "stockout"]
+    cols = [
+        "scenario_name", "week_start", "sku", "warehouse_code",
+        "start_qty", "receipts_qty", "demand_qty", "projected_qty",
+        "weeks_of_cover", "stockout",
+    ]
     buf = _stream_csv(data, cols)
     return StreamingResponse(
         iter([buf.getvalue()]),

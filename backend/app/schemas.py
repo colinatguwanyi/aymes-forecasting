@@ -91,6 +91,7 @@ class PlanningPolicyBase(BaseModel):
     lead_time_haulage_weeks: Decimal = 1
     lead_time_putaway_weeks: Decimal = 0
     lead_time_padding_weeks: Decimal = 0
+    include_samples: bool = True
 
 
 class PlanningPolicyCreate(PlanningPolicyBase):
@@ -165,6 +166,9 @@ class ProjectedInventoryBase(BaseModel):
     week_start: date
     sku: str
     warehouse_code: str
+    start_qty: Optional[Decimal] = None
+    receipts_qty: Optional[Decimal] = None
+    demand_qty: Optional[Decimal] = None
     projected_qty: Decimal
     weeks_of_cover: Optional[Decimal] = None
     stockout: bool = False

@@ -1,0 +1,12 @@
+{
+  "include": ["app"],
+  "exclude": ["alembic", "**/__pycache__"],
+  "typeCheckingMode": "strict",
+  "reportMissingTypeArgument": "error",
+  "reportUnknownParameterType": "error",
+  "reportUnknownMemberType": "error",
+  "reportUnknownVariableType": "error",
+  "reportUnknownArgumentType": "error",
+  "venvPath": "..",
+  "venv": "venv"
+}

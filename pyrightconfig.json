@@ -9,5 +9,5 @@
   "venv": "venv",
   "extraPaths": ["backend"],
   "include": ["backend/app"],
-  "exclude": ["**/node_modules", "**/__pycache__", "venv", "frontend"]
+  "exclude": ["**/node_modules", "**/__pycache__", "venv", "frontend", "backend/alembic"]
 }

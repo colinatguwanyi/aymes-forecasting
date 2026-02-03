@@ -1,24 +1,29 @@
 <template>
-  <div class="exports-view">
-    <h1>Exports</h1>
+  <div class="page-content-inner">
     <p class="muted">CSV exports for projected inventory and planned orders by scenario.</p>
 
-    <section class="card">
+    <section class="content-section">
       <h2>Projected inventory</h2>
-      <select v-model="selectedRunId" class="select">
-        <option :value="null">Select scenario</option>
-        <option v-for="r in planRuns" :key="r.id" :value="r.id">{{ r.scenario_name }} ({{ r.created_at }})</option>
-      </select>
-      <a v-if="selectedRunId" :href="projectedInventoryExportUrl" class="btn" download>Download projected inventory CSV</a>
+      <div class="form-row">
+        <label class="form-label">Scenario</label>
+        <select v-model="selectedRunId" class="app-select" style="max-width: 18rem;">
+          <option :value="null">Select scenario</option>
+          <option v-for="r in planRuns" :key="r.id" :value="r.id">{{ r.scenario_name }} ({{ r.created_at }})</option>
+        </select>
+      </div>
+      <a v-if="selectedRunId" :href="projectedInventoryExportUrl" class="app-btn app-btn-primary" download>Download projected inventory CSV</a>
     </section>
 
-    <section class="card">
+    <section class="content-section">
       <h2>Planned orders</h2>
-      <select v-model="selectedRunIdOrders" class="select">
-        <option :value="null">Select scenario</option>
-        <option v-for="r in planRuns" :key="r.id" :value="r.id">{{ r.scenario_name }} ({{ r.created_at }})</option>
-      </select>
-      <a v-if="selectedRunIdOrders" :href="plannedOrdersExportUrl" class="btn" download>Download planned orders CSV</a>
+      <div class="form-row">
+        <label class="form-label">Scenario</label>
+        <select v-model="selectedRunIdOrders" class="app-select" style="max-width: 18rem;">
+          <option :value="null">Select scenario</option>
+          <option v-for="r in planRuns" :key="r.id" :value="r.id">{{ r.scenario_name }} ({{ r.created_at }})</option>
+        </select>
+      </div>
+      <a v-if="selectedRunIdOrders" :href="plannedOrdersExportUrl" class="app-btn app-btn-primary" download>Download planned orders CSV</a>
     </section>
   </div>
 </template>
@@ -43,10 +48,7 @@ onMounted(() => store.fetchPlanRuns())
 </script>
 
 <style scoped>
-.exports-view { display: flex; flex-direction: column; gap: 1rem; }
-.card { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 1rem; }
-.card h2 { margin: 0 0 0.5rem 0; font-size: 1rem; }
-.select { padding: 0.35rem 0.5rem; border: 1px solid var(--border); border-radius: var(--radius); background: var(--bg); color: var(--text); margin-right: 0.5rem; }
-.btn { display: inline-block; padding: 0.35rem 0.75rem; background: var(--accent); color: var(--bg); border-radius: var(--radius); text-decoration: none; margin-top: 0.5rem; }
-.muted { color: var(--muted); margin: 0.5rem 0; }
+.form-row { margin-bottom: 0.5rem; }
+.form-label { display: block; font-size: 0.8125rem; color: var(--muted); margin-bottom: 0.25rem; }
+.app-btn { text-decoration: none; display: inline-block; margin-top: 0.25rem; }
 </style>

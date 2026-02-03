@@ -1,8 +1,6 @@
 from __future__ import annotations
 import enum
 import logging
-from datetime import date
-from decimal import Decimal
 
 from sqlalchemy import (
     Boolean,
@@ -91,6 +89,7 @@ class PlanningPolicy(Base):
     lead_time_haulage_weeks = Column(Numeric(10, 2), default=1)
     lead_time_putaway_weeks = Column(Numeric(10, 2), default=0)
     lead_time_padding_weeks = Column(Numeric(10, 2), default=0)
+    include_samples = Column(Boolean, default=True, nullable=False)
     __table_args__ = (UniqueConstraint("sku", "warehouse_code", name="uq_planning_policy_sku_wh"),)
 
 
@@ -139,7 +138,10 @@ class ProjectedInventory(Base):
     week_start = Column(Date, nullable=False, index=True)
     sku = Column(String(64), nullable=False, index=True)
     warehouse_code = Column(String(32), nullable=False, index=True)
-    projected_qty = Column(Numeric(18, 4), nullable=False)
+    start_qty = Column(Numeric(18, 4), nullable=False, default=0)
+    receipts_qty = Column(Numeric(18, 4), nullable=False, default=0)
+    demand_qty = Column(Numeric(18, 4), nullable=False, default=0)
+    projected_qty = Column(Numeric(18, 4), nullable=False)  # end_qty = start + receipts - demand
     weeks_of_cover = Column(Numeric(10, 2), nullable=True)
     stockout = Column(Boolean, default=False)
     plan_run = relationship("PlanRun", back_populates="projected_inventory")

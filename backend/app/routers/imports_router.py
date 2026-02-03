@@ -60,16 +60,31 @@ def _apply_receipts(rows: list[dict[str, Any]], db: Session) -> None:
         if ok and ok2:
             sku = (row.get("sku") or "").strip()
             wh = (row.get("warehouse_code") or "").strip()
-            src = (row.get("source_type") or "").strip() or None
-            db.add(
-                Receipt(
-                    week_start=week,
-                    sku=sku,
-                    warehouse_code=wh,
-                    qty=qty,
-                    source_type=src,
-                )
+            src_raw = (row.get("source_type") or "").strip()
+            src = src_raw or ""
+            q = db.query(Receipt).filter(
+                Receipt.week_start == week,
+                Receipt.sku == sku,
+                Receipt.warehouse_code == wh,
             )
+            if src == "":
+                existing = q.filter(Receipt.source_type.is_(None)).first()
+            else:
+                existing = q.filter(Receipt.source_type == src).first()
+            if existing:
+                existing.qty = qty
+                if src != "":
+                    existing.source_type = src
+            else:
+                db.add(
+                    Receipt(
+                        week_start=week,
+                        sku=sku,
+                        warehouse_code=wh,
+                        qty=qty,
+                        source_type=src_raw or None,
+                    )
+                )
     db.commit()
 
 
@@ -80,17 +95,31 @@ def _apply_demand(rows: list[dict[str, Any]], demand_type_override: str | None, 
         if ok and ok2:
             sku = (row.get("sku") or "").strip()
             wh = (row.get("warehouse_code") or "").strip()
-            dt = demand_type_override or (row.get("demand_type") or "").strip().upper()
-            if dt in ("CUSTOMER", "SAMPLES", "ADJUSTMENT"):
-                db.add(
-                    DemandActual(
-                        week_start=week,
-                        sku=sku,
-                        warehouse_code=wh,
-                        demand_type=DemandType[dt],
-                        qty=qty,
+            dt_str = demand_type_override or (row.get("demand_type") or "").strip().upper()
+            if dt_str in ("CUSTOMER", "SAMPLES", "ADJUSTMENT"):
+                dt_enum = DemandType[dt_str]
+                existing = (
+                    db.query(DemandActual)
+                    .filter(
+                        DemandActual.week_start == week,
+                        DemandActual.sku == sku,
+                        DemandActual.warehouse_code == wh,
+                        DemandActual.demand_type == dt_enum,
                     )
+                    .first()
                 )
+                if existing:
+                    existing.qty = qty
+                else:
+                    db.add(
+                        DemandActual(
+                            week_start=week,
+                            sku=sku,
+                            warehouse_code=wh,
+                            demand_type=dt_enum,
+                            qty=qty,
+                        )
+                    )
     db.commit()
 
 

@@ -1,9 +1,8 @@
 <template>
-  <div class="imports-view">
-    <h1>Imports</h1>
+  <div class="page-content-inner">
     <p class="muted">Upload CSV with dry-run validation. Fix row errors then confirm import.</p>
 
-    <section class="card">
+    <section class="content-section">
       <h2>CSV templates (download)</h2>
       <ul class="template-links">
         <li><a href="/api/templates/inventory-snapshots" download>Inventory snapshots</a></li>
@@ -14,9 +13,9 @@
       </ul>
     </section>
 
-    <section class="card">
+    <section class="content-section">
       <h2>Upload</h2>
-      <select v-model="importType" class="select">
+      <select v-model="importType" class="app-select" style="max-width: 18rem; margin-bottom: 0.5rem;">
         <option value="inventory-snapshots">Inventory snapshots</option>
         <option value="receipts">Receipts</option>
         <option value="demand-actuals">Demand actuals</option>
@@ -25,32 +24,34 @@
       </select>
       <input type="file" ref="fileInput" accept=".csv" @change="onFileSelect" class="file-input" />
       <div class="actions">
-        <button @click="dryRun" :disabled="!file">Dry run (validate)</button>
-        <button @click="confirmImport" :disabled="!file || !result?.valid_rows" class="btn-confirm">Confirm import</button>
+        <button type="button" @click="dryRun" :disabled="!file" class="app-btn app-btn-primary">Dry run (validate)</button>
+        <button type="button" @click="confirmImport" :disabled="!file || !result?.valid_rows" class="app-btn app-btn-primary btn-confirm">Confirm import</button>
       </div>
     </section>
 
-    <section v-if="result" class="card result">
+    <section v-if="result" class="content-section result">
       <h2>Result</h2>
-      <p><strong>Valid:</strong> {{ result.valid ? 'Yes' : 'No' }}</p>
-      <p><strong>Total rows:</strong> {{ result.total_rows }}</p>
-      <p><strong>Valid rows:</strong> {{ result.valid_rows }}</p>
+      <p>Valid: {{ result.valid ? 'Yes' : 'No' }}</p>
+      <p>Total rows: {{ result.total_rows }}</p>
+      <p>Valid rows: {{ result.valid_rows }}</p>
       <div v-if="result.errors?.length" class="errors">
         <h3>Row errors</h3>
-        <table class="table">
-          <thead>
-            <tr>
-              <th>Row</th>
-              <th>Errors</th>
-            </tr>
-          </thead>
-          <tbody>
-            <tr v-for="e in result.errors" :key="e.row">
-              <td>{{ e.row }}</td>
-              <td>{{ e.errors.join(', ') }}</td>
-            </tr>
-          </tbody>
-        </table>
+        <div class="app-table-wrap">
+          <table class="app-table">
+            <thead>
+              <tr>
+                <th>Row</th>
+                <th>Errors</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr v-for="e in result.errors" :key="e.row">
+                <td>{{ e.row }}</td>
+                <td>{{ e.errors.join(', ') }}</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
       </div>
       <div v-if="result.preview?.length" class="preview">
         <h3>Preview (first 5 rows)</h3>
@@ -99,21 +100,13 @@ async function confirmImport() {
 </script>
 
 <style scoped>
-.imports-view { display: flex; flex-direction: column; gap: 1rem; }
-.card { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 1rem; }
-.card h2 { margin: 0 0 0.5rem 0; font-size: 1rem; }
 .template-links { list-style: none; padding: 0; margin: 0; }
-.template-links a { color: var(--accent); text-decoration: none; }
+.template-links a { color: var(--accent); text-decoration: none; font-size: 0.875rem; }
 .template-links a:hover { text-decoration: underline; }
-.select { padding: 0.35rem 0.5rem; border: 1px solid var(--border); border-radius: var(--radius); background: var(--bg); color: var(--text); margin-right: 0.5rem; }
-.file-input { margin: 0.5rem 0; }
+.file-input { margin: 0.5rem 0; display: block; }
 .actions { display: flex; gap: 0.5rem; margin-top: 0.5rem; }
-.actions button { padding: 0.35rem 0.75rem; background: var(--accent); color: var(--bg); border: none; border-radius: var(--radius); cursor: pointer; }
-.actions button:disabled { opacity: 0.5; cursor: not-allowed; }
-.btn-confirm { background: var(--success) !important; }
-.result .errors, .result .preview { margin-top: 0.5rem; }
-.result .table { width: 100%; border-collapse: collapse; }
-.result .table th, .result .table td { text-align: left; padding: 0.5rem; border-bottom: 1px solid var(--border); }
-.result pre { font-size: 0.85rem; overflow: auto; }
-.muted { color: var(--muted); margin: 0.5rem 0; }
+.btn-confirm { background: var(--success); border-color: var(--success); }
+.result .errors, .result .preview { margin-top: 0.75rem; }
+.result pre { font-size: 0.8125rem; overflow: auto; max-height: 12rem; }
+.result h3 { font-size: 0.9375rem; margin-top: 0.5rem; }
 </style>
