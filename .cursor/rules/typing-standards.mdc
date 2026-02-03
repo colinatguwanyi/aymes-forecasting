@@ -1,0 +1,41 @@
+---
+description: Apply Python typing standards from docs/TYPING_STANDARDS.md
+globs: backend/**/*.py
+---
+
+# Python Typing Standards
+
+When writing or editing **backend Python code**, follow the project typing standards:
+
+**Reference:** [docs/TYPING_STANDARDS.md](../../docs/TYPING_STANDARDS.md)
+
+## Must follow
+
+1. **File scaffolding** (top of every Python file):
+   - `from __future__ import annotations`
+   - `import logging`
+   - `logger = logging.getLogger(__name__)`
+
+2. **No bare generics** — use `list[str]`, `dict[str, int]`, etc. Never `list`, `dict`, `Dict`, `List` alone.
+
+3. **Nullable defaults** — use `Optional[...] = None` (or `X | None = None`) and normalize: `items = items or []`.
+
+4. **No mutable default arguments** — never `def f(x: list[str] = [])`. Use `def f(x: list[str] | None = None)` and `x = x or []`.
+
+5. **Explicit return types** — every function has a return type (`-> None` for procedures, `-> list[str]`, etc.).
+
+6. **Parameters**: prefer abstract containers (`Iterable[str]`, `Mapping[str, str]`) where applicable; **returns**: concrete (`list[str]`, `dict[str, str]`).
+
+7. **SQLAlchemy 2.x** — use `Mapped[...]` and `mapped_column(...)` for model fields; annotate query returns (e.g. `-> list[User]`).
+
+8. **Structured payloads** — use Pydantic or `TypedDict` for API/cross-module shapes; avoid leaking `Any`.
+
+## Import order
+
+1. `from __future__ import annotations`
+2. `import logging` and `logger = ...`
+3. Standard library
+4. Third-party
+5. Local (`app.*`)
+
+Run Pyright on the backend and fix any type errors before merging.

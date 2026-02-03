@@ -1,0 +1,13 @@
+{
+  "typeCheckingMode": "strict",
+  "reportMissingTypeArgument": "error",
+  "reportUnknownParameterType": "error",
+  "reportUnknownMemberType": "error",
+  "reportUnknownVariableType": "error",
+  "reportUnknownArgumentType": "error",
+  "venvPath": ".",
+  "venv": "venv",
+  "extraPaths": ["backend"],
+  "include": ["backend/app"],
+  "exclude": ["**/node_modules", "**/__pycache__", "venv", "frontend"]
+}

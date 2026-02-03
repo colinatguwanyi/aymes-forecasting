@@ -1,0 +1,91 @@
+import axios from 'axios'
+
+const api = axios.create({
+  baseURL: '/api',
+  headers: { 'Content-Type': 'application/json' },
+})
+
+export default api
+
+export interface PlanRun {
+  id: number
+  scenario_name: string
+  run_at: string
+  created_at: string
+}
+
+export interface ProjectedInventory {
+  id: number
+  plan_run_id: number
+  week_start: string
+  sku: string
+  warehouse_code: string
+  projected_qty: string
+  weeks_of_cover: string | null
+  stockout: boolean
+}
+
+export interface PlannedOrder {
+  id: number
+  plan_run_id: number
+  week_start: string
+  sku: string
+  warehouse_code: string
+  order_qty: string
+}
+
+export interface Product {
+  id: number
+  sku: string
+  name: string | null
+  description: string | null
+}
+
+export interface Warehouse {
+  id: number
+  code: string
+  name: string | null
+}
+
+export interface Supplier {
+  id: number
+  code: string
+  name: string | null
+}
+
+export interface Lane {
+  id: number
+  supplier_id: number
+  warehouse_id: number
+  code: string | null
+}
+
+export interface PlanningPolicy {
+  id: number
+  sku: string
+  warehouse_code: string
+  mode: 'WOS_TARGET' | 'ROP'
+  target_weeks: string
+  safety_stock_method: 'WEEKS' | 'SERVICE_LEVEL'
+  safety_stock_weeks: string
+  service_level: string
+  forecast_window_weeks: number
+  lead_time_production_weeks: string
+  lead_time_slot_wait_weeks: string
+  lead_time_haulage_weeks: string
+  lead_time_putaway_weeks: string
+  lead_time_padding_weeks: string
+}
+
+export interface ImportRowError {
+  row: number
+  errors: string[]
+}
+
+export interface ImportDryRunResult {
+  valid: boolean
+  total_rows: number
+  valid_rows: number
+  errors: ImportRowError[]
+  preview?: Record<string, string | number | null>[]
+}
