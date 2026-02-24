@@ -55,6 +55,8 @@ class IngestionEntity(str, enum.Enum):
     SKU_MAP = "sku_map"
     PRODUCT_MASTER = "product_master"
     FORECAST_OUTPUT = "forecast_output"
+    SALES_OUT = "sales_out"
+    STOCK_ON_HAND = "stock_on_hand"
 
 
 class IngestionStatus(str, enum.Enum):
@@ -140,7 +142,9 @@ class InventorySnapshotWeekly(Base):
     sku = Column(String(64), nullable=False, index=True)
     warehouse_code = Column(String(32), nullable=False, index=True)
     on_hand_qty = Column(Numeric(18, 4), default=0)
-    __table_args__ = (UniqueConstraint("week_start", "sku", "warehouse_code", name="uq_inv_week_sku_wh"),)
+    source_type = Column(String(32), nullable=False, server_default="legacy")
+    source_run_id = Column(UUID(as_uuid=True), ForeignKey("ingestion_runs.id", ondelete="SET NULL"), nullable=True)
+    __table_args__ = (UniqueConstraint("week_start", "sku", "warehouse_code", "source_type", name="uq_inv_week_sku_wh_source"),)
 
 
 class Receipt(Base):
@@ -527,6 +531,12 @@ class IngestionRun(Base):
     forecast_output_stage_rows = relationship(
         "ForecastRunOutputStage", back_populates="ingestion_run", cascade="all, delete-orphan"
     )
+    sales_out_stage_rows = relationship(
+        "SalesOutStage", back_populates="ingestion_run", cascade="all, delete-orphan"
+    )
+    stock_on_hand_stage_rows = relationship(
+        "StockOnHandStage", back_populates="ingestion_run", cascade="all, delete-orphan"
+    )
 
 
 class IngestionRejection(Base):
@@ -608,6 +618,71 @@ class BaselineForecastWeekly(Base):
     train_window_end = Column(Date, nullable=False)
     train_end_week_start = Column(Date, nullable=False, index=True)  # inference_date / run date
     metrics_json = Column(JSONB, nullable=True)
+
+
+class SalesOutStage(Base):
+    """Staging rows for Sales Out ingestion (CSV/XLSX)."""
+    __tablename__ = "sales_out_stage"
+    id = Column(Integer, primary_key=True, index=True)
+    ingestion_run_id = Column(UUID(as_uuid=True), ForeignKey("ingestion_runs.id", ondelete="CASCADE"), nullable=False)
+    aah_product_code = Column(Text, nullable=False)
+    account_code = Column(Text, nullable=True)
+    customer_name = Column(Text, nullable=True)
+    postcode = Column(Text, nullable=True)
+    customer_sector = Column(Text, nullable=True)
+    pip_code = Column(Text, nullable=True)
+    product_name = Column(Text, nullable=True)
+    item_size = Column(Text, nullable=True)
+    invoiced_qty = Column(Numeric(18, 4), nullable=True)
+    servings_qty = Column(Numeric(18, 4), nullable=True)
+    net_sales_value = Column(Numeric(18, 4), nullable=True)
+    processed_date = Column(Date, nullable=False)
+    processed_year = Column(Integer, nullable=True)
+    print_branch = Column(Text, nullable=True)
+    branch = Column(Text, nullable=True)
+    raw_json = Column(JSONB, nullable=True)
+    ingestion_run = relationship("IngestionRun", back_populates="sales_out_stage_rows")
+
+
+class WarehouseBranchMapping(Base):
+    """Maps SOH Branch Name to warehouse_code (e.g. GLASGOW -> GLA)."""
+    __tablename__ = "warehouse_branch_mapping"
+    id = Column(Integer, primary_key=True, index=True)
+    branch_name = Column(String(128), nullable=False, unique=True, index=True)
+    warehouse_code = Column(String(32), nullable=False, index=True)
+
+
+class StockOnHandStage(Base):
+    """Staging rows for SOH ingestion (CSV/XLSX)."""
+    __tablename__ = "stock_on_hand_stage"
+    id = Column(Integer, primary_key=True, index=True)
+    ingestion_run_id = Column(UUID(as_uuid=True), ForeignKey("ingestion_runs.id", ondelete="CASCADE"), nullable=False)
+    stock_at_raw = Column(Text, nullable=True)
+    branch_name_raw = Column(Text, nullable=True)
+    aah_code_raw = Column(Text, nullable=True)
+    stock_raw = Column(Text, nullable=True)
+    on_order_raw = Column(Text, nullable=True)
+    description_raw = Column(Text, nullable=True)
+    reject_reason = Column(Text, nullable=True)
+    row_hash = Column(String(64), nullable=True)
+    ingestion_run = relationship("IngestionRun", back_populates="stock_on_hand_stage_rows")
+
+
+class InventorySnapshotDaily(Base):
+    """Daily inventory snapshots (e.g. from SOH); rolled up to weekly for planning."""
+    __tablename__ = "inventory_snapshots_daily"
+    __table_args__ = (
+        UniqueConstraint("warehouse_code", "sku", "as_of_date", "source_type", name="uq_inv_daily_wh_sku_date_source"),
+    )
+    id = Column(Integer, primary_key=True, index=True)
+    warehouse_code = Column(String(32), nullable=False, index=True)
+    sku = Column(String(64), nullable=False, index=True)
+    as_of_date = Column(Date, nullable=False, index=True)
+    on_hand_units = Column(Numeric(18, 4), nullable=False, server_default="0")
+    on_order_units = Column(Numeric(18, 4), nullable=False, server_default="0")
+    source_type = Column(String(32), nullable=False)
+    source_run_id = Column(UUID(as_uuid=True), ForeignKey("ingestion_runs.id", ondelete="SET NULL"), nullable=True)
+    created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
 
 
 class ForecastRunOutputStage(Base):

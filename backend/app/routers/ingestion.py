@@ -20,11 +20,19 @@ from app.models import (
     IngestionSourceType,
     IngestionStatus,
 )
-from app.services.csv_import import read_csv, read_csv_or_xlsx
+from app.services.csv_import import read_csv, read_csv_chunked, read_csv_or_xlsx
 from app.services.import_forecast_output import import_from_stage as import_forecast_output_from_stage
 from app.services.import_forecast_output import validate_and_stage_row as validate_and_stage_forecast_output_row
 from app.services.import_forecast_output import _aah_to_sku_map
 from app.services.import_product_master import import_from_stage as import_product_master_from_stage, validate_and_stage_row as validate_and_stage_product_master_row
+from app.services.sales_out_ingestion import build_demand_from_sales_out, validate_and_stage_sales_out_row
+from app.services.soh_ingestion import (
+    CHUNK_SIZE as SOH_CHUNK_SIZE,
+    _branch_to_warehouse_code as soh_branch_to_warehouse_code,
+    build_daily_from_stage,
+    build_weekly_from_daily,
+    validate_and_stage_soh_row,
+)
 from app.services.time_bucketing import week_start_for_date
 from app.services.weekly_series_builder import build_weekly_series_from_stage
 
@@ -135,8 +143,61 @@ def _validate_and_stage_forecast_output(
     return staged, len(rows) - staged
 
 
+def _validate_and_stage_sales_out(
+    db: Session,
+    run_id: UUID,
+    rows: list[dict[str, Any]],
+) -> tuple[int, int]:
+    """Validate each row; stage valid to sales_out_stage, reject to ingestion_rejections."""
+    staged = 0
+    for i, row in enumerate(rows, start=2):
+        ok, reason = validate_and_stage_sales_out_row(db, run_id, row, i)
+        if ok:
+            staged += 1
+        else:
+            db.add(
+                IngestionRejection(
+                    ingestion_run_id=run_id,
+                    row_number=i,
+                    raw_payload=dict(row),
+                    reason=reason or "validation failed",
+                )
+            )
+    return staged, len(rows) - staged
+
+
+def _validate_and_stage_soh(
+    db: Session,
+    run_id: UUID,
+    rows_iter: Any,
+) -> tuple[int, int]:
+    """Validate and stage SOH rows (chunked). All rows go to stock_on_hand_stage; invalid also to ingestion_rejections. Returns (staged_count, rejected_count)."""
+    branch_to_wh = soh_branch_to_warehouse_code(db)
+    staged = 0
+    rejected = 0
+    row_number = 2  # header is row 1
+    for chunk in rows_iter:
+        for row in chunk:
+            ok, reason = validate_and_stage_soh_row(db, run_id, row, row_number, branch_to_wh)
+            if ok:
+                staged += 1
+            else:
+                rejected += 1
+                db.add(
+                    IngestionRejection(
+                        ingestion_run_id=run_id,
+                        row_number=row_number,
+                        raw_payload=dict(row),
+                        reason=reason or "validation failed",
+                    )
+                )
+            row_number += 1
+        db.flush()
+    return staged, rejected
+
+
 def _normalize_entity(value: str) -> IngestionEntity | None:
-    """Accept 'demand'/'product_master'/'forecast_output' (case-insensitive, underscores or spaces)."""
+    """Accept entity names (case-insensitive, underscores or spaces)."""
     v = (value or "").strip().lower().replace(" ", "_")
     if v in ("demand",):
         return IngestionEntity.DEMAND
@@ -144,7 +205,88 @@ def _normalize_entity(value: str) -> IngestionEntity | None:
         return IngestionEntity.PRODUCT_MASTER
     if v in ("forecast_output", "forecastoutput"):
         return IngestionEntity.FORECAST_OUTPUT
+    if v in ("sales_out", "salesout"):
+        return IngestionEntity.SALES_OUT
+    if v in ("stock_on_hand", "stockonhand", "soh"):
+        return IngestionEntity.STOCK_ON_HAND
     return None
+
+
+@router.post("/sales-out/upload")
+async def upload_sales_out(
+    file: UploadFile = File(..., description="CSV or XLSX file (Sales Out columns)"),
+    created_by: str | None = Query(None),
+    db: Session = Depends(get_db),
+) -> dict[str, Any]:
+    """Accept Sales Out CSV/XLSX; parse and stage; create ingestion run. Call build-weekly on run_id to write demand_actuals."""
+    return await upload(
+        entity="sales_out",
+        file=file,
+        created_by=created_by,
+        db=db,
+    )
+
+
+@router.post("/sales-out/{run_id}/build-weekly")
+def build_sales_out_weekly(
+    run_id: UUID,
+    db: Session = Depends(get_db),
+) -> dict[str, Any]:
+    """Transform staged Sales Out for this run into canonical weekly demand (demand_actuals, W-TUE, AAH)."""
+    run = db.query(IngestionRun).filter(IngestionRun.id == run_id).first()
+    if not run:
+        raise HTTPException(status_code=404, detail="Run not found")
+    if getattr(run, "entity", None) and getattr(run.entity, "value", None) != "sales_out":
+        raise HTTPException(status_code=400, detail="Run is not a sales_out run")
+    try:
+        build_demand_from_sales_out(db, run_id)
+        db.commit()
+    except Exception as e:
+        db.rollback()
+        run = db.query(IngestionRun).filter(IngestionRun.id == run_id).first()
+        if run:
+            run.status = IngestionStatus.FAILED
+            run.error_summary = str(e)
+            run.finished_at = datetime.now(timezone.utc)
+        db.commit()
+        raise HTTPException(status_code=500, detail=str(e))
+    run_after = db.query(IngestionRun).filter(IngestionRun.id == run_id).first()
+    return {
+        "run_id": str(run_id),
+        "status": run_after.status.value if run_after else "success",
+        "rows_staged": run_after.row_count if run_after else 0,
+        "weeks_written": run_after.inserted_count if run_after else 0,
+        "rows_rejected": run_after.rejected_count if run_after else 0,
+    }
+
+
+@router.post("/stock-on-hand/upload")
+async def upload_stock_on_hand(
+    file: UploadFile = File(..., description="CSV or XLSX (Stock at, Branch Name, AAH Code, STOCK, ON ORDER)"),
+    created_by: str | None = Query(None),
+    db: Session = Depends(get_db),
+) -> dict[str, Any]:
+    """Accept SOH CSV/XLSX; parse and stage (chunked). Call execute on run_id to build daily and weekly canonical."""
+    return await upload(
+        entity="stock_on_hand",
+        file=file,
+        created_by=created_by,
+        db=db,
+    )
+
+
+@router.post("/stock-on-hand/{run_id}/execute")
+def execute_stock_on_hand(
+    run_id: UUID,
+    db: Session = Depends(get_db),
+) -> dict[str, Any]:
+    """Transform staged SOH for this run: stage -> daily canonical -> weekly canonical (W-TUE)."""
+    run = db.query(IngestionRun).filter(IngestionRun.id == run_id).first()
+    if not run:
+        raise HTTPException(status_code=404, detail="Run not found")
+    if getattr(run, "entity", None) and getattr(run.entity, "value", None) != "stock_on_hand":
+        raise HTTPException(status_code=400, detail="Run is not a stock_on_hand run")
+    return execute_run(run_id=run_id, db=db)
 
 
 @router.post("/forecast-output/upload")
@@ -176,8 +318,8 @@ async def upload(
     """
     logger.info("ingestion/upload: entity=%r filename=%r", entity, file.filename)
     entity_enum = _normalize_entity(entity)
-    if entity_enum not in (IngestionEntity.DEMAND, IngestionEntity.PRODUCT_MASTER, IngestionEntity.FORECAST_OUTPUT):
-        detail = f"Entity must be demand, product_master, or forecast_output (got {entity!r})"
+    if entity_enum not in (IngestionEntity.DEMAND, IngestionEntity.PRODUCT_MASTER, IngestionEntity.FORECAST_OUTPUT, IngestionEntity.SALES_OUT, IngestionEntity.STOCK_ON_HAND):
+        detail = f"Entity must be demand, product_master, forecast_output, sales_out, or stock_on_hand (got {entity!r})"
         logger.warning("ingestion/upload 400: %s", detail)
         raise HTTPException(status_code=400, detail=detail)
     content = await file.read()
@@ -186,15 +328,6 @@ async def upload(
         logger.warning("ingestion/upload 400: %s", detail)
         raise HTTPException(status_code=400, detail=detail)
     logger.info("ingestion/upload: read %d bytes", len(content))
-    try:
-        if entity_enum == IngestionEntity.FORECAST_OUTPUT:
-            rows = read_csv_or_xlsx(content, file.filename)
-        else:
-            rows = read_csv(content)
-    except Exception as e:
-        detail = f"Invalid CSV: {e}"
-        logger.warning("ingestion/upload 400: %s", detail, exc_info=True)
-        raise HTTPException(status_code=400, detail=detail)
     file_sha256 = hashlib.sha256(content).hexdigest()
 
     try:
@@ -219,30 +352,70 @@ async def upload(
                 "message": "Same file (entity+sha256) already ingested successfully; returning existing run_id.",
             }
 
-        run = IngestionRun(
-            source_type=IngestionSourceType.CSV,
-            entity=entity_enum,
-            file_name=file.filename or None,
-            file_sha256=file_sha256,
-            started_at=datetime.now(timezone.utc),
-            status=IngestionStatus.PENDING,
-            row_count=len(rows),
-            created_by=created_by,
-        )
-        db.add(run)
-        db.flush()
-        run_id = cast(UUID, run.id)
-        if entity_enum == IngestionEntity.DEMAND:
-            staged, rejected = _validate_and_stage_demand(db, run_id, rows)
-        elif entity_enum == IngestionEntity.PRODUCT_MASTER:
-            staged, rejected = _validate_and_stage_product_master(db, run_id, rows)
+        if entity_enum == IngestionEntity.STOCK_ON_HAND:
+            try:
+                fn = (file.filename or "").lower()
+                if fn.endswith(".xlsx") or fn.endswith(".xls"):
+                    rows_full = read_csv_or_xlsx(content, file.filename)
+                    rows_iter_soh: Any = [rows_full[i : i + SOH_CHUNK_SIZE] for i in range(0, len(rows_full), SOH_CHUNK_SIZE)]
+                else:
+                    rows_iter_soh = read_csv_chunked(content, chunk_size=SOH_CHUNK_SIZE)
+            except Exception as e:
+                detail = f"Invalid file: {e}"
+                logger.warning("ingestion/upload 400: %s", detail, exc_info=True)
+                raise HTTPException(status_code=400, detail=detail)
+            run = IngestionRun(
+                source_type=IngestionSourceType.CSV,
+                entity=entity_enum,
+                file_name=file.filename or None,
+                file_sha256=file_sha256,
+                started_at=datetime.now(timezone.utc),
+                status=IngestionStatus.PENDING,
+                row_count=0,
+                created_by=created_by,
+            )
+            db.add(run)
+            db.flush()
+            run_id = cast(UUID, run.id)
+            staged, rejected = _validate_and_stage_soh(db, run_id, rows_iter_soh)
+            run.row_count = staged + rejected
         else:
-            staged, rejected = _validate_and_stage_forecast_output(db, run_id, rows)
+            try:
+                if entity_enum in (IngestionEntity.FORECAST_OUTPUT, IngestionEntity.SALES_OUT):
+                    rows = read_csv_or_xlsx(content, file.filename)
+                else:
+                    rows = read_csv(content)
+            except Exception as e:
+                detail = f"Invalid CSV: {e}"
+                logger.warning("ingestion/upload 400: %s", detail, exc_info=True)
+                raise HTTPException(status_code=400, detail=detail)
+            run = IngestionRun(
+                source_type=IngestionSourceType.CSV,
+                entity=entity_enum,
+                file_name=file.filename or None,
+                file_sha256=file_sha256,
+                started_at=datetime.now(timezone.utc),
+                status=IngestionStatus.PENDING,
+                row_count=len(rows),
+                created_by=created_by,
+            )
+            db.add(run)
+            db.flush()
+            run_id = cast(UUID, run.id)
+            if entity_enum == IngestionEntity.DEMAND:
+                staged, rejected = _validate_and_stage_demand(db, run_id, rows)
+            elif entity_enum == IngestionEntity.PRODUCT_MASTER:
+                staged, rejected = _validate_and_stage_product_master(db, run_id, rows)
+            elif entity_enum == IngestionEntity.FORECAST_OUTPUT:
+                staged, rejected = _validate_and_stage_forecast_output(db, run_id, rows)
+            else:
+                staged, rejected = _validate_and_stage_sales_out(db, run_id, rows)
+
         run.inserted_count = 0
         run.updated_count = 0
         run.rejected_count = rejected
         db.commit()
-        return {"run_id": str(run_id), "row_count": len(rows), "staged_count": staged, "rejected_count": rejected}
+        return {"run_id": str(run_id), "row_count": run.row_count, "staged_count": staged, "rejected_count": rejected}
     except HTTPException:
         db.rollback()
         raise
@@ -281,6 +454,25 @@ def execute_run(
             baseline_count, published_count = import_forecast_output_from_stage(db, run_id)
             run.inserted_count = baseline_count
             run.updated_count = published_count
+            run.status = IngestionStatus.SUCCESS
+            run.finished_at = datetime.now(timezone.utc)
+        elif entity_val == IngestionEntity.SALES_OUT:
+            run.status = IngestionStatus.RUNNING
+            run.finished_at = None
+            db.flush()
+            _staged, weeks_written, _rejected = build_demand_from_sales_out(db, run_id)
+            run.inserted_count = weeks_written
+            run.updated_count = 0
+            run.status = IngestionStatus.SUCCESS
+            run.finished_at = datetime.now(timezone.utc)
+        elif entity_val == IngestionEntity.STOCK_ON_HAND:
+            run.status = IngestionStatus.RUNNING
+            run.finished_at = None
+            db.flush()
+            build_daily_from_stage(db, run_id)
+            weeks_written = build_weekly_from_daily(db, run_id)
+            run.inserted_count = weeks_written
+            run.updated_count = 0
             run.status = IngestionStatus.SUCCESS
             run.finished_at = datetime.now(timezone.utc)
         else:

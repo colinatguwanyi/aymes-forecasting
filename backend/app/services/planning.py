@@ -95,7 +95,7 @@ def run_plan(
         run_at = date.today()
     run_week = _monday_before(run_at)
 
-    # 1) Starting snapshot per (sku, warehouse): max(week_start) where week_start <= run_week
+    # 1) Starting snapshot per (sku, warehouse): max(week_start) where week_start <= run_week; prefer source_type='soh' over 'legacy'
     all_inv = (
         db.query(InventorySnapshotWeekly)
         .filter(InventorySnapshotWeekly.week_start <= run_week)
@@ -109,10 +109,11 @@ def run_plan(
         key = (sku_val, wh_val)
         ws = cast(date, row.week_start)
         qty_val = cast(Decimal | None, row.on_hand_qty) or Decimal("0")
+        src = (getattr(row, "source_type", None) or "").strip().lower()
         if key not in latest_week_per_key or ws > latest_week_per_key[key]:
             latest_week_per_key[key] = ws
             starting_inv[key] = (ws, qty_val)
-        elif ws == latest_week_per_key[key]:
+        elif ws == latest_week_per_key[key] and src == "soh":
             starting_inv[key] = (ws, qty_val)
 
     # 2) Receipts: (week_start, sku, warehouse_code) -> qty (sum)

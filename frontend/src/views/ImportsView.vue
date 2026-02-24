@@ -125,6 +125,7 @@
           <li><a href="/api/templates/sku-code-map" download class="text-primary-600 hover:underline">SKU code map</a></li>
           <li><a href="/api/templates/demand-weekly" download class="text-primary-600 hover:underline">Demand weekly (W-TUE)</a></li>
           <li><a href="/api/templates/demand-daily" download class="text-primary-600 hover:underline">Demand daily</a></li>
+          <li><a href="/api/templates/stock-on-hand" download class="text-primary-600 hover:underline">Stock On Hand (SOH)</a></li>
           <li><a href="/api/templates/product-master" download class="text-primary-600 hover:underline">Product Master</a></li>
         </ul>
       </div>
@@ -140,11 +141,14 @@
           <select v-model="ingestionEntity" class="select w-full max-w-xs">
             <option value="demand">Demand</option>
             <option value="product_master">Product Master</option>
+            <option value="forecast_output">Forecast output</option>
+            <option value="sales_out">Sales Out</option>
+            <option value="stock_on_hand">Stock On Hand (SOH)</option>
           </select>
         </div>
         <div>
-          <label class="form-label">CSV file</label>
-          <input type="file" ref="ingestionFileInput" accept=".csv" @change="onIngestionFileSelect" class="block w-full text-sm text-slate-600 file:mr-2 file:py-1.5 file:px-3 file:rounded-lg file:border file:border-slate-300 file:bg-white file:text-slate-700 file:text-sm hover:file:bg-slate-50" />
+          <label class="form-label">File</label>
+          <input type="file" ref="ingestionFileInput" :accept="ingestionEntity === 'sales_out' || ingestionEntity === 'stock_on_hand' ? '.csv,.xlsx,.xls' : '.csv'" @change="onIngestionFileSelect" class="block w-full text-sm text-slate-600 file:mr-2 file:py-1.5 file:px-3 file:rounded-lg file:border file:border-slate-300 file:bg-white file:text-slate-700 file:text-sm hover:file:bg-slate-50" />
         </div>
         <div>
           <button type="button" @click="uploadIngestion" :disabled="!ingestionFile" class="btn-primary">Upload &amp; stage</button>
@@ -153,7 +157,60 @@
       <div v-if="ingestionUploadResult" class="mt-3 text-sm text-slate-600 flex flex-wrap items-center gap-2">
         <span>Run ID: <code class="text-xs bg-slate-100 px-1.5 py-0.5 rounded">{{ ingestionUploadResult.run_id.slice(0, 8) }}</code></span>
         <span>Staged {{ ingestionUploadResult.staged_count }}, rejected {{ ingestionUploadResult.rejected_count }}</span>
-        <button type="button" @click="executeIngestionRun(ingestionUploadResult.run_id)" class="btn-secondary text-sm">Execute transform</button>
+        <template v-if="ingestionEntity === 'sales_out'">
+          <button type="button" @click="buildSalesOutWeekly(ingestionUploadResult.run_id)" class="btn-primary text-sm">Execute build-weekly</button>
+        </template>
+        <template v-else>
+          <button type="button" @click="executeIngestionRun(ingestionUploadResult.run_id)" class="btn-secondary text-sm">Execute transform</button>
+        </template>
+      </div>
+    </section>
+
+    <!-- Sales Out (big transactional file → W-TUE demand) -->
+    <section class="card card-body">
+      <h3 class="section-title mb-2">Sales Out</h3>
+      <p class="text-sm text-slate-600 mb-3">Upload CSV or XLSX (AAH_Product_Code, Invoiced_Qty, Business_Processed_Date DD/MM/YYYY, etc.). Stage then build weekly demand (AAH, W-TUE).</p>
+      <div class="flex flex-wrap items-end gap-3 md:grid md:grid-cols-4">
+        <div>
+          <label class="form-label">File</label>
+          <input type="file" ref="salesOutFileInput" accept=".csv,.xlsx,.xls" @change="onSalesOutFileSelect" class="block w-full text-sm text-slate-600 file:mr-2 file:py-1.5 file:px-3 file:rounded-lg file:border file:border-slate-300 file:bg-white file:text-slate-700 file:text-sm hover:file:bg-slate-50" />
+        </div>
+        <div>
+          <button type="button" @click="uploadSalesOut" :disabled="!salesOutFile" class="btn-primary">Upload &amp; stage</button>
+        </div>
+      </div>
+      <div v-if="salesOutUploadResult" class="mt-3 text-sm text-slate-600 flex flex-wrap items-center gap-2">
+        <span>Run ID: <code class="text-xs bg-slate-100 px-1.5 py-0.5 rounded">{{ salesOutUploadResult.run_id.slice(0, 8) }}</code></span>
+        <span>Staged {{ salesOutUploadResult.staged_count }}, rejected {{ salesOutUploadResult.rejected_count }}</span>
+        <button type="button" @click="buildSalesOutWeekly(salesOutUploadResult.run_id)" class="btn-primary text-sm">Execute build-weekly</button>
+      </div>
+      <div v-if="salesOutBuildResult" class="mt-2 text-sm text-slate-600">
+        <span>Rows staged: {{ salesOutBuildResult.rows_staged }}</span>
+        <span>Weeks written: {{ salesOutBuildResult.weeks_written }}</span>
+        <span>Rows rejected: {{ salesOutBuildResult.rows_rejected }}</span>
+      </div>
+    </section>
+
+    <!-- Stock On Hand (SOH): daily history → weekly canonical -->
+    <section class="card card-body">
+      <h3 class="section-title mb-2">Stock On Hand (SOH)</h3>
+      <p class="text-sm text-slate-600 mb-3">Upload CSV or XLSX: Stock at (date), Branch Name, AAH Code, STOCK, ON ORDER. Branch Name must exist in warehouse branch mapping. Stage then Execute to build daily and weekly canonical (W-TUE).</p>
+      <div class="flex flex-wrap items-center gap-2 mb-2">
+        <a href="/api/templates/stock-on-hand" download class="btn-secondary">Download SOH template</a>
+      </div>
+      <div class="flex flex-wrap items-end gap-3 md:grid md:grid-cols-4">
+        <div>
+          <label class="form-label">File</label>
+          <input type="file" ref="sohFileInput" accept=".csv,.xlsx,.xls" @change="onSohFileSelect" class="block w-full text-sm text-slate-600 file:mr-2 file:py-1.5 file:px-3 file:rounded-lg file:border file:border-slate-300 file:bg-white file:text-slate-700 file:text-sm hover:file:bg-slate-50" />
+        </div>
+        <div>
+          <button type="button" @click="uploadSoh" :disabled="!sohFile" class="btn-primary">Upload &amp; stage</button>
+        </div>
+      </div>
+      <div v-if="sohUploadResult" class="mt-3 text-sm text-slate-600 flex flex-wrap items-center gap-2">
+        <span>Run ID: <code class="text-xs bg-slate-100 px-1.5 py-0.5 rounded">{{ sohUploadResult.run_id.slice(0, 8) }}</code></span>
+        <span>Staged {{ sohUploadResult.staged_count }}, rejected {{ sohUploadResult.rejected_count }}</span>
+        <button type="button" @click="executeSohRun(sohUploadResult.run_id)" class="btn-primary text-sm">Execute (daily → weekly)</button>
       </div>
     </section>
 
@@ -178,7 +235,7 @@
           </template>
           <template #cell-actions="{ row }">
             <button type="button" @click="openRunDrawer(getRunRow(row))" class="btn-secondary text-xs py-1 px-2">Details</button>
-            <button v-if="getRunRow(row).status === 'pending'" type="button" @click="executeIngestionRun(getRunRow(row).id)" class="btn-primary text-xs py-1 px-2 ml-1">Execute</button>
+            <button v-if="getRunRow(row).status === 'pending'" type="button" @click="executePendingRun(row)" class="btn-primary text-xs py-1 px-2 ml-1">Execute</button>
           </template>
           <template #empty>
             <p class="text-slate-500">No runs yet. Upload and stage a file above.</p>
@@ -287,13 +344,22 @@ const legacyResult = ref<ImportDryRunResult | null>(null)
 const backboneResult = ref<BackboneImportResult | null>(null)
 const templatesOpen = ref(false)
 
-const ingestionEntity = ref<'demand'>('demand')
+const ingestionEntity = ref<'demand' | 'product_master' | 'forecast_output' | 'sales_out' | 'stock_on_hand'>('demand')
 const ingestionFileInput = ref<HTMLInputElement | null>(null)
 const ingestionFile = ref<File | null>(null)
 const ingestionUploadResult = ref<IngestionUploadResult | null>(null)
 const ingestionRuns = ref<IngestionRunRow[]>([])
 const drawerRunId = ref<string | null>(null)
 const drawerRun = ref<IngestionRunDetail | null>(null)
+
+const salesOutFileInput = ref<HTMLInputElement | null>(null)
+const salesOutFile = ref<File | null>(null)
+const salesOutUploadResult = ref<IngestionUploadResult | null>(null)
+const salesOutBuildResult = ref<{ rows_staged: number; weeks_written: number; rows_rejected: number } | null>(null)
+
+const sohFileInput = ref<HTMLInputElement | null>(null)
+const sohFile = ref<File | null>(null)
+const sohUploadResult = ref<IngestionUploadResult | null>(null)
 
 const selectedCard = computed(() => importCards.find((c) => c.type === selectedType.value))
 
@@ -387,6 +453,18 @@ function getRunRow(row: Record<string, unknown>): { id: string; status: string }
   return { id: String(row.id), status: String(row.status ?? '') }
 }
 
+function runEntity(row: Record<string, unknown>): string {
+  return String(row.entity ?? '')
+}
+
+function executePendingRun(row: Record<string, unknown>) {
+  const id = String(row.id)
+  const entity = runEntity(row)
+  if (entity === 'stock_on_hand') executeSohRun(id)
+  else if (entity === 'sales_out') buildSalesOutWeekly(id)
+  else executeIngestionRun(id)
+}
+
 function statusBadgeClass(status: string) {
   const s = String(status).toLowerCase()
   if (s === 'success') return 'badge-success'
@@ -419,6 +497,91 @@ async function uploadIngestion() {
       ? (err as { response?: { data?: { detail?: string } } }).response?.data?.detail
       : null
     alert(msg ? `Upload failed: ${typeof msg === 'string' ? msg : JSON.stringify(msg)}` : 'Upload failed. Check the file format and try again.')
+  }
+}
+
+function onSalesOutFileSelect(e: Event) {
+  const target = e.target as HTMLInputElement
+  salesOutFile.value = target.files?.[0] ?? null
+  salesOutUploadResult.value = null
+  salesOutBuildResult.value = null
+}
+
+async function uploadSalesOut() {
+  if (!salesOutFile.value) return
+  const form = new FormData()
+  form.append('file', salesOutFile.value)
+  try {
+    const { data } = await api.post<IngestionUploadResult>('/ingestion/sales-out/upload', form)
+    salesOutUploadResult.value = data
+    salesOutFile.value = null
+    if (salesOutFileInput.value) salesOutFileInput.value.value = ''
+    await loadIngestionRuns()
+  } catch (err: unknown) {
+    const msg = err && typeof err === 'object' && 'response' in err
+      ? (err as { response?: { data?: { detail?: string } } }).response?.data?.detail
+      : null
+    alert(msg ? `Upload failed: ${typeof msg === 'string' ? msg : JSON.stringify(msg)}` : 'Upload failed. Check the file format and try again.')
+  }
+}
+
+async function buildSalesOutWeekly(runId: string) {
+  try {
+    const { data } = await api.post<{ run_id: string; status: string; rows_staged: number; weeks_written: number; rows_rejected: number }>(
+      `/ingestion/sales-out/${runId}/build-weekly`
+    )
+    salesOutBuildResult.value = {
+      rows_staged: data.rows_staged,
+      weeks_written: data.weeks_written,
+      rows_rejected: data.rows_rejected,
+    }
+    await loadIngestionRuns()
+  } catch (err: unknown) {
+    const msg = err && typeof err === 'object' && 'response' in err
+      ? (err as { response?: { data?: { detail?: string } } }).response?.data?.detail
+      : null
+    alert(msg ? `Build failed: ${typeof msg === 'string' ? msg : JSON.stringify(msg)}` : 'Build failed.')
+  }
+}
+
+function onSohFileSelect(e: Event) {
+  const target = e.target as HTMLInputElement
+  sohFile.value = target.files?.[0] ?? null
+  sohUploadResult.value = null
+}
+
+async function uploadSoh() {
+  if (!sohFile.value) return
+  const form = new FormData()
+  form.append('file', sohFile.value)
+  try {
+    const { data } = await api.post<IngestionUploadResult>('/ingestion/stock-on-hand/upload', form)
+    sohUploadResult.value = data
+    sohFile.value = null
+    if (sohFileInput.value) sohFileInput.value.value = ''
+    await loadIngestionRuns()
+  } catch (err: unknown) {
+    const msg = err && typeof err === 'object' && 'response' in err
+      ? (err as { response?: { data?: { detail?: string } } }).response?.data?.detail
+      : null
+    alert(msg ? `Upload failed: ${typeof msg === 'string' ? msg : JSON.stringify(msg)}` : 'Upload failed. Check the file format and branch mapping.')
+  }
+}
+
+async function executeSohRun(runId: string) {
+  try {
+    await api.post(`/ingestion/stock-on-hand/${runId}/execute`)
+    await loadIngestionRuns()
+    if (drawerRunId.value === runId) {
+      const { data } = await api.get<IngestionRunDetail>(`/ingestion/runs/${runId}`)
+      drawerRun.value = data
+    }
+    sohUploadResult.value = null
+  } catch (err: unknown) {
+    const msg = err && typeof err === 'object' && 'response' in err
+      ? (err as { response?: { data?: { detail?: string } } }).response?.data?.detail
+      : null
+    alert(msg ? `Execute failed: ${typeof msg === 'string' ? msg : JSON.stringify(msg)}` : 'Execute failed.')
   }
 }
 

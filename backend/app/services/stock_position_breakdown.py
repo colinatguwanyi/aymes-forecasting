@@ -12,6 +12,7 @@ from datetime import date, timedelta
 from decimal import Decimal
 from typing import Any, cast
 
+from sqlalchemy import case
 from sqlalchemy.orm import Session
 
 from app.models import (
@@ -68,7 +69,7 @@ def _get_on_hand(
     warehouse_code: str,
     as_of_week: date,
 ) -> tuple[date | None, Decimal]:
-    """Latest on_hand_qty from inventory_snapshots_weekly where week_start <= as_of_week."""
+    """Latest on_hand_qty from inventory_snapshots_weekly where week_start <= as_of_week; prefer source_type='soh' over 'legacy'."""
     rows = (
         db.query(InventorySnapshotWeekly)
         .filter(
@@ -76,7 +77,10 @@ def _get_on_hand(
             InventorySnapshotWeekly.warehouse_code == warehouse_code,
             InventorySnapshotWeekly.week_start <= as_of_week,
         )
-        .order_by(InventorySnapshotWeekly.week_start.desc())
+        .order_by(
+            InventorySnapshotWeekly.week_start.desc(),
+            case((InventorySnapshotWeekly.source_type == "soh", 1), else_=0).desc(),
+        )
         .limit(1)
         .all()
     )

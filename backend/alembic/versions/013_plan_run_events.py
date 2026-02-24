@@ -17,18 +17,27 @@ branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 
 
+def _table_exists(conn, name: str) -> bool:
+    result = conn.execute(sa.text(
+        "SELECT 1 FROM information_schema.tables WHERE table_name = :t LIMIT 1"
+    ), {"t": name})
+    return result.scalar() is not None
+
+
 def upgrade() -> None:
-    op.create_table(
-        "plan_run_events",
-        sa.Column("id", sa.Integer(), primary_key=True, autoincrement=True),
-        sa.Column("plan_run_id", sa.Integer(), sa.ForeignKey("plan_runs.id", ondelete="CASCADE"), nullable=False),
-        sa.Column("event_type", sa.String(64), nullable=False),
-        sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.text("now()"), nullable=False),
-        sa.Column("created_by", sa.String(256), nullable=True),
-        sa.Column("details_json", postgresql.JSONB(), nullable=True),
-    )
-    op.create_index("ix_plan_run_events_plan_run_id", "plan_run_events", ["plan_run_id"])
-    op.create_index("ix_plan_run_events_event_type", "plan_run_events", ["event_type"])
+    conn = op.get_bind()
+    if not _table_exists(conn, "plan_run_events"):
+        op.create_table(
+            "plan_run_events",
+            sa.Column("id", sa.Integer(), primary_key=True, autoincrement=True),
+            sa.Column("plan_run_id", sa.Integer(), sa.ForeignKey("plan_runs.id", ondelete="CASCADE"), nullable=False),
+            sa.Column("event_type", sa.String(64), nullable=False),
+            sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.text("now()"), nullable=False),
+            sa.Column("created_by", sa.String(256), nullable=True),
+            sa.Column("details_json", postgresql.JSONB(), nullable=True),
+        )
+        op.create_index("ix_plan_run_events_plan_run_id", "plan_run_events", ["plan_run_id"])
+        op.create_index("ix_plan_run_events_event_type", "plan_run_events", ["event_type"])
 
 
 def downgrade() -> None:

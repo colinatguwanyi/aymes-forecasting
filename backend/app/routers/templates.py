@@ -108,6 +108,14 @@ def template_demand_daily() -> StreamingResponse:
     return _csv_response(headers, rows, "template_demand_daily.csv")
 
 
+@router.get("/stock-on-hand")
+def template_stock_on_hand() -> StreamingResponse:
+    """SOH extract: Stock at (date), Branch Name, AAH Code, STOCK, ON ORDER. Header only; Branch Name must map to warehouse_code via warehouse_branch_mapping."""
+    headers = ["Stock at", "Branch Name", "AAH Code", "STOCK", "ON ORDER", "Description"]
+    rows: list[list[str]] = []
+    return _csv_response(headers, rows, "template_stock_on_hand.csv")
+
+
 @router.get("/product-master")
 def template_product_master() -> StreamingResponse:
     """Product Master: suppliers, products, supplier_products, optional logistics/cost."""

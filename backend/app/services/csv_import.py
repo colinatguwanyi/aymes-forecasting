@@ -26,6 +26,22 @@ def parse_date(s: str) -> tuple[bool, Any]:
         return False, "Invalid date (use YYYY-MM-DD, Monday)"
 
 
+def parse_date_ddmmyyyy(s: str) -> tuple[bool, Any]:
+    """Parse DD/MM/YYYY; return (ok, date or error message)."""
+    s = (s or "").strip()
+    if not s:
+        return False, "Empty date"
+    try:
+        d = datetime.strptime(s, "%d/%m/%Y").date()
+        return True, d
+    except ValueError:
+        try:
+            d = datetime.strptime(s, "%Y-%m-%d").date()
+            return True, d
+        except ValueError:
+            return False, "Invalid date (use DD/MM/YYYY or YYYY-MM-DD)"
+
+
 def parse_decimal(s: str) -> tuple[bool, Decimal | str]:
     s = (s or "0").strip()
     try:
@@ -201,6 +217,30 @@ def read_csv(file_content: bytes) -> list[dict[str, Any]]:
         raise ValueError("Could not decode file as UTF-8, CP1252, or Latin-1")
     reader = csv.DictReader(io.StringIO(text))
     return list(reader)
+
+
+def read_csv_chunked(
+    file_content: bytes,
+    chunk_size: int = 5000,
+) -> "Any":  # Iterator[list[dict[str, Any]]]
+    """Yield CSV rows in chunks to avoid loading large files fully into memory."""
+    for encoding in ("utf-8-sig", "utf-8", "cp1252", "latin-1"):
+        try:
+            text = file_content.decode(encoding)
+            break
+        except UnicodeDecodeError:
+            continue
+    else:
+        raise ValueError("Could not decode file as UTF-8, CP1252, or Latin-1")
+    reader = csv.DictReader(io.StringIO(text))
+    chunk: list[dict[str, Any]] = []
+    for row in reader:
+        chunk.append(row)
+        if len(chunk) >= chunk_size:
+            yield chunk
+            chunk = []
+    if chunk:
+        yield chunk
 
 
 def read_csv_or_xlsx(file_content: bytes, filename: str | None = None) -> list[dict[str, Any]]:
