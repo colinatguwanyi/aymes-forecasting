@@ -267,7 +267,7 @@
     </section>
 
     <!-- Confirmation modal for historical backfill -->
-    <div v-if="confirmModalRun" class="fixed inset-0 bg-black/30 z-[200] flex items-center justify-center" @click.self="closeConfirmModal">
+    <div v-if="confirmModalRun" class="fixed inset-0 bg-black/30 z-200 flex items-center justify-center" @click.self="closeConfirmModal">
       <div class="bg-white rounded-lg shadow-xl max-w-md w-full mx-4 p-5">
         <h3 class="text-lg font-medium text-slate-800 mb-2">Confirm historical backfill</h3>
         <p class="text-sm text-slate-600 mb-3">This looks like a historical backfill. Please review before proceeding.</p>

@@ -245,7 +245,8 @@ def get_current_user(
         db.flush()
 
     user.last_login_at = now
-    user.display_name = identity.display_name or user.display_name
+    _current_display = getattr(user, "display_name", None)
+    user.display_name = identity.display_name or _current_display
     db.commit()
     db.refresh(user)
 

@@ -218,7 +218,9 @@ def build_demand_from_sales_out(db: Session, run_id: UUID) -> tuple[int, int, in
             db.flush()
             progress["batches_done"] = (i // HISTORICAL_BATCH_WEEKS) + 1
             progress["weeks_done"] = weeks_written
-            run.progress_meta = {**(run.progress_meta or {}), **progress}
+            _pm = getattr(run, "progress_meta", None)
+            _run_pm = _pm if isinstance(_pm, dict) else {}
+            run.progress_meta = {**_run_pm, **progress}
     else:
         # Weekly mode or small historical: single transaction
         keys_to_write = list(aggregated.keys())

@@ -83,7 +83,8 @@ def test_unknown_branch_rejected() -> None:
         assert reason == "unknown branch mapping"
         staged = db.query(StockOnHandStage).filter(StockOnHandStage.ingestion_run_id == run_id).all()
         assert len(staged) == 1
-        assert staged[0].reject_reason == "unknown branch mapping"
+        _reason = getattr(staged[0], "reject_reason", None)
+        assert _reason == "unknown branch mapping"
     finally:
         db.query(StockOnHandStage).filter(StockOnHandStage.ingestion_run_id == run_id).delete(synchronize_session=False)
         db.query(IngestionRun).filter(IngestionRun.id == run_id).delete(synchronize_session=False)
@@ -190,7 +191,8 @@ def test_weekly_rollup_latest_in_week() -> None:
             InventorySnapshotWeekly.source_type == "soh",
         ).first()
         assert row is not None
-        assert row.on_hand_qty == Decimal("50")
+        _qty = getattr(row, "on_hand_qty", None)
+        assert _qty == Decimal("50")
     finally:
         db.query(InventorySnapshotDaily).filter(InventorySnapshotDaily.source_run_id == run_id).delete(synchronize_session=False)
         db.query(InventorySnapshotWeekly).filter(InventorySnapshotWeekly.source_run_id == run_id).delete(synchronize_session=False)
@@ -296,7 +298,8 @@ def test_blp_stage_and_build_daily() -> None:
             InventorySnapshotDaily.sku == "AC1.5-CH",
         ).first()
         assert daily is not None
-        assert daily.on_hand_units == Decimal("1799")
+        _units = getattr(daily, "on_hand_units", None)
+        assert _units == Decimal("1799")
     finally:
         db.query(InventorySnapshotDaily).filter(InventorySnapshotDaily.source_run_id == run_id).delete(synchronize_session=False)
         db.query(StockOnHandStage).filter(StockOnHandStage.ingestion_run_id == run_id).delete(synchronize_session=False)

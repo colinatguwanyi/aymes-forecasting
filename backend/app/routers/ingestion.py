@@ -502,8 +502,10 @@ async def upload(
 
         # Mode detection for sales_out, stock_on_hand, demand
         if entity_enum in (IngestionEntity.SALES_OUT, IngestionEntity.STOCK_ON_HAND, IngestionEntity.DEMAND):
-            row_count_val = int(run.row_count) if run.row_count is not None else 0
-            file_size_val = int(run.file_size_bytes) if run.file_size_bytes is not None else None
+            _rc = getattr(run, "row_count", None)
+            _fb = getattr(run, "file_size_bytes", None)
+            row_count_val = int(_rc) if _rc is not None else 0
+            file_size_val = int(_fb) if _fb is not None else None
             date_min, date_max, detected_mode, requires_confirm = compute_date_range_and_mode(
                 db, run_id, entity_enum, row_count_val, file_size_val
             )
@@ -524,14 +526,16 @@ async def upload(
             "rejected_count": rejected,
         }
         if entity_enum in (IngestionEntity.SALES_OUT, IngestionEntity.STOCK_ON_HAND, IngestionEntity.DEMAND):
-            out["mode"] = run.mode.value if run.mode else "weekly"
+            _mode = getattr(run, "mode", None)
+            out["mode"] = _mode.value if _mode else "weekly"
             out["requires_confirm"] = getattr(run, "requires_confirm", False)
             dmin = getattr(run, "date_min", None)
             dmax = getattr(run, "date_max", None)
             out["date_min"] = dmin.isoformat() if dmin else None
             out["date_max"] = dmax.isoformat() if dmax else None
-            if run.progress_meta and "distinct_skus" in run.progress_meta:
-                out["import_summary"] = run.progress_meta
+            _pm = getattr(run, "progress_meta", None)
+            if _pm and isinstance(_pm, dict) and "distinct_skus" in _pm:
+                out["import_summary"] = _pm
             if out["requires_confirm"] and dmin and dmax:
                 span_days = (dmax - dmin).days
                 out["confirm_message"] = (

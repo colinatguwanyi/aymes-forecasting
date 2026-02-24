@@ -206,8 +206,9 @@ def run_plan(
     db.add(plan_run)
     db.flush()
 
+    plan_run_id_val = int(getattr(plan_run, "id", 0))
     to_week = run_week + timedelta(days=53 * 7)
-    demand_inputs = _demand_inputs_for_run(db, int(plan_run.id), run_week, to_week)
+    demand_inputs = _demand_inputs_for_run(db, plan_run_id_val, run_week, to_week)
 
     order_overrides: dict[tuple[date, str, str], Decimal] = {}
     for o in db.query(PlannedOrderOverrideWeekly).filter(PlannedOrderOverrideWeekly.plan_run_id == plan_run.id).all():

@@ -301,7 +301,9 @@ def build_daily_from_stage(db: Session, run_id: UUID) -> tuple[int, int]:
                 )
                 inserted += 1
             db.flush()
-            run.progress_meta = {**(run.progress_meta or {}), "daily_batches_done": (i // HISTORICAL_BATCH_DAYS) + 1}
+            _pm = getattr(run, "progress_meta", None)
+            _run_pm = _pm if isinstance(_pm, dict) else {}
+            run.progress_meta = {**_run_pm, "daily_batches_done": (i // HISTORICAL_BATCH_DAYS) + 1}
     else:
         for (warehouse_code, sku, as_of_date), (on_hand_units, on_order_units) in items:
             db.add(
