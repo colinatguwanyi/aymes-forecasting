@@ -17,7 +17,7 @@ from sqlalchemy import (
     UniqueConstraint,
     func,
 )
-from sqlalchemy.dialects.postgresql import JSONB, UUID
+from sqlalchemy.dialects.postgresql import ENUM as PGEnum, JSONB, UUID
 from sqlalchemy.orm import relationship
 
 from app.database import Base
@@ -65,6 +65,11 @@ class IngestionStatus(str, enum.Enum):
     SUCCESS = "success"
     FAILED = "failed"
     DUPLICATE_NOOP = "duplicate_noop"
+
+
+class IngestionMode(str, enum.Enum):
+    WEEKLY = "weekly"
+    HISTORICAL = "historical"
 
 
 class Product(Base):
@@ -526,6 +531,19 @@ class IngestionRun(Base):
     rejected_count = Column(Integer, default=0)
     error_summary = Column(Text, nullable=True)
     created_by = Column(String(256), nullable=True)
+    # Weekly vs historical ingestion mode
+    mode = Column(
+        PGEnum(IngestionMode, name="ingestion_mode_enum", create_type=False, values_callable=_enum_values),
+        nullable=True,
+        server_default="weekly",
+    )
+    date_min = Column(Date, nullable=True)
+    date_max = Column(Date, nullable=True)
+    file_size_bytes = Column(Integer, nullable=True)
+    requires_confirm = Column(Boolean, nullable=False, server_default="false")
+    confirmed_at = Column(DateTime(timezone=True), nullable=True)
+    confirmed_by = Column(String(256), nullable=True)
+    progress_meta = Column(JSONB, nullable=True)
     rejections = relationship("IngestionRejection", back_populates="ingestion_run", cascade="all, delete-orphan")
     demand_stage_rows = relationship("DemandStageWeekly", back_populates="ingestion_run", cascade="all, delete-orphan")
     forecast_output_stage_rows = relationship(

@@ -14,6 +14,7 @@
 
       <span class="nav-section">DATA & SETUP</span>
       <router-link to="/imports" class="nav-item" active-class="active">Imports</router-link>
+      <router-link to="/admin/forecast-methods" class="nav-item" active-class="active">Forecasting Methods</router-link>
       <router-link to="/admin/products" class="nav-item" active-class="active">Products</router-link>
       <router-link to="/admin/suppliers" class="nav-item" active-class="active">Suppliers</router-link>
       <router-link to="/admin/warehouses" class="nav-item" active-class="active">Warehouses</router-link>

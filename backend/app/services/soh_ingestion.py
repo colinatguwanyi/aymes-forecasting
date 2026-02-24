@@ -4,7 +4,7 @@ from __future__ import annotations
 import hashlib
 import logging
 from collections import defaultdict
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal
 from typing import Any, cast
 from uuid import UUID
@@ -12,6 +12,7 @@ from uuid import UUID
 from sqlalchemy.orm import Session
 
 from app.models import (
+    IngestionMode,
     IngestionRejection,
     IngestionRun,
     IngestionStatus,
@@ -26,6 +27,7 @@ logger = logging.getLogger(__name__)
 
 SOH_SOURCE_TYPE = "soh"
 CHUNK_SIZE = 5000
+HISTORICAL_BATCH_DAYS = 60
 
 
 def _get(row: dict[str, Any], *keys: str) -> Any:
@@ -152,11 +154,8 @@ def build_daily_from_stage(db: Session, run_id: UUID) -> tuple[int, int]:
     run.status = IngestionStatus.RUNNING
     db.flush()
 
-    # Idempotent: remove any existing daily rows for this run
-    db.query(InventorySnapshotDaily).filter(
-        InventorySnapshotDaily.source_type == SOH_SOURCE_TYPE,
-        InventorySnapshotDaily.source_run_id == run_id,
-    ).delete(synchronize_session=False)
+    mode = getattr(run, "mode", None)
+    is_historical = mode == IngestionMode.HISTORICAL
 
     stage_rows = (
         db.query(StockOnHandStage)
@@ -195,20 +194,49 @@ def build_daily_from_stage(db: Session, run_id: UUID) -> tuple[int, int]:
         else:
             aggregated[key] = (on_hand, on_order)
 
+    # Idempotent: remove any existing daily rows for this run
+    db.query(InventorySnapshotDaily).filter(
+        InventorySnapshotDaily.source_type == SOH_SOURCE_TYPE,
+        InventorySnapshotDaily.source_run_id == run_id,
+    ).delete(synchronize_session=False)
+
     inserted = 0
-    for (warehouse_code, sku, as_of_date), (on_hand_units, on_order_units) in aggregated.items():
-        db.add(
-            InventorySnapshotDaily(
-                warehouse_code=warehouse_code,
-                sku=sku,
-                as_of_date=as_of_date,
-                on_hand_units=Decimal(str(on_hand_units)),
-                on_order_units=Decimal(str(on_order_units)),
-                source_type=SOH_SOURCE_TYPE,
-                source_run_id=run_id,
+    items = list(aggregated.items())
+    if is_historical and len(items) > 100:
+        # Chunk by date range
+        dates_sorted = sorted({k[2] for k in aggregated.keys()})
+        for i in range(0, len(dates_sorted), HISTORICAL_BATCH_DAYS):
+            batch_dates = set(dates_sorted[i : i + HISTORICAL_BATCH_DAYS])
+            batch_items = [(k, v) for k, v in items if k[2] in batch_dates]
+            for (warehouse_code, sku, as_of_date), (on_hand_units, on_order_units) in batch_items:
+                db.add(
+                    InventorySnapshotDaily(
+                        warehouse_code=warehouse_code,
+                        sku=sku,
+                        as_of_date=as_of_date,
+                        on_hand_units=Decimal(str(on_hand_units)),
+                        on_order_units=Decimal(str(on_order_units)),
+                        source_type=SOH_SOURCE_TYPE,
+                        source_run_id=run_id,
+                    )
+                )
+                inserted += 1
+            db.flush()
+            run.progress_meta = {**(run.progress_meta or {}), "daily_batches_done": (i // HISTORICAL_BATCH_DAYS) + 1}
+    else:
+        for (warehouse_code, sku, as_of_date), (on_hand_units, on_order_units) in items:
+            db.add(
+                InventorySnapshotDaily(
+                    warehouse_code=warehouse_code,
+                    sku=sku,
+                    as_of_date=as_of_date,
+                    on_hand_units=Decimal(str(on_hand_units)),
+                    on_order_units=Decimal(str(on_order_units)),
+                    source_type=SOH_SOURCE_TYPE,
+                    source_run_id=run_id,
+                )
             )
-        )
-        inserted += 1
+            inserted += 1
 
     run.inserted_count = inserted
     run.updated_count = 0

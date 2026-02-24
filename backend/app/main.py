@@ -10,6 +10,7 @@ from fastapi.staticfiles import StaticFiles
 
 from app.database import Base, engine
 from app.routers import (
+    admin_forecast_methods,
     products,
     warehouses,
     suppliers,
@@ -82,6 +83,7 @@ app.include_router(exports.router, prefix="/api/exports", tags=["exports"])
 app.include_router(templates.router, prefix="/api/templates", tags=["templates"])
 app.include_router(ingestion.router, prefix="/api/ingestion", tags=["ingestion"])
 app.include_router(forecast.router, prefix="/api/forecast", tags=["forecast"])
+app.include_router(admin_forecast_methods.router, prefix="/api/admin/forecast-methods", tags=["admin-forecast-methods"])
 
 # Serve built frontend (after: cd frontend && npm run build)
 if _SERVE_FRONTEND:

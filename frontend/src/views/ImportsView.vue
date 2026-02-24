@@ -150,18 +150,21 @@
           <label class="form-label">File</label>
           <input type="file" ref="ingestionFileInput" :accept="ingestionEntity === 'sales_out' || ingestionEntity === 'stock_on_hand' ? '.csv,.xlsx,.xls' : '.csv'" @change="onIngestionFileSelect" class="block w-full text-sm text-slate-600 file:mr-2 file:py-1.5 file:px-3 file:rounded-lg file:border file:border-slate-300 file:bg-white file:text-slate-700 file:text-sm hover:file:bg-slate-50" />
         </div>
-        <div>
-          <button type="button" @click="uploadIngestion" :disabled="!ingestionFile" class="btn-primary">Upload &amp; stage</button>
+        <div class="flex gap-2">
+          <button type="button" @click="uploadIngestionWithMode('weekly')" :disabled="!ingestionFile" class="btn-primary">Upload (weekly)</button>
+          <button v-if="ingestionEntity === 'demand' || ingestionEntity === 'sales_out' || ingestionEntity === 'stock_on_hand'" type="button" @click="uploadIngestionWithMode('historical')" :disabled="!ingestionFile" class="btn-secondary border-amber-300 text-amber-800 hover:bg-amber-50">Upload historical</button>
         </div>
       </div>
       <div v-if="ingestionUploadResult" class="mt-3 text-sm text-slate-600 flex flex-wrap items-center gap-2">
         <span>Run ID: <code class="text-xs bg-slate-100 px-1.5 py-0.5 rounded">{{ ingestionUploadResult.run_id.slice(0, 8) }}</code></span>
         <span>Staged {{ ingestionUploadResult.staged_count }}, rejected {{ ingestionUploadResult.rejected_count }}</span>
+        <span v-if="ingestionUploadResult.mode" class="badge" :class="ingestionUploadResult.mode === 'historical' ? 'badge-warn' : 'badge-info'">{{ ingestionUploadResult.mode }}</span>
+        <button v-if="ingestionUploadResult.requires_confirm" type="button" @click="showConfirmModal(ingestionUploadResult)" class="btn-secondary text-sm border-amber-300 text-amber-800">Confirm backfill</button>
         <template v-if="ingestionEntity === 'sales_out'">
-          <button type="button" @click="buildSalesOutWeekly(ingestionUploadResult.run_id)" class="btn-primary text-sm">Execute build-weekly</button>
+          <button type="button" @click="buildSalesOutWeekly(ingestionUploadResult.run_id)" :disabled="ingestionUploadResult.requires_confirm && !ingestionUploadResult.confirmed" class="btn-primary text-sm">Execute build-weekly</button>
         </template>
         <template v-else>
-          <button type="button" @click="executeIngestionRun(ingestionUploadResult.run_id)" class="btn-secondary text-sm">Execute transform</button>
+          <button type="button" @click="executeIngestionRun(ingestionUploadResult.run_id)" :disabled="ingestionUploadResult.requires_confirm && !ingestionUploadResult.confirmed" class="btn-secondary text-sm">Execute transform</button>
         </template>
       </div>
     </section>
@@ -170,19 +173,27 @@
     <section class="card card-body">
       <h3 class="section-title mb-2">Sales Out</h3>
       <p class="text-sm text-slate-600 mb-3">Upload CSV or XLSX (AAH_Product_Code, Invoiced_Qty, Business_Processed_Date DD/MM/YYYY, etc.). Stage then build weekly demand (AAH, W-TUE).</p>
+      <div class="flex flex-wrap items-center gap-3 mb-3">
+        <button type="button" @click="uploadSalesOutWithMode('weekly')" :disabled="!salesOutFile" class="btn-primary">
+          Upload (weekly)
+        </button>
+        <button type="button" @click="uploadSalesOutWithMode('historical')" :disabled="!salesOutFile" class="btn-secondary border-amber-300 text-amber-800 hover:bg-amber-50">
+          Upload historical backfill
+        </button>
+        <span v-if="salesOutFile" class="text-xs text-slate-500">Selected: {{ salesOutFile.name }}</span>
+      </div>
       <div class="flex flex-wrap items-end gap-3 md:grid md:grid-cols-4">
         <div>
           <label class="form-label">File</label>
           <input type="file" ref="salesOutFileInput" accept=".csv,.xlsx,.xls" @change="onSalesOutFileSelect" class="block w-full text-sm text-slate-600 file:mr-2 file:py-1.5 file:px-3 file:rounded-lg file:border file:border-slate-300 file:bg-white file:text-slate-700 file:text-sm hover:file:bg-slate-50" />
         </div>
-        <div>
-          <button type="button" @click="uploadSalesOut" :disabled="!salesOutFile" class="btn-primary">Upload &amp; stage</button>
-        </div>
       </div>
       <div v-if="salesOutUploadResult" class="mt-3 text-sm text-slate-600 flex flex-wrap items-center gap-2">
         <span>Run ID: <code class="text-xs bg-slate-100 px-1.5 py-0.5 rounded">{{ salesOutUploadResult.run_id.slice(0, 8) }}</code></span>
         <span>Staged {{ salesOutUploadResult.staged_count }}, rejected {{ salesOutUploadResult.rejected_count }}</span>
-        <button type="button" @click="buildSalesOutWeekly(salesOutUploadResult.run_id)" class="btn-primary text-sm">Execute build-weekly</button>
+        <span v-if="salesOutUploadResult.mode" class="badge" :class="salesOutUploadResult.mode === 'historical' ? 'badge-warn' : 'badge-info'">{{ salesOutUploadResult.mode }}</span>
+        <button v-if="salesOutUploadResult.requires_confirm" type="button" @click="showConfirmModal(salesOutUploadResult)" class="btn-secondary text-sm border-amber-300 text-amber-800">Confirm backfill</button>
+        <button type="button" @click="buildSalesOutWeekly(salesOutUploadResult.run_id)" :disabled="salesOutUploadResult.requires_confirm && !salesOutUploadResult.confirmed" class="btn-primary text-sm">Execute build-weekly</button>
       </div>
       <div v-if="salesOutBuildResult" class="mt-2 text-sm text-slate-600">
         <span>Rows staged: {{ salesOutBuildResult.rows_staged }}</span>
@@ -195,22 +206,24 @@
     <section class="card card-body">
       <h3 class="section-title mb-2">Stock On Hand (SOH)</h3>
       <p class="text-sm text-slate-600 mb-3">Upload CSV or XLSX: Stock at (date), Branch Name, AAH Code, STOCK, ON ORDER. Branch Name must exist in warehouse branch mapping. Stage then Execute to build daily and weekly canonical (W-TUE).</p>
-      <div class="flex flex-wrap items-center gap-2 mb-2">
+      <div class="flex flex-wrap items-center gap-3 mb-2">
         <a href="/api/templates/stock-on-hand" download class="btn-secondary">Download SOH template</a>
+        <button type="button" @click="uploadSohWithMode('weekly')" :disabled="!sohFile" class="btn-primary">Upload (weekly)</button>
+        <button type="button" @click="uploadSohWithMode('historical')" :disabled="!sohFile" class="btn-secondary border-amber-300 text-amber-800 hover:bg-amber-50">Upload historical backfill</button>
+        <span v-if="sohFile" class="text-xs text-slate-500">Selected: {{ sohFile.name }}</span>
       </div>
       <div class="flex flex-wrap items-end gap-3 md:grid md:grid-cols-4">
         <div>
           <label class="form-label">File</label>
           <input type="file" ref="sohFileInput" accept=".csv,.xlsx,.xls" @change="onSohFileSelect" class="block w-full text-sm text-slate-600 file:mr-2 file:py-1.5 file:px-3 file:rounded-lg file:border file:border-slate-300 file:bg-white file:text-slate-700 file:text-sm hover:file:bg-slate-50" />
         </div>
-        <div>
-          <button type="button" @click="uploadSoh" :disabled="!sohFile" class="btn-primary">Upload &amp; stage</button>
-        </div>
       </div>
       <div v-if="sohUploadResult" class="mt-3 text-sm text-slate-600 flex flex-wrap items-center gap-2">
         <span>Run ID: <code class="text-xs bg-slate-100 px-1.5 py-0.5 rounded">{{ sohUploadResult.run_id.slice(0, 8) }}</code></span>
         <span>Staged {{ sohUploadResult.staged_count }}, rejected {{ sohUploadResult.rejected_count }}</span>
-        <button type="button" @click="executeSohRun(sohUploadResult.run_id)" class="btn-primary text-sm">Execute (daily → weekly)</button>
+        <span v-if="sohUploadResult.mode" class="badge" :class="sohUploadResult.mode === 'historical' ? 'badge-warn' : 'badge-info'">{{ sohUploadResult.mode }}</span>
+        <button v-if="sohUploadResult.requires_confirm" type="button" @click="showConfirmModal(sohUploadResult)" class="btn-secondary text-sm border-amber-300 text-amber-800">Confirm backfill</button>
+        <button type="button" @click="executeSohRun(sohUploadResult.run_id)" :disabled="sohUploadResult.requires_confirm && !sohUploadResult.confirmed" class="btn-primary text-sm">Execute (daily → weekly)</button>
       </div>
     </section>
 
@@ -243,6 +256,23 @@
         </DataTable>
       </div>
     </section>
+
+    <!-- Confirmation modal for historical backfill -->
+    <div v-if="confirmModalRun" class="fixed inset-0 bg-black/30 z-[200] flex items-center justify-center" @click.self="closeConfirmModal">
+      <div class="bg-white rounded-lg shadow-xl max-w-md w-full mx-4 p-5">
+        <h3 class="text-lg font-medium text-slate-800 mb-2">Confirm historical backfill</h3>
+        <p class="text-sm text-slate-600 mb-3">This looks like a historical backfill. Please review before proceeding.</p>
+        <dl class="space-y-1 text-sm mb-4">
+          <div class="flex justify-between"><dt class="text-slate-500">Rows:</dt><dd class="font-medium">{{ confirmModalRun.row_count?.toLocaleString() }}</dd></div>
+          <div class="flex justify-between"><dt class="text-slate-500">Date span:</dt><dd class="font-medium">{{ confirmModalRun.date_min }} – {{ confirmModalRun.date_max }}</dd></div>
+          <div v-if="confirmModalRun.span_days" class="flex justify-between"><dt class="text-slate-500">Days:</dt><dd class="font-medium">{{ confirmModalRun.span_days }}</dd></div>
+        </dl>
+        <div class="flex justify-end gap-2">
+          <button type="button" @click="closeConfirmModal" class="btn-secondary">Cancel</button>
+          <button type="button" @click="confirmBackfill" class="btn-primary bg-amber-600 hover:bg-amber-700">Confirm backfill</button>
+        </div>
+      </div>
+    </div>
 
     <!-- Run detail drawer -->
     <div v-if="drawerRunId" class="fixed inset-0 bg-black/30 z-100 flex justify-end" @click.self="closeRunDrawer">
@@ -304,6 +334,13 @@ interface IngestionUploadResult {
   row_count: number
   staged_count: number
   rejected_count: number
+  mode?: string
+  requires_confirm?: boolean
+  confirmed?: boolean
+  date_min?: string
+  date_max?: string
+  span_days?: number
+  confirm_message?: string
 }
 
 type ImportType =
@@ -360,6 +397,7 @@ const salesOutBuildResult = ref<{ rows_staged: number; weeks_written: number; ro
 const sohFileInput = ref<HTMLInputElement | null>(null)
 const sohFile = ref<File | null>(null)
 const sohUploadResult = ref<IngestionUploadResult | null>(null)
+const confirmModalRun = ref<IngestionUploadResult | null>(null)
 
 const selectedCard = computed(() => importCards.find((c) => c.type === selectedType.value))
 
@@ -480,15 +518,15 @@ function onIngestionFileSelect(e: Event) {
   ingestionUploadResult.value = null
 }
 
-async function uploadIngestion() {
+async function uploadIngestionWithMode(mode: 'weekly' | 'historical') {
   if (!ingestionFile.value) return
   const form = new FormData()
   form.append('file', ingestionFile.value)
   try {
     const { data } = await api.post<IngestionUploadResult>('/ingestion/upload', form, {
-      params: { entity: ingestionEntity.value },
+      params: { entity: ingestionEntity.value, mode },
     })
-    ingestionUploadResult.value = data
+    ingestionUploadResult.value = { ...data, confirmed: data.requires_confirm ? false : true }
     ingestionFile.value = null
     if (ingestionFileInput.value) ingestionFileInput.value.value = ''
     await loadIngestionRuns()
@@ -507,13 +545,15 @@ function onSalesOutFileSelect(e: Event) {
   salesOutBuildResult.value = null
 }
 
-async function uploadSalesOut() {
+async function uploadSalesOutWithMode(mode: 'weekly' | 'historical') {
   if (!salesOutFile.value) return
   const form = new FormData()
   form.append('file', salesOutFile.value)
   try {
-    const { data } = await api.post<IngestionUploadResult>('/ingestion/sales-out/upload', form)
-    salesOutUploadResult.value = data
+    const { data } = await api.post<IngestionUploadResult>('/ingestion/sales-out/upload', form, {
+      params: { mode },
+    })
+    salesOutUploadResult.value = { ...data, confirmed: data.requires_confirm ? false : true }
     salesOutFile.value = null
     if (salesOutFileInput.value) salesOutFileInput.value.value = ''
     await loadIngestionRuns()
@@ -550,13 +590,15 @@ function onSohFileSelect(e: Event) {
   sohUploadResult.value = null
 }
 
-async function uploadSoh() {
+async function uploadSohWithMode(mode: 'weekly' | 'historical') {
   if (!sohFile.value) return
   const form = new FormData()
   form.append('file', sohFile.value)
   try {
-    const { data } = await api.post<IngestionUploadResult>('/ingestion/stock-on-hand/upload', form)
-    sohUploadResult.value = data
+    const { data } = await api.post<IngestionUploadResult>('/ingestion/stock-on-hand/upload', form, {
+      params: { mode },
+    })
+    sohUploadResult.value = { ...data, confirmed: data.requires_confirm ? false : true }
     sohFile.value = null
     if (sohFileInput.value) sohFileInput.value.value = ''
     await loadIngestionRuns()
@@ -565,6 +607,41 @@ async function uploadSoh() {
       ? (err as { response?: { data?: { detail?: string } } }).response?.data?.detail
       : null
     alert(msg ? `Upload failed: ${typeof msg === 'string' ? msg : JSON.stringify(msg)}` : 'Upload failed. Check the file format and branch mapping.')
+  }
+}
+
+function showConfirmModal(result: IngestionUploadResult) {
+  const spanDays = result.date_min && result.date_max
+    ? Math.round((new Date(result.date_max).getTime() - new Date(result.date_min).getTime()) / (1000 * 60 * 60 * 24))
+    : 0
+  confirmModalRun.value = { ...result, span_days: spanDays }
+}
+
+function closeConfirmModal() {
+  confirmModalRun.value = null
+}
+
+async function confirmBackfill() {
+  if (!confirmModalRun.value) return
+  try {
+    await api.post(`/ingestion/runs/${confirmModalRun.value.run_id}/confirm`, null, {
+      params: { confirmed_by: 'user' },
+    })
+    if (salesOutUploadResult.value?.run_id === confirmModalRun.value.run_id) {
+      salesOutUploadResult.value = { ...salesOutUploadResult.value, confirmed: true }
+    }
+    if (sohUploadResult.value?.run_id === confirmModalRun.value.run_id) {
+      sohUploadResult.value = { ...sohUploadResult.value, confirmed: true }
+    }
+    if (ingestionUploadResult.value?.run_id === confirmModalRun.value.run_id) {
+      ingestionUploadResult.value = { ...ingestionUploadResult.value, confirmed: true }
+    }
+    closeConfirmModal()
+  } catch (err: unknown) {
+    const msg = err && typeof err === 'object' && 'response' in err
+      ? (err as { response?: { data?: { detail?: string } } }).response?.data?.detail
+      : null
+    alert(msg ? `Confirm failed: ${typeof msg === 'string' ? msg : JSON.stringify(msg)}` : 'Confirm failed.')
   }
 }
 

@@ -317,6 +317,29 @@ export interface StockPositionBreakdown {
   mode: string
 }
 
+/** Forecast methods descriptor (governance/audit). */
+export interface ForecastMethodsDoc {
+  method_version: string
+  updated_at: string
+  overview?: Record<string, unknown>
+  inputs?: Record<string, unknown>
+  time_series_prep?: Record<string, unknown>
+  forecasting?: Record<string, unknown>
+  planning_integration?: Record<string, unknown>
+  known_limitations?: string[]
+  audit?: { hash?: string }
+}
+
+/** Forecast method acknowledgement (sign-off). */
+export interface ForecastMethodAcknowledgement {
+  id: number
+  created_by: string
+  method_version: string
+  method_hash: string
+  acknowledged_at: string
+  notes: string | null
+}
+
 /** Rolling week row (opening/receipts/demand/closing + planned order). */
 export interface StockPositionRollingWeek {
   week_start: string

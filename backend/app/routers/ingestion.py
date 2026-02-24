@@ -15,6 +15,7 @@ from app.models import (
     DemandStageWeekly,
     DemandType,
     IngestionEntity,
+    IngestionMode,
     IngestionRejection,
     IngestionRun,
     IngestionSourceType,
@@ -33,6 +34,7 @@ from app.services.soh_ingestion import (
     build_weekly_from_daily,
     validate_and_stage_soh_row,
 )
+from app.services.ingestion_mode import compute_date_range_and_mode
 from app.services.time_bucketing import week_start_for_date
 from app.services.weekly_series_builder import build_weekly_series_from_stage
 
@@ -216,6 +218,7 @@ def _normalize_entity(value: str) -> IngestionEntity | None:
 async def upload_sales_out(
     file: UploadFile = File(..., description="CSV or XLSX file (Sales Out columns)"),
     created_by: str | None = Query(None),
+    mode: str | None = Query(None, description="weekly (default) or historical"),
     db: Session = Depends(get_db),
 ) -> dict[str, Any]:
     """Accept Sales Out CSV/XLSX; parse and stage; create ingestion run. Call build-weekly on run_id to write demand_actuals."""
@@ -223,8 +226,50 @@ async def upload_sales_out(
         entity="sales_out",
         file=file,
         created_by=created_by,
+        mode=mode,
         db=db,
     )
+
+
+def _check_requires_confirm(run: IngestionRun, action: str) -> None:
+    """Raise HTTPException 409 if run requires confirmation and is not confirmed."""
+    requires = getattr(run, "requires_confirm", False)
+    confirmed_at = getattr(run, "confirmed_at", None)
+    if requires and not confirmed_at:
+        dmin = getattr(run, "date_min", None)
+        dmax = getattr(run, "date_max", None)
+        span_days = (dmax - dmin).days if dmin and dmax else 0
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "confirmation_required",
+                "message": (
+                    f"This looks like a historical backfill ({run.row_count} rows, {span_days} days). "
+                    "Confirm to proceed."
+                ),
+                "run_id": str(run.id),
+            },
+        )
+
+
+@router.post("/runs/{run_id}/confirm")
+def confirm_ingestion_run(
+    run_id: UUID,
+    confirmed_by: str | None = Query(None),
+    db: Session = Depends(get_db),
+) -> dict[str, Any]:
+    """Confirm a historical backfill run. Required before execute when requires_confirm=true."""
+    run = db.query(IngestionRun).filter(IngestionRun.id == run_id).first()
+    if not run:
+        raise HTTPException(status_code=404, detail="Run not found")
+    if not getattr(run, "requires_confirm", False):
+        return {"run_id": str(run_id), "confirmed": True, "message": "Run did not require confirmation."}
+    if getattr(run, "confirmed_at", None):
+        return {"run_id": str(run_id), "confirmed": True, "message": "Run already confirmed."}
+    run.confirmed_at = datetime.now(timezone.utc)
+    run.confirmed_by = confirmed_by
+    db.commit()
+    return {"run_id": str(run_id), "confirmed": True}
 
 
 @router.post("/sales-out/{run_id}/build-weekly")
@@ -236,6 +281,7 @@ def build_sales_out_weekly(
     run = db.query(IngestionRun).filter(IngestionRun.id == run_id).first()
     if not run:
         raise HTTPException(status_code=404, detail="Run not found")
+    _check_requires_confirm(run, "build-weekly")
     if getattr(run, "entity", None) and getattr(run.entity, "value", None) != "sales_out":
         raise HTTPException(status_code=400, detail="Run is not a sales_out run")
     try:
@@ -264,6 +310,7 @@ def build_sales_out_weekly(
 async def upload_stock_on_hand(
     file: UploadFile = File(..., description="CSV or XLSX (Stock at, Branch Name, AAH Code, STOCK, ON ORDER)"),
     created_by: str | None = Query(None),
+    mode: str | None = Query(None, description="weekly (default) or historical"),
     db: Session = Depends(get_db),
 ) -> dict[str, Any]:
     """Accept SOH CSV/XLSX; parse and stage (chunked). Call execute on run_id to build daily and weekly canonical."""
@@ -271,6 +318,7 @@ async def upload_stock_on_hand(
         entity="stock_on_hand",
         file=file,
         created_by=created_by,
+        mode=mode,
         db=db,
     )
 
@@ -284,6 +332,7 @@ def execute_stock_on_hand(
     run = db.query(IngestionRun).filter(IngestionRun.id == run_id).first()
     if not run:
         raise HTTPException(status_code=404, detail="Run not found")
+    _check_requires_confirm(run, "execute")
     if getattr(run, "entity", None) and getattr(run.entity, "value", None) != "stock_on_hand":
         raise HTTPException(status_code=400, detail="Run is not a stock_on_hand run")
     return execute_run(run_id=run_id, db=db)
@@ -309,6 +358,7 @@ async def upload(
     entity: str = Query(..., description="Entity: demand, product_master, or forecast_output"),
     file: UploadFile = File(..., description="CSV file"),
     created_by: str | None = Query(None),
+    mode: str | None = Query(None, description="weekly (default) or historical"),
     db: Session = Depends(get_db),
 ) -> dict[str, Any]:
     """Accept CSV and entity type; parse and stage; create ingestion run; return run_id.
@@ -414,8 +464,45 @@ async def upload(
         run.inserted_count = 0
         run.updated_count = 0
         run.rejected_count = rejected
+        run.file_size_bytes = len(content)
+
+        # Mode detection for sales_out, stock_on_hand, demand
+        if entity_enum in (IngestionEntity.SALES_OUT, IngestionEntity.STOCK_ON_HAND, IngestionEntity.DEMAND):
+            row_count_val = int(run.row_count) if run.row_count is not None else 0
+            file_size_val = int(run.file_size_bytes) if run.file_size_bytes is not None else None
+            date_min, date_max, detected_mode, requires_confirm = compute_date_range_and_mode(
+                db, run_id, entity_enum, row_count_val, file_size_val
+            )
+            run.date_min = date_min
+            run.date_max = date_max
+            if mode and mode.strip().lower() == "historical":
+                run.mode = IngestionMode.HISTORICAL
+                run.requires_confirm = True
+            else:
+                run.mode = detected_mode
+                run.requires_confirm = requires_confirm
+
         db.commit()
-        return {"run_id": str(run_id), "row_count": run.row_count, "staged_count": staged, "rejected_count": rejected}
+        out: dict[str, Any] = {
+            "run_id": str(run_id),
+            "row_count": run.row_count,
+            "staged_count": staged,
+            "rejected_count": rejected,
+        }
+        if entity_enum in (IngestionEntity.SALES_OUT, IngestionEntity.STOCK_ON_HAND, IngestionEntity.DEMAND):
+            out["mode"] = run.mode.value if run.mode else "weekly"
+            out["requires_confirm"] = getattr(run, "requires_confirm", False)
+            dmin = getattr(run, "date_min", None)
+            dmax = getattr(run, "date_max", None)
+            out["date_min"] = dmin.isoformat() if dmin else None
+            out["date_max"] = dmax.isoformat() if dmax else None
+            if out["requires_confirm"] and dmin and dmax:
+                span_days = (dmax - dmin).days
+                out["confirm_message"] = (
+                    f"This looks like a historical backfill ({run.row_count} rows, {span_days} days). "
+                    "Confirm to proceed."
+                )
+        return out
     except HTTPException:
         db.rollback()
         raise
@@ -434,6 +521,7 @@ def execute_run(
     run = db.query(IngestionRun).filter(IngestionRun.id == run_id).first()
     if not run:
         raise HTTPException(status_code=404, detail="Run not found")
+    _check_requires_confirm(run, "execute")
     entity_val = getattr(run, "entity", None)
     try:
         if entity_val == IngestionEntity.DEMAND:
@@ -532,6 +620,11 @@ def list_runs(
             "rejected_count": r.rejected_count,
             "error_summary": r.error_summary,
             "created_by": r.created_by,
+            "mode": r.mode.value if getattr(r, "mode", None) else None,
+            "date_min": d.isoformat() if (d := getattr(r, "date_min", None)) else None,
+            "date_max": d2.isoformat() if (d2 := getattr(r, "date_max", None)) else None,
+            "requires_confirm": getattr(r, "requires_confirm", False),
+            "confirmed_at": ca.isoformat() if (ca := getattr(r, "confirmed_at", None)) else None,
         })
     return out
 
@@ -569,6 +662,12 @@ def get_run(
         "rejected_count": run.rejected_count,
         "error_summary": run.error_summary,
         "created_by": run.created_by,
+        "mode": run.mode.value if getattr(run, "mode", None) else None,
+        "date_min": dm.isoformat() if (dm := getattr(run, "date_min", None)) else None,
+        "date_max": dx.isoformat() if (dx := getattr(run, "date_max", None)) else None,
+        "requires_confirm": getattr(run, "requires_confirm", False),
+        "confirmed_at": cax.isoformat() if (cax := getattr(run, "confirmed_at", None)) else None,
+        "confirmed_by": getattr(run, "confirmed_by", None),
         "rejections_sample": [
             {"row_number": r.row_number, "reason": r.reason, "raw_payload": r.raw_payload}
             for r in rej

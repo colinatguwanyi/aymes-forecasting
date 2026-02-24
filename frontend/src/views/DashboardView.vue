@@ -154,6 +154,7 @@
                 <th>Scenario</th>
                 <th>Demand source</th>
                 <th>Forecast run</th>
+                <th>Forecast method</th>
                 <th>Freeze weeks</th>
                 <th>Run at</th>
                 <th>Created</th>
@@ -170,6 +171,18 @@
                 <td>{{ r.demand_source ?? 'actuals' }}</td>
                 <td class="text-muted">
                   {{ (r.demand_source === 'baseline' || r.demand_source === 'blended') && r.selected_train_end_week_start ? `Using forecast run: ${r.selected_train_end_week_start}` : '—' }}
+                </td>
+                <td>
+                  <router-link
+                    v-if="r.demand_source === 'baseline' || r.demand_source === 'blended'"
+                    to="/admin/forecast-methods"
+                    class="forecast-method-badge"
+                    @click.stop
+                  >
+                    {{ methodVersion }}
+                    <span v-if="needsAcknowledgement(r)" class="ack-warning" title="Method not acknowledged">⚠</span>
+                  </router-link>
+                  <span v-else class="text-muted">—</span>
                 </td>
                 <td>{{ r.freeze_weeks ?? 4 }}</td>
                 <td>{{ r.run_at }}</td>
@@ -333,6 +346,8 @@ const forecastRunOptions = ref<ForecastRunOption[]>([])
 const forecastRunsLoading = ref(false)
 const resetForecastRunLoading = ref(false)
 const actionMessage = ref('')
+const methodVersion = ref('—')
+const methodAcknowledgements = ref<{ method_version: string }[]>([])
 
 const forecastRunPickerValue = computed(() => selectedRun.value?.baseline_train_end_week_start ?? '')
 
@@ -361,10 +376,35 @@ async function loadForecastMetrics() {
   }
 }
 
+function needsAcknowledgement(r: { demand_source?: string }) {
+  if (r.demand_source !== 'baseline' && r.demand_source !== 'blended') return false
+  return methodAcknowledgements.value.length === 0
+}
+
+async function loadForecastMethodsMeta() {
+  try {
+    const docRes = await api.get<{ method_version: string }>('/admin/forecast-methods')
+    methodVersion.value = docRes.data.method_version ?? '—'
+    const version = docRes.data.method_version
+    if (version) {
+      const ackRes = await api.get<{ method_version: string }[]>('/admin/forecast-methods/acknowledgements', {
+        params: { method_version: version },
+      })
+      methodAcknowledgements.value = Array.isArray(ackRes.data) ? ackRes.data : []
+    } else {
+      methodAcknowledgements.value = []
+    }
+  } catch {
+    methodVersion.value = '—'
+    methodAcknowledgements.value = []
+  }
+}
+
 onMounted(async () => {
   await store.fetchPlanRuns()
   if (store.planRuns.length) selectedRunId.value = store.planRuns[0].id
   loadForecastMetrics()
+  loadForecastMethodsMeta()
   loading.value = false
 })
 
@@ -459,4 +499,17 @@ async function doResetForecastRun() {
 .forecast-health-card .subsection { font-size: 0.9375rem; margin: 0.75rem 0 0.25rem; }
 .action-message { font-size: 0.875rem; margin-bottom: 0.5rem; color: var(--success, green); }
 .helper-text { font-size: 0.8125rem; margin-top: 0.25rem; }
+.forecast-method-badge {
+  font-size: 0.75rem;
+  padding: 0.15rem 0.4rem;
+  background: rgb(239 246 255);
+  color: #1d4ed8;
+  border-radius: 0.25rem;
+  text-decoration: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.2rem;
+}
+.forecast-method-badge:hover { background: rgb(219 234 254); }
+.ack-warning { color: var(--warning, #b45309); font-size: 0.875rem; }
 </style>

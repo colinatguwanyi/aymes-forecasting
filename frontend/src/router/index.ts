@@ -29,6 +29,7 @@ const router = createRouter({
         { path: 'policies', name: 'AdminPolicies', meta: { title: 'Admin · Planning Policies' }, component: () => import('../views/admin/AdminPoliciesTab.vue') },
         { path: 'policies/:id', name: 'AdminPolicyDetail', meta: { title: 'Admin · Policy' }, component: () => import('../views/admin/AdminPolicyDetailView.vue') },
         { path: 'timelines', name: 'AdminTimelines', meta: { title: 'Admin · Timelines' }, component: () => import('../views/admin/AdminTimelinesView.vue') },
+        { path: 'forecast-methods', name: 'AdminForecastMethods', meta: { title: 'Admin · Forecasting Methods' }, component: () => import('../views/admin/ForecastMethodsView.vue') },
       ],
     },
     { path: '/imports', name: 'Imports', meta: { title: 'Imports' }, component: () => import('../views/ImportsView.vue') },
