@@ -13,12 +13,14 @@
       <router-link to="/exceptions" class="nav-item" active-class="active">Exceptions</router-link>
 
       <span class="nav-section">DATA & SETUP</span>
-      <router-link to="/imports" class="nav-item" active-class="active">Imports</router-link>
-      <router-link to="/admin/forecast-methods" class="nav-item" active-class="active">Forecasting Methods</router-link>
-      <router-link to="/admin/products" class="nav-item" active-class="active">Products</router-link>
-      <router-link to="/admin/suppliers" class="nav-item" active-class="active">Suppliers</router-link>
-      <router-link to="/admin/warehouses" class="nav-item" active-class="active">Warehouses</router-link>
-      <router-link to="/admin/policies" class="nav-item" active-class="active">Policies</router-link>
+      <router-link v-if="auth.canAdmin() || auth.canOperator()" to="/imports" class="nav-item" active-class="active">Imports</router-link>
+      <template v-if="auth.canAdmin()">
+        <router-link to="/admin/forecast-methods" class="nav-item" active-class="active">Forecasting Methods</router-link>
+        <router-link to="/admin/products" class="nav-item" active-class="active">Products</router-link>
+        <router-link to="/admin/suppliers" class="nav-item" active-class="active">Suppliers</router-link>
+        <router-link to="/admin/warehouses" class="nav-item" active-class="active">Warehouses</router-link>
+        <router-link to="/admin/policies" class="nav-item" active-class="active">Policies</router-link>
+      </template>
 
       <span class="nav-section">OUTPUT</span>
       <router-link to="/reports" class="nav-item" active-class="active">Reports</router-link>
@@ -29,8 +31,10 @@
 
 <script setup lang="ts">
 import { useLayoutStore } from '@/stores/layout'
+import { useAuthStore } from '@/stores/auth'
 
 const layout = useLayoutStore()
+const auth = useAuthStore()
 </script>
 
 <style scoped>

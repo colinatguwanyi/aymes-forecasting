@@ -11,6 +11,7 @@ from sqlalchemy import text
 from sqlalchemy.orm import Session
 
 from app.database import get_db
+from app.security.auth import require_admin
 from app.services.forecast_methods_descriptor import get_forecast_methods_doc, get_method_version
 
 logger = logging.getLogger(__name__)
@@ -24,13 +25,13 @@ class AcknowledgeBody(BaseModel):
     created_by: str = "user"
 
 
-@router.get("")
+@router.get("", dependencies=[Depends(require_admin)])
 def get_forecast_methods() -> dict[str, Any]:
     """Return the forecast methods descriptor (single source of truth for governance)."""
     return get_forecast_methods_doc()
 
 
-@router.post("/acknowledge")
+@router.post("/acknowledge", dependencies=[Depends(require_admin)])
 def acknowledge_forecast_method(
     body: AcknowledgeBody,
     db: Session = Depends(get_db),
@@ -67,7 +68,7 @@ def acknowledge_forecast_method(
     return {"acknowledged": True, "method_version": body.method_version}
 
 
-@router.get("/acknowledgements")
+@router.get("/acknowledgements", dependencies=[Depends(require_admin)])
 def list_acknowledgements(
     method_version: str | None = Query(None, description="Filter by method version"),
     limit: int = Query(50, ge=1, le=200),

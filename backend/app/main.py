@@ -11,6 +11,7 @@ from fastapi.staticfiles import StaticFiles
 from app.database import Base, engine
 from app.routers import (
     admin_forecast_methods,
+    auth,
     products,
     warehouses,
     suppliers,
@@ -62,6 +63,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+app.include_router(auth.router, prefix="/api/v1/auth", tags=["auth"])
 app.include_router(products.router, prefix="/api/products", tags=["products"])
 app.include_router(warehouses.router, prefix="/api/warehouses", tags=["warehouses"])
 app.include_router(suppliers.router, prefix="/api/suppliers", tags=["suppliers"])

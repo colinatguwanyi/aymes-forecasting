@@ -6,11 +6,12 @@ from fastapi import APIRouter, Depends, Query
 from sqlalchemy.orm import Session
 
 from app.database import get_db
+from app.security.auth import require_any_auth
 from app.models import DemandActual as DemandActualModel, DemandType
 from app.schemas import DemandActual
 
 logger = logging.getLogger(__name__)
-router = APIRouter()
+router = APIRouter(dependencies=[Depends(require_any_auth)])
 
 _VALID_DEMAND_TYPES = {"CUSTOMER", "SAMPLES", "ADJUSTMENT"}
 

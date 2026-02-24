@@ -11,6 +11,7 @@ from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile
 from sqlalchemy.orm import Session
 
 from app.database import get_db
+from app.security.auth import require_admin_or_operator
 from app.models import (
     DemandStageWeekly,
     DemandType,
@@ -39,7 +40,7 @@ from app.services.time_bucketing import week_start_for_date
 from app.services.weekly_series_builder import build_weekly_series_from_stage
 
 logger = logging.getLogger(__name__)
-router = APIRouter()
+router = APIRouter(dependencies=[Depends(require_admin_or_operator)])
 
 ALLOWED_DEMAND_TYPES = {"CUSTOMER", "SAMPLES", "ADJUSTMENT"}
 

@@ -12,6 +12,7 @@ from sqlalchemy import func
 
 from app.database import get_db
 from app.models import BaselineForecastWeekly, ForecastRunMetrics, PublishedBaselineForecastWeekly
+from app.security.auth import require_admin_or_planner, require_any_auth
 from app.services.forecasting.baseline import run_baseline_forecast
 from app.services.forecast_metrics import compute_metrics
 from app.services.time_bucketing import week_start_for_date
@@ -28,7 +29,7 @@ class RecomputeMetricsBody(BaseModel):
     eval_window_weeks: int = 12
 
 
-@router.post("/runs")
+@router.post("/runs", dependencies=[Depends(require_admin_or_planner)])
 def create_forecast_run(
     train_end_week_start: date | None = Query(None, description="Last week of training data (week start date)"),
     horizon_weeks: int = Query(52, ge=1, le=104),
@@ -47,7 +48,7 @@ def create_forecast_run(
     }
 
 
-@router.get("/runs")
+@router.get("/runs", dependencies=[Depends(require_any_auth)])
 def list_forecast_runs(
     warehouse_code: str = Query("AAH", description="Scope to warehouse (e.g. AAH)"),
     db: Session = Depends(get_db),
@@ -85,7 +86,7 @@ def list_forecast_runs(
     return out
 
 
-@router.get("/baseline")
+@router.get("/baseline", dependencies=[Depends(require_any_auth)])
 def get_baseline_forecasts(
     sku: str | None = Query(None),
     warehouse_code: str | None = Query(None),
@@ -127,7 +128,7 @@ def get_baseline_forecasts(
     return out
 
 
-@router.get("/published-baseline")
+@router.get("/published-baseline", dependencies=[Depends(require_any_auth)])
 def get_published_baseline(
     train_end_week_start: date | None = Query(None, description="Which run (inference date)"),
     sku: str | None = Query(None),
@@ -165,7 +166,7 @@ def get_published_baseline(
     return out
 
 
-@router.post("/metrics/recompute")
+@router.post("/metrics/recompute", dependencies=[Depends(require_admin_or_planner)])
 def recompute_forecast_metrics(
     body: RecomputeMetricsBody,
     db: Session = Depends(get_db),
@@ -189,7 +190,7 @@ def recompute_forecast_metrics(
     }
 
 
-@router.get("/metrics")
+@router.get("/metrics", dependencies=[Depends(require_any_auth)])
 def get_forecast_metrics(
     sku: str | None = Query(None),
     warehouse_code: str | None = Query(None),
@@ -228,7 +229,7 @@ def get_forecast_metrics(
     return out
 
 
-@router.get("/metrics/summary")
+@router.get("/metrics/summary", dependencies=[Depends(require_any_auth)])
 def get_forecast_metrics_summary(
     model_name: str | None = Query(None),
     train_end_week_start: date | None = Query(None),

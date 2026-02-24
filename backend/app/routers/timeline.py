@@ -8,10 +8,11 @@ from fastapi import APIRouter, Depends, Query
 from sqlalchemy.orm import Session
 
 from app.database import get_db
+from app.security.auth import require_any_auth
 from app.models import PlanningPolicy, ProjectedInventory, Receipt
 from pydantic import BaseModel
 
-router = APIRouter()
+router = APIRouter(dependencies=[Depends(require_any_auth)])
 
 
 def _week_start(d: date) -> date:

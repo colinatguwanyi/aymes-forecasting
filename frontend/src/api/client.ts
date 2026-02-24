@@ -3,11 +3,19 @@ import axios from 'axios'
 const api = axios.create({
   baseURL: '/api',
   headers: { 'Content-Type': 'application/json' },
+  withCredentials: true,
 })
 
-// When sending FormData (e.g. file upload), do not set Content-Type so the browser
-// sets multipart/form-data with boundary. Otherwise the server may not parse the body.
+// In dev mode, add X-Dev-User so backend can authenticate without Entra.
+// Set VITE_DEV_USER in .env (e.g. {"email":"dev@local","roles":["Admin"]}) or use default.
+const devUser =
+  import.meta.env.VITE_DEV_USER ??
+  JSON.stringify({ email: 'dev@local', name: 'Dev User', roles: ['Admin'] })
+
 api.interceptors.request.use((config) => {
+  if (import.meta.env.DEV) {
+    config.headers['X-Dev-User'] = devUser
+  }
   if (config.data instanceof FormData) {
     delete config.headers['Content-Type']
   }

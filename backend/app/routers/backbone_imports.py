@@ -6,6 +6,7 @@ from fastapi import APIRouter, Depends, File, UploadFile
 from sqlalchemy.orm import Session
 
 from app.database import get_db
+from app.security.auth import require_admin_or_operator
 from app.services.backbone_import import (
     import_stock_positions,
     import_inbound_orders,
@@ -13,7 +14,7 @@ from app.services.backbone_import import (
 )
 
 logger = logging.getLogger(__name__)
-router = APIRouter()
+router = APIRouter(dependencies=[Depends(require_admin_or_operator)])
 
 
 @router.post("/stock-positions")

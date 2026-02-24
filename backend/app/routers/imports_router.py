@@ -7,6 +7,7 @@ from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile
 from sqlalchemy.orm import Session
 
 from app.database import get_db
+from app.security.auth import require_admin_or_operator
 from app.models import DemandType, InventorySnapshotWeekly, Product, Receipt, DemandActual
 from app.schemas import ImportDryRunResult, ImportRowError
 from app.services.csv_import import (
@@ -21,7 +22,7 @@ from app.services.csv_import import (
 )
 
 logger = logging.getLogger(__name__)
-router = APIRouter()
+router = APIRouter(dependencies=[Depends(require_admin_or_operator)])
 
 
 def _apply_inventory(rows: list[dict[str, Any]], db: Session) -> None:

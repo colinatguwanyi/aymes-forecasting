@@ -4,6 +4,10 @@
       <h1 class="top-bar-title">{{ title }}</h1>
       <div class="top-bar-actions">
         <slot name="actions" />
+        <span v-if="auth.authenticated" class="user-badge" :title="auth.roles.join(', ')">
+          {{ auth.user?.display_name || auth.user?.email || 'User' }}
+          <span v-if="auth.roles.length" class="roles-hint">({{ auth.roles.join(', ') }})</span>
+        </span>
         <router-link to="/" class="logo-link" aria-label="Home">
           <img src="@/assets/aymes-logo.svg" alt="AYMES" class="logo-img" />
         </router-link>
@@ -16,9 +20,11 @@
 import { computed } from 'vue'
 import { useRoute } from 'vue-router'
 import { useLayoutStore } from '@/stores/layout'
+import { useAuthStore } from '@/stores/auth'
 
 const route = useRoute()
 const layout = useLayoutStore()
+const auth = useAuthStore()
 
 const title = computed(() => layout.pageTitle || (route.meta?.title as string) || route.name || 'Weekly Supply Planning')
 </script>
@@ -64,5 +70,13 @@ const title = computed(() => layout.pageTitle || (route.meta?.title as string) |
 .logo-img {
   height: 1.75rem;
   width: auto;
+}
+.user-badge {
+  font-size: 0.8125rem;
+  color: rgb(71 85 105);
+}
+.roles-hint {
+  font-size: 0.75rem;
+  color: rgb(100 116 139);
 }
 </style>

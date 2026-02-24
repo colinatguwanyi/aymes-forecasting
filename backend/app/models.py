@@ -766,6 +766,33 @@ class ForecastRunMetrics(Base):
     created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
 
 
+# --- RBAC ---
+class Role(Base):
+    __tablename__ = "roles"
+    id = Column(Integer, primary_key=True, index=True)
+    name = Column(String(64), unique=True, nullable=False, index=True)
+    users = relationship("User", secondary="user_roles", back_populates="roles")
+
+
+class User(Base):
+    __tablename__ = "users"
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    entra_oid = Column(String(256), unique=True, nullable=True, index=True)
+    email = Column(String(256), nullable=False, index=True)
+    display_name = Column(String(256), nullable=True)
+    is_active = Column(Boolean, nullable=False, server_default="true")
+    created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    last_login_at = Column(DateTime(timezone=True), nullable=True)
+    roles = relationship("Role", secondary="user_roles", back_populates="users")
+
+
+class UserRole(Base):
+    __tablename__ = "user_roles"
+    __table_args__ = (UniqueConstraint("user_id", "role_id", name="uq_user_roles_user_role"),)
+    user_id = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), primary_key=True)
+    role_id = Column(Integer, ForeignKey("roles.id", ondelete="CASCADE"), primary_key=True)
+
+
 # Back-populate relationships on Product, Warehouse, Supplier
 Product.supplier_products = relationship("SupplierProduct", back_populates="product")
 Product.warehouse_products = relationship("WarehouseProduct", back_populates="product")

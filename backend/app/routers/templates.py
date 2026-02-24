@@ -4,11 +4,13 @@ import csv
 import logging
 from io import StringIO
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Depends
 from fastapi.responses import StreamingResponse
 
+from app.security.auth import require_any_auth
+
 logger = logging.getLogger(__name__)
-router = APIRouter()
+router = APIRouter(dependencies=[Depends(require_any_auth)])
 
 
 def _csv_response(headers: list[str], rows: list[list[str]], filename: str) -> StreamingResponse:

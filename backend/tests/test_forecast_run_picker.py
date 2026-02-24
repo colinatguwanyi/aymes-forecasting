@@ -7,13 +7,9 @@ from app.database import SessionLocal
 from app.models import PlanRun
 
 
-def test_list_forecast_runs_orders_desc_and_counts() -> None:
+def test_list_forecast_runs_orders_desc_and_counts(client, admin_headers) -> None:
     """GET /api/forecast/runs returns list ordered by train_end_week_start desc; each item has count_rows."""
-    from fastapi.testclient import TestClient
-    from app.main import app
-
-    tc = TestClient(app)
-    r = tc.get("/api/forecast/runs", params={"warehouse_code": "AAH"})
+    r = client.get("/api/forecast/runs", params={"warehouse_code": "AAH"}, headers=admin_headers)
     assert r.status_code == 200
     data = r.json()
     assert isinstance(data, list)
@@ -27,11 +23,8 @@ def test_list_forecast_runs_orders_desc_and_counts() -> None:
             assert cur >= nxt, f"Expected desc order: {cur} >= {nxt}"
 
 
-def test_reset_forecast_run_clears_selected_only_by_default() -> None:
+def test_reset_forecast_run_clears_selected_only_by_default(client, admin_headers) -> None:
     """POST reset-forecast-run (default reset_all=false) clears selected_train_end_week_start only."""
-    from fastapi.testclient import TestClient
-    from app.main import app
-
     db = SessionLocal()
     plan_run_id = None
     try:
@@ -51,8 +44,7 @@ def test_reset_forecast_run_clears_selected_only_by_default() -> None:
         db.refresh(run)
         plan_run_id = run.id
 
-        tc = TestClient(app)
-        r = tc.post(f"/api/plan/runs/{plan_run_id}/reset-forecast-run")
+        r = client.post(f"/api/plan/runs/{plan_run_id}/reset-forecast-run", headers=admin_headers)
         assert r.status_code == 200
         out = r.json()
         assert out.get("selected_train_end_week_start") is None
@@ -64,11 +56,8 @@ def test_reset_forecast_run_clears_selected_only_by_default() -> None:
         db.close()
 
 
-def test_reset_forecast_run_reset_all_clears_selected_and_baseline_override() -> None:
+def test_reset_forecast_run_reset_all_clears_selected_and_baseline_override(client, admin_headers) -> None:
     """POST reset-forecast-run?reset_all=true clears both selected and baseline_train_end_week_start."""
-    from fastapi.testclient import TestClient
-    from app.main import app
-
     db = SessionLocal()
     plan_run_id = None
     try:
@@ -88,8 +77,7 @@ def test_reset_forecast_run_reset_all_clears_selected_and_baseline_override() ->
         db.refresh(run)
         plan_run_id = run.id
 
-        tc = TestClient(app)
-        r = tc.post(f"/api/plan/runs/{plan_run_id}/reset-forecast-run", params={"reset_all": "true"})
+        r = client.post(f"/api/plan/runs/{plan_run_id}/reset-forecast-run", params={"reset_all": "true"}, headers=admin_headers)
         assert r.status_code == 200
         out = r.json()
         assert out.get("selected_train_end_week_start") is None
@@ -101,11 +89,8 @@ def test_reset_forecast_run_reset_all_clears_selected_and_baseline_override() ->
         db.close()
 
 
-def test_override_run_not_found_returns_409_clear_message() -> None:
+def test_override_run_not_found_returns_409_clear_message(client, admin_headers) -> None:
     """PATCH with baseline_train_end_week_start that does not exist in published runs returns 409 with clear message."""
-    from fastapi.testclient import TestClient
-    from app.main import app
-
     db = SessionLocal()
     plan_run_id = None
     try:
@@ -123,11 +108,11 @@ def test_override_run_not_found_returns_409_clear_message() -> None:
         db.refresh(run)
         plan_run_id = run.id
 
-        tc = TestClient(app)
         # Use a date that will not exist in published_baseline_forecasts_weekly (e.g. far past)
-        r = tc.patch(
+        r = client.patch(
             f"/api/plan/runs/{plan_run_id}",
             params={"baseline_train_end_week_start": "1999-01-04"},
+            headers=admin_headers,
         )
         assert r.status_code == 409
         data = r.json()

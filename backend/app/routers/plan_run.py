@@ -9,6 +9,7 @@ from fastapi import APIRouter, Body, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
 
 from app.database import get_db
+from app.security.auth import require_admin_or_planner, require_any_auth
 from app.models import (
     DemandOverrideWeekly,
     PlanRun,
@@ -50,7 +51,7 @@ def _human_breakdown(breakdown: dict[str, Any] | None, source: str) -> str | Non
     return ", ".join(parts) if parts else None
 
 
-@router.post("/run", response_model=PlanRunSchema)
+@router.post("/run", response_model=PlanRunSchema, dependencies=[Depends(require_admin_or_planner)])
 def run_planning(
     scenario_name: str = Query(..., description="Scenario name for this run"),
     run_at: str | None = Query(None, description="Date to use as run date (YYYY-MM-DD)"),
@@ -77,12 +78,12 @@ def run_planning(
     return plan_run
 
 
-@router.get("/runs", response_model=list[PlanRunSchema])
+@router.get("/runs", response_model=list[PlanRunSchema], dependencies=[Depends(require_any_auth)])
 def list_plan_runs(db: Session = Depends(get_db)) -> list[PlanRun]:
     return db.query(PlanRun).order_by(PlanRun.created_at.desc()).all()
 
 
-@router.get("/runs/{plan_run_id}", response_model=PlanRunSchema)
+@router.get("/runs/{plan_run_id}", response_model=PlanRunSchema, dependencies=[Depends(require_any_auth)])
 def get_plan_run(plan_run_id: int, db: Session = Depends(get_db)) -> PlanRun:
     run = db.query(PlanRun).filter(PlanRun.id == plan_run_id).first()
     if not run:
@@ -90,7 +91,7 @@ def get_plan_run(plan_run_id: int, db: Session = Depends(get_db)) -> PlanRun:
     return run
 
 
-@router.patch("/runs/{plan_run_id}", response_model=PlanRunSchema)
+@router.patch("/runs/{plan_run_id}", response_model=PlanRunSchema, dependencies=[Depends(require_admin_or_planner)])
 def update_plan_run(
     plan_run_id: int,
     demand_source: str | None = Query(None),
@@ -123,7 +124,7 @@ def update_plan_run(
     return run
 
 
-@router.post("/runs/{plan_run_id}/reset-forecast-run", response_model=PlanRunSchema)
+@router.post("/runs/{plan_run_id}/reset-forecast-run", response_model=PlanRunSchema, dependencies=[Depends(require_admin_or_planner)])
 def reset_forecast_run(
     plan_run_id: int,
     reset_all: bool = Query(False, description="If true, also clear baseline_train_end_week_start (user override)"),
@@ -156,7 +157,7 @@ def reset_forecast_run(
     return run
 
 
-@router.get("/runs/{plan_run_id}/projected-inventory", response_model=list[ProjectedInventorySchema])
+@router.get("/runs/{plan_run_id}/projected-inventory", response_model=list[ProjectedInventorySchema], dependencies=[Depends(require_any_auth)])
 def get_projected_inventory(
     plan_run_id: int,
     sku: str | None = None,
@@ -171,7 +172,7 @@ def get_projected_inventory(
     return q.order_by(ProjectedInventory.week_start, ProjectedInventory.sku).all()
 
 
-@router.get("/runs/{plan_run_id}/planned-orders", response_model=list[PlannedOrderSchema])
+@router.get("/runs/{plan_run_id}/planned-orders", response_model=list[PlannedOrderSchema], dependencies=[Depends(require_any_auth)])
 def get_planned_orders(
     plan_run_id: int,
     sku: str | None = None,
@@ -186,7 +187,7 @@ def get_planned_orders(
     return q.order_by(PlannedOrder.week_start, PlannedOrder.sku).all()
 
 
-@router.get("/runs/{plan_run_id}/exceptions", response_model=list[PlanningException])
+@router.get("/runs/{plan_run_id}/exceptions", response_model=list[PlanningException], dependencies=[Depends(require_any_auth)])
 def get_plan_exceptions(
     plan_run_id: int,
     within_weeks: int = Query(12, ge=1, le=52, description="Only weeks within this many weeks from today"),
@@ -252,7 +253,7 @@ def get_plan_exceptions(
     return out
 
 
-@router.get("/runs/{plan_run_id}/demand-inputs")
+@router.get("/runs/{plan_run_id}/demand-inputs", dependencies=[Depends(require_any_auth)])
 def get_demand_inputs(
     plan_run_id: int,
     from_week: str | None = Query(None),
@@ -284,7 +285,7 @@ def get_demand_inputs(
     ]
 
 
-@router.post("/runs/{plan_run_id}/demand-overrides")
+@router.post("/runs/{plan_run_id}/demand-overrides", dependencies=[Depends(require_admin_or_planner)])
 def upsert_demand_overrides(
     plan_run_id: int,
     body: list[dict[str, Any]] = Body(..., description="List of {week_start, sku, warehouse_code, override_qty, reason_code, notes?, created_by?}"),
@@ -334,7 +335,7 @@ def upsert_demand_overrides(
     return {"updated": len(body)}
 
 
-@router.delete("/runs/{plan_run_id}/demand-overrides")
+@router.delete("/runs/{plan_run_id}/demand-overrides", dependencies=[Depends(require_admin_or_planner)])
 def delete_demand_overrides(
     plan_run_id: int,
     body: list[dict[str, Any]] = Body(..., description="List of {week_start, sku, warehouse_code}"),
@@ -363,7 +364,7 @@ def delete_demand_overrides(
     return {"deleted": deleted}
 
 
-@router.get("/runs/{plan_run_id}/order-overrides")
+@router.get("/runs/{plan_run_id}/order-overrides", dependencies=[Depends(require_any_auth)])
 def get_order_overrides(
     plan_run_id: int,
     db: Session = Depends(get_db),
@@ -393,7 +394,7 @@ def get_order_overrides(
     return out_list
 
 
-@router.post("/runs/{plan_run_id}/order-overrides")
+@router.post("/runs/{plan_run_id}/order-overrides", dependencies=[Depends(require_admin_or_planner)])
 def upsert_order_overrides(
     plan_run_id: int,
     body: list[dict[str, Any]] = Body(..., description="List of {week_start, sku, warehouse_code, override_order_qty, reason_code, notes?, created_by?}"),
@@ -443,7 +444,7 @@ def upsert_order_overrides(
     return {"updated": len(body)}
 
 
-@router.delete("/runs/{plan_run_id}/order-overrides")
+@router.delete("/runs/{plan_run_id}/order-overrides", dependencies=[Depends(require_admin_or_planner)])
 def delete_order_overrides(
     plan_run_id: int,
     body: list[dict[str, Any]] = Body(..., description="List of {week_start, sku, warehouse_code}"),
@@ -472,7 +473,7 @@ def delete_order_overrides(
     return {"deleted": deleted}
 
 
-@router.post("/runs/{plan_run_id}/freeze")
+@router.post("/runs/{plan_run_id}/freeze", dependencies=[Depends(require_admin_or_planner)])
 def freeze_plan_run(
     plan_run_id: int,
     body: dict[str, Any] = Body(..., description="{ scope: 'demand'|'orders'|'both', freeze_weeks?: int, notes?: str, frozen_by?: str }"),
@@ -512,7 +513,7 @@ def freeze_plan_run(
     return {"scope": scope, "freeze_weeks": freeze_weeks}
 
 
-@router.post("/runs/{plan_run_id}/unfreeze")
+@router.post("/runs/{plan_run_id}/unfreeze", dependencies=[Depends(require_admin_or_planner)])
 def unfreeze_plan_run(
     plan_run_id: int,
     body: dict[str, Any] = Body(..., description="{ scope: 'demand'|'orders'|'both', from_week?: str, to_week?: str }"),
@@ -542,7 +543,7 @@ def unfreeze_plan_run(
     return {"scope": scope}
 
 
-@router.post("/runs/{plan_run_id}/recalculate-demand")
+@router.post("/runs/{plan_run_id}/recalculate-demand", dependencies=[Depends(require_admin_or_planner)])
 def recalculate_demand_inputs(
     plan_run_id: int,
     db: Session = Depends(get_db),
@@ -562,7 +563,7 @@ def recalculate_demand_inputs(
     return {"plan_run_id": plan_run_id, "status": "ok"}
 
 
-@router.get("/runs/{plan_run_id}/explain")
+@router.get("/runs/{plan_run_id}/explain", dependencies=[Depends(require_any_auth)])
 def explain_plan_run_cell(
     plan_run_id: int,
     sku: str = Query(...),
@@ -683,7 +684,7 @@ def explain_plan_run_cell(
     }
 
 
-@router.get("/runs/{plan_run_id}/explanation", response_model=SkuWeekExplanation)
+@router.get("/runs/{plan_run_id}/explanation", response_model=SkuWeekExplanation, dependencies=[Depends(require_any_auth)])
 def get_sku_week_explanation(
     plan_run_id: int,
     sku: str = Query(..., description="SKU"),
