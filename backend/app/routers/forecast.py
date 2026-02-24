@@ -1,6 +1,6 @@
 """Forecast API: run baseline forecast, query baseline forecasts, forecast metrics. No planning integration."""
 from __future__ import annotations
-from datetime import date
+from datetime import date, timedelta
 from decimal import Decimal
 from typing import Any, cast
 
@@ -8,8 +8,10 @@ from fastapi import APIRouter, Depends, Query
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
+from sqlalchemy import func
+
 from app.database import get_db
-from app.models import BaselineForecastWeekly, ForecastRunMetrics
+from app.models import BaselineForecastWeekly, ForecastRunMetrics, PublishedBaselineForecastWeekly
 from app.services.forecasting.baseline import run_baseline_forecast
 from app.services.forecast_metrics import compute_metrics
 from app.services.time_bucketing import week_start_for_date
@@ -41,6 +43,56 @@ def create_forecast_run(
         "rows_written": rows_written,
         "trained_at": trained_at.isoformat(),
     }
+
+
+@router.get("/runs")
+def list_forecast_runs(
+    db: Session = Depends(get_db),
+) -> list[dict[str, Any]]:
+    """List published forecast runs: train_end_week_start, models, and row counts (from published_baseline_forecasts_weekly)."""
+    subq = (
+        db.query(
+            PublishedBaselineForecastWeekly.train_end_week_start,
+            PublishedBaselineForecastWeekly.selected_model_name,
+            PublishedBaselineForecastWeekly.selected_model_version,
+            func.count(PublishedBaselineForecastWeekly.id).label("count"),
+        )
+        .group_by(
+            PublishedBaselineForecastWeekly.train_end_week_start,
+            PublishedBaselineForecastWeekly.selected_model_name,
+            PublishedBaselineForecastWeekly.selected_model_version,
+        )
+    ).subquery()
+    runs = (
+        db.query(
+            subq.c.train_end_week_start,
+            func.sum(subq.c.count).label("total_rows"),
+        )
+        .group_by(subq.c.train_end_week_start)
+        .order_by(subq.c.train_end_week_start.desc())
+        .all()
+    )
+    out: list[dict[str, Any]] = []
+    for train_end, total in runs:
+        models_q = (
+            db.query(
+                PublishedBaselineForecastWeekly.selected_model_name,
+                PublishedBaselineForecastWeekly.selected_model_version,
+                func.count(PublishedBaselineForecastWeekly.id).label("cnt"),
+            )
+            .filter(PublishedBaselineForecastWeekly.train_end_week_start == train_end)
+            .group_by(
+                PublishedBaselineForecastWeekly.selected_model_name,
+                PublishedBaselineForecastWeekly.selected_model_version,
+            )
+            .all()
+        )
+        out.append({
+            "train_end_week_start": train_end.isoformat(),
+            "total_rows": total,
+            "models": [{"model_name": m, "model_version": v, "count": c} for m, v, c in models_q],
+        })
+    return out
 
 
 @router.get("/baseline")
@@ -81,6 +133,44 @@ def get_baseline_forecasts(
             "trained_at": _trained.isoformat() if _trained is not None else None,
             "train_window_start": r.train_window_start.isoformat(),
             "train_window_end": r.train_window_end.isoformat(),
+        })
+    return out
+
+
+@router.get("/published-baseline")
+def get_published_baseline(
+    train_end_week_start: date | None = Query(None, description="Which run (inference date)"),
+    sku: str | None = Query(None),
+    weeks: int = Query(52, ge=1, le=104),
+    db: Session = Depends(get_db),
+) -> list[dict[str, Any]]:
+    """Return published baseline series used by planning when demand_source=baseline. Filter by train_end_week_start, sku; limit to N weeks from min week."""
+    q = db.query(PublishedBaselineForecastWeekly).order_by(
+        PublishedBaselineForecastWeekly.sku,
+        PublishedBaselineForecastWeekly.warehouse_code,
+        PublishedBaselineForecastWeekly.week_start,
+    )
+    if train_end_week_start is not None:
+        q = q.filter(PublishedBaselineForecastWeekly.train_end_week_start == train_end_week_start)
+    if sku is not None:
+        q = q.filter(PublishedBaselineForecastWeekly.sku == sku)
+    rows = q.all()
+    if not rows:
+        return []
+    min_week = min(cast(date, r.week_start) for r in rows)
+    max_week = min_week + timedelta(days=7 * (weeks - 1))
+    out: list[dict[str, Any]] = []
+    for r in rows:
+        if r.week_start > max_week:
+            continue
+        out.append({
+            "sku": r.sku,
+            "warehouse_code": r.warehouse_code,
+            "week_start": r.week_start.isoformat(),
+            "forecast_qty": float(cast(Decimal, r.forecast_qty)),
+            "train_end_week_start": r.train_end_week_start.isoformat(),
+            "selected_model_name": r.selected_model_name,
+            "selected_model_version": r.selected_model_version,
         })
     return out
 

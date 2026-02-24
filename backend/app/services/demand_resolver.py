@@ -21,6 +21,7 @@ from app.models import (
     PlanRun,
     PlanRunDemandInputWeekly,
     PlanningPolicy,
+    PublishedBaselineForecastWeekly,
 )
 from app.services.time_bucketing import week_start_for_date
 
@@ -171,6 +172,49 @@ def _baseline_by_week_with_ref(
     return out, refs
 
 
+def _published_baseline_by_week(
+    db: Session,
+    from_week: date,
+    to_week: date,
+    train_end_week_start: date | None,
+) -> tuple[dict[tuple[date, str, str], Decimal], dict[tuple[date, str, str], dict[str, Any]]]:
+    """
+    Get published baseline forecast qty per (Monday_week, sku, warehouse).
+    If train_end_week_start is None, use latest (max) train_end_week_start in table.
+    """
+    if train_end_week_start is None:
+        from sqlalchemy import func
+        row = db.query(func.max(PublishedBaselineForecastWeekly.train_end_week_start)).first()
+        train_end_week_start = row[0] if row and row[0] is not None else None
+    if train_end_week_start is None:
+        return {}, {}
+    out: dict[tuple[date, str, str], Decimal] = {}
+    refs: dict[tuple[date, str, str], dict[str, Any]] = {}
+    w = from_week
+    while w <= to_week:
+        week_tue = week_start_for_date(w)
+        rows = (
+            db.query(PublishedBaselineForecastWeekly)
+            .filter(
+                PublishedBaselineForecastWeekly.week_start == week_tue,
+                PublishedBaselineForecastWeekly.train_end_week_start == train_end_week_start,
+            )
+            .all()
+        )
+        for r in rows:
+            s = cast(str, r.sku)
+            wh = cast(str, r.warehouse_code)
+            q = cast(Decimal, r.forecast_qty)
+            key = (w, s, wh)
+            out[key] = q
+            refs[key] = {
+                "model_name": getattr(r, "selected_model_name", None),
+                "model_version": getattr(r, "selected_model_version", None),
+            }
+        w = _next_monday(w)
+    return out, refs
+
+
 def _overrides_by_key(
     db: Session, plan_run_id: int
 ) -> dict[tuple[date, str, str], tuple[Decimal, str]]:
@@ -232,7 +276,8 @@ def resolve_demand_for_run(
         for (w, sku, wh) in base:
             base_includes_samples[(w, sku, wh)] = policy_include_samples.get((sku, wh), True)
     elif demand_source == "baseline":
-        base, base_refs = _baseline_by_week_with_ref(db, from_week, to_week)
+        train_end = getattr(run, "baseline_train_end_week_start", None)
+        base, base_refs = _published_baseline_by_week(db, from_week, to_week, train_end)
         for k, v in base.items():
             ref = base_refs.get(k, {})
             base_breakdowns[k] = {
@@ -246,7 +291,8 @@ def resolve_demand_for_run(
             base_includes_samples[k] = True
     elif demand_source == "blended":
         actuals, actuals_breakdown = _actuals_by_week_with_breakdown(db, from_week, to_week, policy_include_samples)
-        baseline, baseline_refs = _baseline_by_week_with_ref(db, from_week, to_week)
+        train_end = getattr(run, "baseline_train_end_week_start", None)
+        baseline, baseline_refs = _published_baseline_by_week(db, from_week, to_week, train_end)
         for k in set(actuals) | set(baseline):
             w, s, wh = k
             if w <= run_week:

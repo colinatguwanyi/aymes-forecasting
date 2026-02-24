@@ -54,6 +54,7 @@ class IngestionEntity(str, enum.Enum):
     INVENTORY = "inventory"
     SKU_MAP = "sku_map"
     PRODUCT_MASTER = "product_master"
+    FORECAST_OUTPUT = "forecast_output"
 
 
 class IngestionStatus(str, enum.Enum):
@@ -181,6 +182,7 @@ class PlanRun(Base):
     plan_start_week_start = Column(Date, nullable=False)  # W-TUE anchor for freeze window
     created_by = Column(String(256), nullable=True)
     notes = Column(Text, nullable=True)
+    baseline_train_end_week_start = Column(Date, nullable=True)
 
 
 class PlanRunDemandInputWeekly(Base):
@@ -511,6 +513,9 @@ class IngestionRun(Base):
     created_by = Column(String(256), nullable=True)
     rejections = relationship("IngestionRejection", back_populates="ingestion_run", cascade="all, delete-orphan")
     demand_stage_rows = relationship("DemandStageWeekly", back_populates="ingestion_run", cascade="all, delete-orphan")
+    forecast_output_stage_rows = relationship(
+        "ForecastRunOutputStage", back_populates="ingestion_run", cascade="all, delete-orphan"
+    )
 
 
 class IngestionRejection(Base):
@@ -575,8 +580,8 @@ class BaselineForecastWeekly(Base):
     __tablename__ = "baseline_forecasts_weekly"
     __table_args__ = (
         UniqueConstraint(
-            "sku", "warehouse_code", "week_start", "model_name", "model_version",
-            name="uq_baseline_forecasts_sku_wh_week_model",
+            "sku", "warehouse_code", "week_start", "model_name", "model_version", "train_end_week_start",
+            name="uq_baseline_forecasts_sku_wh_week_model_train",
         ),
     )
     id = Column(Integer, primary_key=True, index=True)
@@ -590,7 +595,50 @@ class BaselineForecastWeekly(Base):
     trained_at = Column(DateTime(timezone=True), nullable=False)
     train_window_start = Column(Date, nullable=False)
     train_window_end = Column(Date, nullable=False)
+    train_end_week_start = Column(Date, nullable=False, index=True)  # inference_date / run date
     metrics_json = Column(JSONB, nullable=True)
+
+
+class ForecastRunOutputStage(Base):
+    """Staging rows for forecast output ingestion (Excel/CSV)."""
+    __tablename__ = "forecast_run_output_stage"
+    id = Column(Integer, primary_key=True, index=True)
+    ingestion_run_id = Column(UUID(as_uuid=True), ForeignKey("ingestion_runs.id", ondelete="CASCADE"), nullable=False)
+    aah_product_code = Column(Text, nullable=False)
+    product_name = Column(Text, nullable=True)
+    inference_date = Column(Date, nullable=False)
+    forecast_week = Column(Date, nullable=False)
+    actual = Column(Numeric(18, 4), nullable=True)
+    interpolated_values = Column(Numeric(18, 4), nullable=True)
+    forecast = Column(Numeric(18, 4), nullable=True)
+    model = Column(Text, nullable=False)
+    model_details = Column(Text, nullable=True)
+    mae = Column(Numeric(18, 4), nullable=True)
+    mape = Column(Numeric(18, 4), nullable=True)
+    is_best_model = Column(Boolean, nullable=True)
+    outlier = Column(Integer, nullable=True)
+    predicted_best_model_bool = Column(Boolean, nullable=True)
+    raw_json = Column(JSONB, nullable=True)
+    ingestion_run = relationship("IngestionRun", back_populates="forecast_output_stage_rows")
+
+
+class PublishedBaselineForecastWeekly(Base):
+    """Single selected baseline series per (sku, warehouse, week, train_end_week_start); used when demand_source=baseline."""
+    __tablename__ = "published_baseline_forecasts_weekly"
+    __table_args__ = (
+        UniqueConstraint(
+            "sku", "warehouse_code", "week_start", "train_end_week_start",
+            name="uq_published_baseline_sku_wh_week_train",
+        ),
+    )
+    id = Column(Integer, primary_key=True, index=True)
+    sku = Column(String(64), nullable=False, index=True)
+    warehouse_code = Column(String(32), nullable=False, index=True)
+    week_start = Column(Date, nullable=False, index=True)
+    forecast_qty = Column(Numeric(18, 4), nullable=False)
+    train_end_week_start = Column(Date, nullable=False, index=True)
+    selected_model_name = Column(String(64), nullable=False)
+    selected_model_version = Column(String(256), nullable=False)
 
 
 class ForecastRunMetrics(Base):

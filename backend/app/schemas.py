@@ -224,6 +224,7 @@ class PlanRunBase(BaseModel):
     demand_source: str = "actuals"
     freeze_weeks: int = 4
     plan_start_week_start: Optional[date] = None
+    baseline_train_end_week_start: Optional[date] = None
     created_by: Optional[str] = None
     notes: Optional[str] = None
 

@@ -127,6 +127,7 @@ def run_baseline_forecast(
                     BaselineForecastWeekly.week_start == target_week,
                     BaselineForecastWeekly.model_name == MODEL_NAME,
                     BaselineForecastWeekly.model_version == MODEL_VERSION,
+                    BaselineForecastWeekly.train_end_week_start == train_end_week_start,
                 )
                 .first()
             )
@@ -149,6 +150,7 @@ def run_baseline_forecast(
                         trained_at=trained_at,
                         train_window_start=train_window_start,
                         train_window_end=train_end_week_start,
+                        train_end_week_start=train_end_week_start,
                         metrics_json=None,
                     )
                 )

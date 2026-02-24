@@ -47,7 +47,7 @@
           </div>
           <div>
             <label class="form-label">Within weeks</label>
-            <select v-model="withinWeeks" class="select w-full max-w-[6rem]">
+            <select v-model="withinWeeks" class="select w-full max-w-24">
               <option :value="4">4</option>
               <option :value="8">8</option>
               <option :value="12">12</option>

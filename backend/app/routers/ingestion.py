@@ -20,7 +20,10 @@ from app.models import (
     IngestionSourceType,
     IngestionStatus,
 )
-from app.services.csv_import import read_csv
+from app.services.csv_import import read_csv, read_csv_or_xlsx
+from app.services.import_forecast_output import import_from_stage as import_forecast_output_from_stage
+from app.services.import_forecast_output import validate_and_stage_row as validate_and_stage_forecast_output_row
+from app.services.import_forecast_output import _aah_to_sku_map
 from app.services.import_product_master import import_from_stage as import_product_master_from_stage, validate_and_stage_row as validate_and_stage_product_master_row
 from app.services.time_bucketing import week_start_for_date
 from app.services.weekly_series_builder import build_weekly_series_from_stage
@@ -117,19 +120,51 @@ def _validate_and_stage_product_master(
     return staged, len(rows) - staged
 
 
+def _validate_and_stage_forecast_output(
+    db: Session,
+    run_id: UUID,
+    rows: list[dict[str, Any]],
+) -> tuple[int, int]:
+    """Validate each row; stage valid to forecast_run_output_stage, reject to ingestion_rejections."""
+    aah_to_sku = _aah_to_sku_map(db)
+    staged = 0
+    for i, row in enumerate(rows, start=2):
+        ok, _ = validate_and_stage_forecast_output_row(db, run_id, row, i, aah_to_sku)
+        if ok:
+            staged += 1
+    return staged, len(rows) - staged
+
+
 def _normalize_entity(value: str) -> IngestionEntity | None:
-    """Accept 'demand'/'product_master' (case-insensitive, underscores or spaces)."""
+    """Accept 'demand'/'product_master'/'forecast_output' (case-insensitive, underscores or spaces)."""
     v = (value or "").strip().lower().replace(" ", "_")
     if v in ("demand",):
         return IngestionEntity.DEMAND
     if v in ("product_master", "productmaster"):
         return IngestionEntity.PRODUCT_MASTER
+    if v in ("forecast_output", "forecastoutput"):
+        return IngestionEntity.FORECAST_OUTPUT
     return None
+
+
+@router.post("/forecast-output/upload")
+async def upload_forecast_output(
+    file: UploadFile = File(..., description="XLSX or CSV file (forecast output format)"),
+    created_by: str | None = Query(None),
+    db: Session = Depends(get_db),
+) -> dict[str, Any]:
+    """Accept XLSX/CSV forecast output; parse and stage; create ingestion run. Call execute on run_id to build baseline and publish."""
+    return await upload(
+        entity="forecast_output",
+        file=file,
+        created_by=created_by,
+        db=db,
+    )
 
 
 @router.post("/upload")
 async def upload(
-    entity: str = Query(..., description="Entity: demand or product_master"),
+    entity: str = Query(..., description="Entity: demand, product_master, or forecast_output"),
     file: UploadFile = File(..., description="CSV file"),
     created_by: str | None = Query(None),
     db: Session = Depends(get_db),
@@ -141,8 +176,8 @@ async def upload(
     """
     logger.info("ingestion/upload: entity=%r filename=%r", entity, file.filename)
     entity_enum = _normalize_entity(entity)
-    if entity_enum not in (IngestionEntity.DEMAND, IngestionEntity.PRODUCT_MASTER):
-        detail = f"Entity must be demand or product_master (got {entity!r})"
+    if entity_enum not in (IngestionEntity.DEMAND, IngestionEntity.PRODUCT_MASTER, IngestionEntity.FORECAST_OUTPUT):
+        detail = f"Entity must be demand, product_master, or forecast_output (got {entity!r})"
         logger.warning("ingestion/upload 400: %s", detail)
         raise HTTPException(status_code=400, detail=detail)
     content = await file.read()
@@ -152,7 +187,10 @@ async def upload(
         raise HTTPException(status_code=400, detail=detail)
     logger.info("ingestion/upload: read %d bytes", len(content))
     try:
-        rows = read_csv(content)
+        if entity_enum == IngestionEntity.FORECAST_OUTPUT:
+            rows = read_csv_or_xlsx(content, file.filename)
+        else:
+            rows = read_csv(content)
     except Exception as e:
         detail = f"Invalid CSV: {e}"
         logger.warning("ingestion/upload 400: %s", detail, exc_info=True)
@@ -196,8 +234,10 @@ async def upload(
         run_id = cast(UUID, run.id)
         if entity_enum == IngestionEntity.DEMAND:
             staged, rejected = _validate_and_stage_demand(db, run_id, rows)
-        else:
+        elif entity_enum == IngestionEntity.PRODUCT_MASTER:
             staged, rejected = _validate_and_stage_product_master(db, run_id, rows)
+        else:
+            staged, rejected = _validate_and_stage_forecast_output(db, run_id, rows)
         run.inserted_count = 0
         run.updated_count = 0
         run.rejected_count = rejected
@@ -232,6 +272,15 @@ def execute_run(
             inserted, updated = import_product_master_from_stage(db, run_id)
             run.inserted_count = inserted
             run.updated_count = updated
+            run.status = IngestionStatus.SUCCESS
+            run.finished_at = datetime.now(timezone.utc)
+        elif entity_val == IngestionEntity.FORECAST_OUTPUT:
+            run.status = IngestionStatus.RUNNING
+            run.finished_at = None
+            db.flush()
+            baseline_count, published_count = import_forecast_output_from_stage(db, run_id)
+            run.inserted_count = baseline_count
+            run.updated_count = published_count
             run.status = IngestionStatus.SUCCESS
             run.finished_at = datetime.now(timezone.utc)
         else:

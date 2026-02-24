@@ -90,6 +90,7 @@ def get_plan_run(plan_run_id: int, db: Session = Depends(get_db)) -> PlanRun:
 def update_plan_run(
     plan_run_id: int,
     demand_source: str | None = Query(None),
+    baseline_train_end_week_start: date | None = Query(None, description="When demand_source=baseline, which published run to use (latest if null)"),
     freeze_weeks: int | None = Query(None, ge=0, le=52),
     notes: str | None = Query(None),
     db: Session = Depends(get_db),
@@ -99,6 +100,8 @@ def update_plan_run(
         raise HTTPException(status_code=404, detail="Plan run not found")
     if demand_source is not None:
         run.demand_source = demand_source
+    if baseline_train_end_week_start is not None:
+        run.baseline_train_end_week_start = baseline_train_end_week_start
     if freeze_weeks is not None:
         run.freeze_weeks = freeze_weeks
     if notes is not None:

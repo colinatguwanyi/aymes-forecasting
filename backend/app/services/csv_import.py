@@ -201,3 +201,20 @@ def read_csv(file_content: bytes) -> list[dict[str, Any]]:
         raise ValueError("Could not decode file as UTF-8, CP1252, or Latin-1")
     reader = csv.DictReader(io.StringIO(text))
     return list(reader)
+
+
+def read_csv_or_xlsx(file_content: bytes, filename: str | None = None) -> list[dict[str, Any]]:
+    """Parse CSV or XLSX into list of dicts. Keys are stripped. For XLSX uses pandas (openpyxl)."""
+    fn = (filename or "").lower()
+    if fn.endswith(".xlsx") or fn.endswith(".xls"):
+        import pandas as pd  # noqa: PLC0415
+        df = pd.read_excel(io.BytesIO(file_content), engine="openpyxl" if fn.endswith(".xlsx") else None)
+        # Normalize: strip column names, replace NaN with None
+        df = df.rename(columns=lambda c: (c.strip() if isinstance(c, str) else str(c)))
+        rows = df.to_dict("records")
+        out: list[dict[str, Any]] = []
+        for r in rows:
+            out.append({k: (None if (isinstance(v, float) and pd.isna(v)) else v) for k, v in r.items()})
+        return out
+    # CSV
+    return read_csv(file_content)
