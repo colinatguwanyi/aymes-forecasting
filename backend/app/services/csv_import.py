@@ -214,7 +214,7 @@ def read_csv_or_xlsx(file_content: bytes, filename: str | None = None) -> list[d
         rows = df.to_dict("records")
         out: list[dict[str, Any]] = []
         for r in rows:
-            out.append({k: (None if (isinstance(v, float) and pd.isna(v)) else v) for k, v in r.items()})
+            out.append({str(k): (None if (isinstance(v, float) and pd.isna(v)) else v) for k, v in r.items()})
         return out
     # CSV
     return read_csv(file_content)

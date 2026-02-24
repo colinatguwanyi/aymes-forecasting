@@ -35,6 +35,8 @@ export interface PlanRun {
   created_at: string
   demand_source?: string
   freeze_weeks?: number
+  baseline_train_end_week_start?: string | null
+  selected_train_end_week_start?: string | null
 }
 
 export interface ProjectedInventory {

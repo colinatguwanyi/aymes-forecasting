@@ -125,6 +125,7 @@
               <tr>
                 <th>Scenario</th>
                 <th>Demand source</th>
+                <th>Forecast run</th>
                 <th>Freeze weeks</th>
                 <th>Run at</th>
                 <th>Created</th>
@@ -139,6 +140,9 @@
               >
                 <td>{{ r.scenario_name }}</td>
                 <td>{{ r.demand_source ?? 'actuals' }}</td>
+                <td class="text-muted">
+                  {{ (r.demand_source === 'baseline' || r.demand_source === 'blended') && r.selected_train_end_week_start ? `Using forecast run: ${r.selected_train_end_week_start}` : '—' }}
+                </td>
                 <td>{{ r.freeze_weeks ?? 4 }}</td>
                 <td>{{ r.run_at }}</td>
                 <td>{{ r.created_at }}</td>

@@ -29,7 +29,7 @@ from app.schemas import (
     SkuWeekExplanationPolicy,
     SkuWeekExplanationProjection,
 )
-from app.services.demand_resolver import resolve_demand_for_run, _frozen_mondays_for_plan
+from app.services.demand_resolver import NoBaselineRunsError, resolve_demand_for_run, _frozen_mondays_for_plan
 from app.services.planning import _monday_before, run_plan
 
 logger = logging.getLogger(__name__)
@@ -61,15 +61,19 @@ def run_planning(
     db: Session = Depends(get_db),
 ) -> PlanRun:
     run_date = date.fromisoformat(run_at) if run_at else date.today()
-    plan_run = run_plan(
-        db,
-        scenario_name=scenario_name,
-        run_at=run_date,
-        demand_source=demand_source,
-        freeze_weeks=freeze_weeks,
-        created_by=created_by,
-        notes=notes,
-    )
+    try:
+        plan_run = run_plan(
+            db,
+            scenario_name=scenario_name,
+            run_at=run_date,
+            demand_source=demand_source,
+            freeze_weeks=freeze_weeks,
+            created_by=created_by,
+            notes=notes,
+        )
+    except NoBaselineRunsError as e:
+        db.rollback()
+        raise HTTPException(status_code=409, detail=str(e))
     return plan_run
 
 
@@ -509,7 +513,10 @@ def recalculate_demand_inputs(
     run_at = cast(date, run.run_at)
     run_week = _monday_before(run_at)
     to_week = run_week + timedelta(days=53 * 7)
-    resolve_demand_for_run(db, plan_run_id, run_week, to_week, recompute_non_frozen_only=True)
+    try:
+        resolve_demand_for_run(db, plan_run_id, run_week, to_week, recompute_non_frozen_only=True)
+    except NoBaselineRunsError as e:
+        raise HTTPException(status_code=409, detail=str(e))
     db.commit()
     return {"plan_run_id": plan_run_id, "status": "ok"}
 

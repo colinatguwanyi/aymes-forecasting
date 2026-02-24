@@ -1,4 +1,5 @@
 """Tests: forecast_metrics WAPE/Bias math, missing actuals excluded, actual=0 excluded from WAPE."""
+# pyright: reportMissingImports=false
 from datetime import date
 from decimal import Decimal
 

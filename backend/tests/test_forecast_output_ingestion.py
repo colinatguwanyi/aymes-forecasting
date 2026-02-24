@@ -1,8 +1,10 @@
 """Tests: forecast output ingestion — unknown AAH rejected, multi-model ingested, selection published, planning uses published baseline.
 Requires PostgreSQL (SQLite does not support UUID columns used by ingestion_runs). Use pytest with postgres URL or run against real DB.
 """
+# pyright: reportMissingImports=false
 from datetime import date
 from decimal import Decimal
+from typing import cast
 from uuid import uuid4
 
 import pytest
@@ -23,7 +25,7 @@ from app.models import (
     PublishedBaselineForecastWeekly,
     Warehouse,
 )
-from app.services.demand_resolver import resolve_demand_for_run
+from app.services.demand_resolver import NoBaselineRunsError, resolve_demand_for_run
 from app.services.import_forecast_output import (
     _aah_to_sku_map,
     _get_cell,
@@ -233,6 +235,7 @@ def test_planning_demand_source_baseline_uses_published(db_session) -> None:
     plan_run_id = run.id
     from_week = date(2025, 1, 13)
     to_week = date(2025, 1, 20)
+    plan_run_id = cast(int, run.id)
     resolve_demand_for_run(db_session, plan_run_id, from_week, to_week, recompute_non_frozen_only=False)
     db_session.commit()
     demand_row = (
@@ -246,3 +249,130 @@ def test_planning_demand_source_baseline_uses_published(db_session) -> None:
     )
     assert demand_row is not None
     assert float(demand_row.demand_qty) == 100.0
+
+
+def test_baseline_selects_max_train_end_when_multiple_runs(db_session) -> None:
+    """When multiple published runs exist, resolver selects MAX(train_end_week_start) and persists to selected_train_end_week_start."""
+    db_session.add(Product(sku="SKU-D", name="D", uom="units", active=True, aah_code="AAH-D"))
+    db_session.add(Warehouse(code="AAH", name="AAH", timezone="Europe/London", active=True))
+    db_session.commit()
+    older = date(2025, 1, 7)
+    newer = date(2025, 2, 4)
+    for train_end in (older, newer):
+        db_session.add(
+            PublishedBaselineForecastWeekly(
+                sku="SKU-D",
+                warehouse_code="AAH",
+                week_start=date(2025, 1, 7),
+                forecast_qty=Decimal("50"),
+                train_end_week_start=train_end,
+                selected_model_name="Prophet",
+                selected_model_version="1.0",
+            )
+        )
+    db_session.commit()
+    run = PlanRun(
+        scenario_name="Max selection",
+        run_at=date(2025, 1, 15),
+        created_at=date(2025, 1, 15),
+        demand_source="baseline",
+        freeze_weeks=4,
+        plan_start_week_start=date(2025, 1, 7),
+        selected_train_end_week_start=None,
+        baseline_train_end_week_start=None,
+    )
+    db_session.add(run)
+    db_session.commit()
+    plan_run_id = cast(int, run.id)
+    resolve_demand_for_run(db_session, plan_run_id, date(2025, 1, 13), date(2025, 1, 20), recompute_non_frozen_only=False)
+    db_session.commit()
+    db_session.refresh(run)
+    assert getattr(run, "selected_train_end_week_start", None) == newer
+
+
+def test_baseline_reuses_persisted_selected_run(db_session) -> None:
+    """After selection is persisted, re-running planning uses the same selected run even if a newer run is ingested."""
+    db_session.add(Product(sku="SKU-E", name="E", uom="units", active=True, aah_code="AAH-E"))
+    db_session.add(Warehouse(code="AAH", name="AAH", timezone="Europe/London", active=True))
+    db_session.commit()
+    first_run = date(2025, 1, 7)
+    db_session.add(
+        PublishedBaselineForecastWeekly(
+            sku="SKU-E",
+            warehouse_code="AAH",
+            week_start=date(2025, 1, 7),
+            forecast_qty=Decimal("60"),
+            train_end_week_start=first_run,
+            selected_model_name="Prophet",
+            selected_model_version="1.0",
+        )
+    )
+    db_session.commit()
+    run = PlanRun(
+        scenario_name="Persisted reuse",
+        run_at=date(2025, 1, 10),
+        created_at=date(2025, 1, 10),
+        demand_source="baseline",
+        freeze_weeks=4,
+        plan_start_week_start=date(2025, 1, 7),
+        selected_train_end_week_start=None,
+        baseline_train_end_week_start=None,
+    )
+    db_session.add(run)
+    db_session.commit()
+    plan_run_id = cast(int, run.id)
+    resolve_demand_for_run(db_session, plan_run_id, date(2025, 1, 13), date(2025, 1, 20), recompute_non_frozen_only=False)
+    db_session.commit()
+    db_session.refresh(run)
+    assert getattr(run, "selected_train_end_week_start", None) == first_run
+    # Ingest a newer run
+    newer = date(2025, 2, 4)
+    db_session.add(
+        PublishedBaselineForecastWeekly(
+            sku="SKU-E",
+            warehouse_code="AAH",
+            week_start=date(2025, 1, 7),
+            forecast_qty=Decimal("99"),
+            train_end_week_start=newer,
+            selected_model_name="Prophet",
+            selected_model_version="2.0",
+        )
+    )
+    db_session.commit()
+    # Re-run resolve; should still use first_run (persisted)
+    resolve_demand_for_run(db_session, plan_run_id, date(2025, 1, 13), date(2025, 1, 20), recompute_non_frozen_only=False)
+    db_session.commit()
+    db_session.refresh(run)
+    assert getattr(run, "selected_train_end_week_start", None) == first_run
+    demand_row = (
+        db_session.query(PlanRunDemandInputWeekly)
+        .filter(
+            PlanRunDemandInputWeekly.plan_run_id == plan_run_id,
+            PlanRunDemandInputWeekly.sku == "SKU-E",
+            PlanRunDemandInputWeekly.warehouse_code == "AAH",
+        )
+        .first()
+    )
+    assert demand_row is not None
+    assert float(demand_row.demand_qty) == 60.0
+
+
+def test_baseline_no_runs_raises_clear_error(db_session) -> None:
+    """When no published baseline runs exist, baseline planning raises NoBaselineRunsError with clear message."""
+    run = PlanRun(
+        scenario_name="No runs",
+        run_at=date(2025, 1, 10),
+        created_at=date(2025, 1, 10),
+        demand_source="baseline",
+        freeze_weeks=4,
+        plan_start_week_start=date(2025, 1, 7),
+        selected_train_end_week_start=None,
+        baseline_train_end_week_start=None,
+    )
+    db_session.add(run)
+    db_session.commit()
+    plan_run_id = cast(int, run.id)
+    with pytest.raises(NoBaselineRunsError) as exc_info:
+        resolve_demand_for_run(db_session, plan_run_id, date(2025, 1, 13), date(2025, 1, 20), recompute_non_frozen_only=False)
+    assert "No baseline forecast runs available" in str(exc_info.value)
+    assert "Import forecast output" in str(exc_info.value)

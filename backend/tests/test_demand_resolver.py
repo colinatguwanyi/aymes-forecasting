@@ -1,4 +1,5 @@
 """Tests: demand composition — include_samples, breakdown_json, override wins."""
+# pyright: reportMissingImports=false
 from decimal import Decimal
 
 import pytest

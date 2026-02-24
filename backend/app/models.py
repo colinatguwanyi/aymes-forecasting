@@ -183,6 +183,7 @@ class PlanRun(Base):
     created_by = Column(String(256), nullable=True)
     notes = Column(Text, nullable=True)
     baseline_train_end_week_start = Column(Date, nullable=True)
+    selected_train_end_week_start = Column(Date, nullable=True)
 
 
 class PlanRunDemandInputWeekly(Base):

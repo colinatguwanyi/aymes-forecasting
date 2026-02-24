@@ -28,6 +28,11 @@ from app.services.time_bucketing import week_start_for_date
 # Canonical demand types for breakdown (must match DemandType enum)
 DEMAND_TYPES = ("CUSTOMER", "SAMPLES", "ADJUSTMENT")
 
+# Raised when baseline demand is requested but no published runs exist (caller should return 409/422)
+class NoBaselineRunsError(ValueError):
+    """No baseline forecast runs available for the requested warehouse."""
+    pass
+
 
 def build_actuals_breakdown(
     by_type: dict[str, float], include_samples: bool
@@ -172,6 +177,42 @@ def _baseline_by_week_with_ref(
     return out, refs
 
 
+def get_latest_train_end_week_start(
+    db: Session,
+    warehouse_code: str = "AAH",
+) -> date | None:
+    """MAX(train_end_week_start) in published_baseline_forecasts_weekly for the given warehouse."""
+    from sqlalchemy import func
+    row = (
+        db.query(func.max(PublishedBaselineForecastWeekly.train_end_week_start))
+        .filter(PublishedBaselineForecastWeekly.warehouse_code == warehouse_code)
+        .first()
+    )
+    return row[0] if row and row[0] is not None else None
+
+
+def _resolve_baseline_train_end(db: Session, run: PlanRun, warehouse_code: str = "AAH") -> date:
+    """
+    Choose train_end_week_start for baseline/blended: use selected (persisted), else user override, else latest.
+    Persist to run.selected_train_end_week_start on first choice for reproducibility.
+    Raises NoBaselineRunsError if no published runs exist when we need to pick latest.
+    """
+    selected = getattr(run, "selected_train_end_week_start", None)
+    if selected is not None:
+        return cast(date, selected)
+    user_override = getattr(run, "baseline_train_end_week_start", None)
+    if user_override is not None:
+        run.selected_train_end_week_start = user_override
+        db.flush()
+        return user_override
+    latest = get_latest_train_end_week_start(db, warehouse_code=warehouse_code)
+    if latest is None:
+        raise NoBaselineRunsError("No baseline forecast runs available. Import forecast output first.")
+    run.selected_train_end_week_start = latest
+    db.flush()
+    return latest
+
+
 def _published_baseline_by_week(
     db: Session,
     from_week: date,
@@ -180,12 +221,8 @@ def _published_baseline_by_week(
 ) -> tuple[dict[tuple[date, str, str], Decimal], dict[tuple[date, str, str], dict[str, Any]]]:
     """
     Get published baseline forecast qty per (Monday_week, sku, warehouse).
-    If train_end_week_start is None, use latest (max) train_end_week_start in table.
+    train_end_week_start must be set by caller (resolver chooses it and may persist to plan_run.selected_train_end_week_start).
     """
-    if train_end_week_start is None:
-        from sqlalchemy import func
-        row = db.query(func.max(PublishedBaselineForecastWeekly.train_end_week_start)).first()
-        train_end_week_start = row[0] if row and row[0] is not None else None
     if train_end_week_start is None:
         return {}, {}
     out: dict[tuple[date, str, str], Decimal] = {}
@@ -276,7 +313,7 @@ def resolve_demand_for_run(
         for (w, sku, wh) in base:
             base_includes_samples[(w, sku, wh)] = policy_include_samples.get((sku, wh), True)
     elif demand_source == "baseline":
-        train_end = getattr(run, "baseline_train_end_week_start", None)
+        train_end = _resolve_baseline_train_end(db, run, warehouse_code="AAH")
         base, base_refs = _published_baseline_by_week(db, from_week, to_week, train_end)
         for k, v in base.items():
             ref = base_refs.get(k, {})
@@ -291,7 +328,7 @@ def resolve_demand_for_run(
             base_includes_samples[k] = True
     elif demand_source == "blended":
         actuals, actuals_breakdown = _actuals_by_week_with_breakdown(db, from_week, to_week, policy_include_samples)
-        train_end = getattr(run, "baseline_train_end_week_start", None)
+        train_end = _resolve_baseline_train_end(db, run, warehouse_code="AAH")
         baseline, baseline_refs = _published_baseline_by_week(db, from_week, to_week, train_end)
         for k in set(actuals) | set(baseline):
             w, s, wh = k
