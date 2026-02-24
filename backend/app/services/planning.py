@@ -22,7 +22,9 @@ from app.models import (
     DemandActual,
     DemandType,
     InventorySnapshotWeekly,
+    PlanRunDemandInputWeekly,
     PlannedOrder,
+    PlannedOrderOverrideWeekly,
     PlanRun,
     PlanningMode,
     PlanningPolicy,
@@ -30,6 +32,7 @@ from app.models import (
     Receipt,
     SafetyStockMethod,
 )
+from app.services.time_bucketing import week_start_for_date
 
 logger = logging.getLogger(__name__)
 
@@ -43,7 +46,51 @@ def _next_monday(d: date) -> date:
     return _monday_before(d) + timedelta(days=7)
 
 
-def run_plan(db: Session, scenario_name: str, run_at: date | None = None) -> PlanRun:
+def _demand_inputs_for_run(
+    db: Session,
+    plan_run_id: int,
+    from_week: date,
+    to_week: date,
+) -> dict[tuple[date, str, str], Decimal]:
+    """Load plan_run_demand_inputs_weekly for run and range; return (week_start, sku, warehouse_code) -> demand_qty."""
+    from app.services.demand_resolver import resolve_demand_for_run
+
+    rows = (
+        db.query(PlanRunDemandInputWeekly)
+        .filter(
+            PlanRunDemandInputWeekly.plan_run_id == plan_run_id,
+            PlanRunDemandInputWeekly.week_start >= from_week,
+            PlanRunDemandInputWeekly.week_start <= to_week,
+        )
+        .all()
+    )
+    if not rows:
+        resolve_demand_for_run(db, plan_run_id, from_week, to_week, recompute_non_frozen_only=False)
+        db.flush()
+        rows = (
+            db.query(PlanRunDemandInputWeekly)
+            .filter(
+                PlanRunDemandInputWeekly.plan_run_id == plan_run_id,
+                PlanRunDemandInputWeekly.week_start >= from_week,
+                PlanRunDemandInputWeekly.week_start <= to_week,
+            )
+            .all()
+        )
+    out: dict[tuple[date, str, str], Decimal] = {}
+    for r in rows:
+        out[(cast(date, r.week_start), cast(str, r.sku), cast(str, r.warehouse_code))] = cast(Decimal, r.demand_qty)
+    return out
+
+
+def run_plan(
+    db: Session,
+    scenario_name: str,
+    run_at: date | None = None,
+    demand_source: str = "actuals",
+    freeze_weeks: int = 4,
+    created_by: str | None = None,
+    notes: str | None = None,
+) -> PlanRun:
     if run_at is None:
         run_at = date.today()
     run_week = _monday_before(run_at)
@@ -77,17 +124,35 @@ def run_plan(db: Session, scenario_name: str, run_at: date | None = None) -> Pla
         )
 
     # 3) Demand actuals: (week_start, sku, warehouse_code, demand_type) -> qty (sum)
+    def _to_demand_type(val: Any) -> DemandType | None:
+        """Safely resolve to DemandType; use DemandType.ADJUSTMENT for ADJUSTMENT."""
+        if val is None:
+            return None
+        if isinstance(val, DemandType):
+            return val
+        s = str(val).strip().upper()
+        if s == "CUSTOMER":
+            return DemandType.CUSTOMER
+        if s == "SAMPLES":
+            return DemandType.SAMPLES
+        if s == "ADJUSTMENT":
+            return DemandType.ADJUSTMENT
+        return None
+
     demand_rows = db.query(DemandActual).all()
     demand_by_type: defaultdict[tuple[date, str, str, DemandType], Decimal] = defaultdict(
         lambda: Decimal("0")
     )
     for d in demand_rows:
+        dt = _to_demand_type(getattr(d, "demand_type", None))
+        if dt is None:
+            continue
         demand_by_type[
             (
                 cast(date, d.week_start),
                 cast(str, d.sku),
                 cast(str, d.warehouse_code),
-                cast(DemandType, d.demand_type),
+                dt,
             )
         ] += cast(Decimal, d.qty)
 
@@ -121,9 +186,26 @@ def run_plan(db: Session, scenario_name: str, run_at: date | None = None) -> Pla
         forecast_customer[(sku, wh_code)] = Decimal(str(round(avg_c, 4)))
         forecast_samples[(sku, wh_code)] = Decimal(str(round(avg_s, 4)))
 
-    plan_run = PlanRun(scenario_name=scenario_name, run_at=run_at, created_at=run_at)
+    plan_start_week_start = week_start_for_date(run_at)
+    plan_run = PlanRun(
+        scenario_name=scenario_name,
+        run_at=run_at,
+        created_at=run_at,
+        demand_source=demand_source,
+        freeze_weeks=freeze_weeks,
+        plan_start_week_start=plan_start_week_start,
+        created_by=created_by,
+        notes=notes,
+    )
     db.add(plan_run)
     db.flush()
+
+    to_week = run_week + timedelta(days=53 * 7)
+    demand_inputs = _demand_inputs_for_run(db, int(plan_run.id), run_week, to_week)
+
+    order_overrides: dict[tuple[date, str, str], Decimal] = {}
+    for o in db.query(PlannedOrderOverrideWeekly).filter(PlannedOrderOverrideWeekly.plan_run_id == plan_run.id).all():
+        order_overrides[(cast(date, o.week_start), cast(str, o.sku), cast(str, o.warehouse_code))] = cast(Decimal, o.override_order_qty)
 
     receipts_plus_orders: defaultdict[tuple[date, str, str], Decimal] = defaultdict(
         lambda: Decimal("0")
@@ -178,16 +260,20 @@ def run_plan(db: Session, scenario_name: str, run_at: date | None = None) -> Pla
 
         for w in proj_weeks:
             rec: Decimal = receipts_plus_orders.get((w, sku, wh_code), Decimal("0"))
-            d_c: Decimal | None = demand_by_type.get((w, sku, wh_code, DemandType.CUSTOMER))
-            d_s: Decimal | None = (
-                demand_by_type.get((w, sku, wh_code, DemandType.SAMPLES)) if include_samples else None
-            )
-            d_adj: Decimal = demand_by_type.get(
-                (w, sku, wh_code, DemandType.ADJUSTMENT), Decimal("0")
-            )
-            demand_c = d_c if d_c is not None else fc_c
-            demand_s = d_s if d_s is not None else (fc_s if include_samples else Decimal("0"))
-            demand: Decimal = demand_c + demand_s + d_adj
+            demand_resolved: Decimal | None = demand_inputs.get((w, sku, wh_code))
+            if demand_resolved is not None:
+                demand: Decimal = demand_resolved
+            else:
+                d_c: Decimal | None = demand_by_type.get((w, sku, wh_code, DemandType.CUSTOMER))
+                d_s: Decimal | None = (
+                    demand_by_type.get((w, sku, wh_code, DemandType.SAMPLES)) if include_samples else None
+                )
+                d_adj: Decimal = demand_by_type.get(
+                    (w, sku, wh_code, DemandType.ADJUSTMENT), Decimal("0")
+                )
+                demand_c = d_c if d_c is not None else fc_c
+                demand_s = d_s if d_s is not None else (fc_s if include_samples else Decimal("0"))
+                demand = demand_c + demand_s + d_adj
             start_qty_week: Decimal = inv
             inv = inv + rec - demand
             end_qty_week: Decimal = inv
@@ -227,17 +313,22 @@ def run_plan(db: Session, scenario_name: str, run_at: date | None = None) -> Pla
                     order_qty = max(rop - inv, Decimal("0"))
                     order_qty = Decimal(str(round(float(order_qty), 4)))
 
-            if order_qty > 0:
-                arrival_week = w
-                for _ in range(lt_weeks_int):
-                    arrival_week = _next_monday(arrival_week)
-                receipts_plus_orders[(arrival_week, sku, wh_code)] += order_qty
+            if order_qty > 0 or order_overrides.get((w, sku, wh_code)) is not None:
+                order_qty_used = order_overrides.get((w, sku, wh_code))
+                if order_qty_used is not None:
+                    order_qty = order_qty_used
+                if order_qty > 0:
+                    arrival_week = w
+                    for _ in range(lt_weeks_int):
+                        arrival_week = _next_monday(arrival_week)
+                    receipts_plus_orders[(arrival_week, sku, wh_code)] += order_qty
                 planned_order_rows.append({
                     "plan_run_id": plan_run.id,
                     "week_start": w,
                     "sku": sku,
                     "warehouse_code": wh_code,
                     "order_qty": order_qty,
+                    "is_frozen": False,
                 })
                 if lt_weeks_int == 0:
                     inv += order_qty

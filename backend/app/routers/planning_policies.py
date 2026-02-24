@@ -12,6 +12,7 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 
 
+@router.get("", response_model=list[PlanningPolicy])
 @router.get("/", response_model=list[PlanningPolicy])
 def list_planning_policies(
     sku: str | None = Query(None),
@@ -26,6 +27,7 @@ def list_planning_policies(
     return q.all()
 
 
+@router.post("", response_model=PlanningPolicy)
 @router.post("/", response_model=PlanningPolicy)
 def create_planning_policy(p: PlanningPolicyCreate, db: Session = Depends(get_db)) -> PlanningPolicyModel:
     existing = (

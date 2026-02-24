@@ -12,11 +12,13 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 
 
+@router.get("", response_model=list[Warehouse])
 @router.get("/", response_model=list[Warehouse])
 def list_warehouses(db: Session = Depends(get_db)) -> list[WarehouseModel]:
     return db.query(WarehouseModel).all()
 
 
+@router.post("", response_model=Warehouse)
 @router.post("/", response_model=Warehouse)
 def create_warehouse(w: WarehouseCreate, db: Session = Depends(get_db)) -> WarehouseModel:
     existing = db.query(WarehouseModel).filter(WarehouseModel.code == w.code).first()
@@ -34,6 +36,18 @@ def get_warehouse(warehouse_id: int, db: Session = Depends(get_db)) -> Warehouse
     obj = db.query(WarehouseModel).filter(WarehouseModel.id == warehouse_id).first()
     if not obj:
         raise HTTPException(status_code=404, detail="Warehouse not found")
+    return obj
+
+
+@router.put("/{warehouse_id}", response_model=Warehouse)
+def update_warehouse(warehouse_id: int, w: WarehouseCreate, db: Session = Depends(get_db)) -> WarehouseModel:
+    obj = db.query(WarehouseModel).filter(WarehouseModel.id == warehouse_id).first()
+    if not obj:
+        raise HTTPException(status_code=404, detail="Warehouse not found")
+    for k, v in w.model_dump().items():
+        setattr(obj, k, v)
+    db.commit()
+    db.refresh(obj)
     return obj
 
 

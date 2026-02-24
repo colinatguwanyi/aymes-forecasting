@@ -12,11 +12,13 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 
 
+@router.get("", response_model=list[Lane])
 @router.get("/", response_model=list[Lane])
 def list_lanes(db: Session = Depends(get_db)) -> list[LaneModel]:
     return db.query(LaneModel).all()
 
 
+@router.post("", response_model=Lane)
 @router.post("/", response_model=Lane)
 def create_lane(l: LaneCreate, db: Session = Depends(get_db)) -> LaneModel:
     obj = LaneModel(**l.model_dump())

@@ -1,0 +1,335 @@
+"""Ingestion API: upload CSV, stage, execute weekly transform, list runs."""
+from __future__ import annotations
+import hashlib
+import logging
+from datetime import datetime, timezone
+from decimal import Decimal
+from typing import Any, cast
+from uuid import UUID
+
+from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile
+from sqlalchemy.orm import Session
+
+from app.database import get_db
+from app.models import (
+    DemandStageWeekly,
+    DemandType,
+    IngestionEntity,
+    IngestionRejection,
+    IngestionRun,
+    IngestionSourceType,
+    IngestionStatus,
+)
+from app.services.csv_import import read_csv
+from app.services.import_product_master import import_from_stage as import_product_master_from_stage, validate_and_stage_row as validate_and_stage_product_master_row
+from app.services.time_bucketing import week_start_for_date
+from app.services.weekly_series_builder import build_weekly_series_from_stage
+
+logger = logging.getLogger(__name__)
+router = APIRouter()
+
+ALLOWED_DEMAND_TYPES = {"CUSTOMER", "SAMPLES", "ADJUSTMENT"}
+
+
+def _parse_week_start(s: str) -> tuple[bool, Any]:
+    """Parse YYYY-MM-DD and return (ok, week_start_date as W-TUE)."""
+    s = (s or "").strip()
+    if not s:
+        return False, "Empty date"
+    try:
+        d = datetime.strptime(s, "%Y-%m-%d").date()
+        week_start = week_start_for_date(d)
+        return True, week_start
+    except ValueError:
+        return False, "Invalid date (use YYYY-MM-DD)"
+
+
+def _parse_decimal(s: str) -> tuple[bool, Decimal | str]:
+    s = (s or "0").strip()
+    try:
+        return True, Decimal(s)
+    except Exception:
+        return False, "Invalid number"
+
+
+def _validate_and_stage_demand(
+    db: Session,
+    run_id: UUID,
+    rows: list[dict[str, Any]],
+) -> tuple[int, int]:
+    """Validate rows, write valid to demand_stage_weekly, rejections to ingestion_rejections. Return (staged_count, rejected_count)."""
+    staged = 0
+    for i, row in enumerate(rows, start=2):
+        errs: list[str] = []
+        week_ok, week_val = _parse_week_start(row.get("week_start", ""))
+        if not week_ok:
+            errs.append(str(week_val))
+        qty_ok, qty_val = _parse_decimal(row.get("qty", ""))
+        if not qty_ok:
+            errs.append(str(qty_val))
+        sku_raw = (row.get("sku") or "").strip()
+        wh = (row.get("warehouse_code") or "").strip()
+        dt = (row.get("demand_type") or "").strip().upper()
+        if not sku_raw:
+            errs.append("sku required")
+        if not wh:
+            errs.append("warehouse_code required")
+        if dt not in ALLOWED_DEMAND_TYPES:
+            errs.append("demand_type must be CUSTOMER, SAMPLES, or ADJUSTMENT")
+        if errs:
+            db.add(
+                IngestionRejection(
+                    ingestion_run_id=run_id,
+                    row_number=i,
+                    raw_payload=dict(row),
+                    reason="; ".join(errs),
+                )
+            )
+            continue
+        demand_type_enum = DemandType[dt]
+        db.add(
+            DemandStageWeekly(
+                ingestion_run_id=run_id,
+                week_start=week_val,
+                sku_raw=sku_raw,
+                sku=sku_raw,
+                warehouse_code=wh,
+                demand_type=demand_type_enum,
+                qty=qty_val,
+                source="CSV",
+            )
+        )
+        staged += 1
+    return staged, len(rows) - staged
+
+
+def _validate_and_stage_product_master(
+    db: Session,
+    run_id: UUID,
+    rows: list[dict[str, Any]],
+) -> tuple[int, int]:
+    """Validate each row; stage valid to product_master_stage, reject invalid to ingestion_rejections."""
+    staged = 0
+    for i, row in enumerate(rows, start=2):
+        ok, _ = validate_and_stage_product_master_row(db, run_id, row, i)
+        if ok:
+            staged += 1
+    return staged, len(rows) - staged
+
+
+def _normalize_entity(value: str) -> IngestionEntity | None:
+    """Accept 'demand'/'product_master' (case-insensitive, underscores or spaces)."""
+    v = (value or "").strip().lower().replace(" ", "_")
+    if v in ("demand",):
+        return IngestionEntity.DEMAND
+    if v in ("product_master", "productmaster"):
+        return IngestionEntity.PRODUCT_MASTER
+    return None
+
+
+@router.post("/upload")
+async def upload(
+    entity: str = Query(..., description="Entity: demand or product_master"),
+    file: UploadFile = File(..., description="CSV file"),
+    created_by: str | None = Query(None),
+    db: Session = Depends(get_db),
+) -> dict[str, Any]:
+    """Accept CSV and entity type; parse and stage; create ingestion run; return run_id.
+    Entities: demand (stage -> demand_stage_weekly), product_master (stage -> product_master_stage).
+    Idempotency: if an existing run with same entity+file_sha256 has status=success, returns that run_id
+    with duplicate_noop message (no new run created).
+    """
+    logger.info("ingestion/upload: entity=%r filename=%r", entity, file.filename)
+    entity_enum = _normalize_entity(entity)
+    if entity_enum not in (IngestionEntity.DEMAND, IngestionEntity.PRODUCT_MASTER):
+        detail = f"Entity must be demand or product_master (got {entity!r})"
+        logger.warning("ingestion/upload 400: %s", detail)
+        raise HTTPException(status_code=400, detail=detail)
+    content = await file.read()
+    if not content:
+        detail = "Uploaded file is empty"
+        logger.warning("ingestion/upload 400: %s", detail)
+        raise HTTPException(status_code=400, detail=detail)
+    logger.info("ingestion/upload: read %d bytes", len(content))
+    try:
+        rows = read_csv(content)
+    except Exception as e:
+        detail = f"Invalid CSV: {e}"
+        logger.warning("ingestion/upload 400: %s", detail, exc_info=True)
+        raise HTTPException(status_code=400, detail=detail)
+    file_sha256 = hashlib.sha256(content).hexdigest()
+
+    try:
+        existing = (
+            db.query(IngestionRun)
+            .filter(
+                IngestionRun.entity == entity_enum,
+                IngestionRun.file_sha256 == file_sha256,
+                IngestionRun.status == IngestionStatus.SUCCESS,
+            )
+            .order_by(IngestionRun.finished_at.desc())
+            .first()
+        )
+        if existing:
+            db.commit()
+            return {
+                "run_id": str(existing.id),
+                "row_count": getattr(existing, "row_count", 0),
+                "staged_count": 0,
+                "rejected_count": 0,
+                "duplicate_noop": True,
+                "message": "Same file (entity+sha256) already ingested successfully; returning existing run_id.",
+            }
+
+        run = IngestionRun(
+            source_type=IngestionSourceType.CSV,
+            entity=entity_enum,
+            file_name=file.filename or None,
+            file_sha256=file_sha256,
+            started_at=datetime.now(timezone.utc),
+            status=IngestionStatus.PENDING,
+            row_count=len(rows),
+            created_by=created_by,
+        )
+        db.add(run)
+        db.flush()
+        run_id = cast(UUID, run.id)
+        if entity_enum == IngestionEntity.DEMAND:
+            staged, rejected = _validate_and_stage_demand(db, run_id, rows)
+        else:
+            staged, rejected = _validate_and_stage_product_master(db, run_id, rows)
+        run.inserted_count = 0
+        run.updated_count = 0
+        run.rejected_count = rejected
+        db.commit()
+        return {"run_id": str(run_id), "row_count": len(rows), "staged_count": staged, "rejected_count": rejected}
+    except HTTPException:
+        db.rollback()
+        raise
+    except Exception as e:
+        db.rollback()
+        logger.exception("ingestion/upload 500: %s", e)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/runs/{run_id}/execute")
+def execute_run(
+    run_id: UUID,
+    db: Session = Depends(get_db),
+) -> dict[str, Any]:
+    """Execute: demand -> build_weekly_series_from_stage; product_master -> import_product_master_from_stage. Synchronous."""
+    run = db.query(IngestionRun).filter(IngestionRun.id == run_id).first()
+    if not run:
+        raise HTTPException(status_code=404, detail="Run not found")
+    entity_val = getattr(run, "entity", None)
+    try:
+        if entity_val == IngestionEntity.DEMAND:
+            build_weekly_series_from_stage(db, run_id)
+        elif entity_val == IngestionEntity.PRODUCT_MASTER:
+            run.status = IngestionStatus.RUNNING
+            run.finished_at = None
+            db.flush()
+            inserted, updated = import_product_master_from_stage(db, run_id)
+            run.inserted_count = inserted
+            run.updated_count = updated
+            run.status = IngestionStatus.SUCCESS
+            run.finished_at = datetime.now(timezone.utc)
+        else:
+            raise HTTPException(status_code=400, detail=f"Execute not supported for entity={getattr(entity_val, 'value', entity_val)}")
+        db.commit()
+    except Exception as e:
+        db.rollback()
+        run = db.query(IngestionRun).filter(IngestionRun.id == run_id).first()
+        if run:
+            run.status = IngestionStatus.FAILED
+            run.error_summary = str(e)
+            run.finished_at = datetime.now(timezone.utc)
+        db.commit()
+        raise HTTPException(status_code=500, detail=str(e))
+    run_after = db.query(IngestionRun).filter(IngestionRun.id == run_id).first()
+    if not run_after:
+        raise HTTPException(status_code=500, detail="Run not found after execute")
+    return {
+        "run_id": str(run_id),
+        "status": run_after.status.value,
+        "inserted_count": run_after.inserted_count,
+        "updated_count": run_after.updated_count,
+        "rejected_count": run_after.rejected_count,
+    }
+
+
+@router.get("/runs")
+def list_runs(
+    status: IngestionStatus | None = Query(None),
+    entity: IngestionEntity | None = Query(None),
+    limit: int = Query(50, ge=1, le=200),
+    db: Session = Depends(get_db),
+) -> list[dict[str, Any]]:
+    """List ingestion runs with status and metrics."""
+    q = db.query(IngestionRun).order_by(IngestionRun.started_at.desc()).limit(limit)
+    if status is not None:
+        q = q.filter(IngestionRun.status == status)
+    if entity is not None:
+        q = q.filter(IngestionRun.entity == entity)
+    runs = q.all()
+    out: list[dict[str, Any]] = []
+    for r in runs:
+        _started = getattr(r, "started_at", None)
+        _finished = getattr(r, "finished_at", None)
+        out.append({
+            "id": str(r.id),
+            "source_type": r.source_type.value,
+            "entity": r.entity.value,
+            "file_name": r.file_name,
+            "file_sha256": r.file_sha256,
+            "started_at": _started.isoformat() if _started is not None else None,
+            "finished_at": _finished.isoformat() if _finished is not None else None,
+            "status": r.status.value,
+            "row_count": r.row_count,
+            "inserted_count": r.inserted_count,
+            "updated_count": r.updated_count,
+            "rejected_count": r.rejected_count,
+            "error_summary": r.error_summary,
+            "created_by": r.created_by,
+        })
+    return out
+
+
+@router.get("/runs/{run_id}")
+def get_run(
+    run_id: UUID,
+    rejections_limit: int = Query(100, ge=1, le=500),
+    db: Session = Depends(get_db),
+) -> dict[str, Any]:
+    """Run details and rejections sample."""
+    run = db.query(IngestionRun).filter(IngestionRun.id == run_id).first()
+    if not run:
+        raise HTTPException(status_code=404, detail="Run not found")
+    rej = (
+        db.query(IngestionRejection)
+        .filter(IngestionRejection.ingestion_run_id == run_id)
+        .limit(rejections_limit)
+        .all()
+    )
+    _started = getattr(run, "started_at", None)
+    _finished = getattr(run, "finished_at", None)
+    return {
+        "id": str(run.id),
+        "source_type": run.source_type.value,
+        "entity": run.entity.value,
+        "file_name": run.file_name,
+        "file_sha256": run.file_sha256,
+        "started_at": _started.isoformat() if _started is not None else None,
+        "finished_at": _finished.isoformat() if _finished is not None else None,
+        "status": run.status.value,
+        "row_count": run.row_count,
+        "inserted_count": run.inserted_count,
+        "updated_count": run.updated_count,
+        "rejected_count": run.rejected_count,
+        "error_summary": run.error_summary,
+        "created_by": run.created_by,
+        "rejections_sample": [
+            {"row_number": r.row_number, "reason": r.reason, "raw_payload": r.raw_payload}
+            for r in rej
+        ],
+    }

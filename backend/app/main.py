@@ -13,15 +13,24 @@ from app.routers import (
     products,
     warehouses,
     suppliers,
+    warehouse_products,
+    supplier_products,
+    backbone_imports,
+    projections,
+    backbone_reports,
     lanes,
     planning_policies,
     inventory,
     receipts,
     demand,
     plan_run,
+    stock_position,
+    timeline,
     imports_router,
     exports,
     templates,
+    ingestion,
+    forecast,
 )
 
 logger = logging.getLogger(__name__)
@@ -55,15 +64,24 @@ app.add_middleware(
 app.include_router(products.router, prefix="/api/products", tags=["products"])
 app.include_router(warehouses.router, prefix="/api/warehouses", tags=["warehouses"])
 app.include_router(suppliers.router, prefix="/api/suppliers", tags=["suppliers"])
+app.include_router(warehouse_products.router, prefix="/api/warehouse-products", tags=["warehouse-products"])
+app.include_router(supplier_products.router, prefix="/api/supplier-products", tags=["supplier-products"])
+app.include_router(backbone_imports.router, prefix="/api/backbone/import", tags=["backbone-import"])
+app.include_router(projections.router, prefix="/api/projections", tags=["projections"])
+app.include_router(backbone_reports.router, prefix="/api/backbone/reports", tags=["backbone-reports"])
 app.include_router(lanes.router, prefix="/api/lanes", tags=["lanes"])
 app.include_router(planning_policies.router, prefix="/api/planning-policies", tags=["planning-policies"])
 app.include_router(inventory.router, prefix="/api/inventory", tags=["inventory"])
 app.include_router(receipts.router, prefix="/api/receipts", tags=["receipts"])
 app.include_router(demand.router, prefix="/api/demand", tags=["demand"])
 app.include_router(plan_run.router, prefix="/api/plan", tags=["plan"])
+app.include_router(stock_position.router, prefix="/api/stock-position", tags=["stock-position"])
+app.include_router(timeline.router, prefix="/api/timeline", tags=["timeline"])
 app.include_router(imports_router.router, prefix="/api/import", tags=["imports"])
 app.include_router(exports.router, prefix="/api/exports", tags=["exports"])
 app.include_router(templates.router, prefix="/api/templates", tags=["templates"])
+app.include_router(ingestion.router, prefix="/api/ingestion", tags=["ingestion"])
+app.include_router(forecast.router, prefix="/api/forecast", tags=["forecast"])
 
 # Serve built frontend (after: cd frontend && npm run build)
 if _SERVE_FRONTEND:

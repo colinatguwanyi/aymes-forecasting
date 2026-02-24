@@ -7,8 +7,11 @@ import api, {
   type ProjectedInventory,
   type Receipt,
   type DemandActual,
+  type DemandInputRow,
   type InventorySnapshot,
   type SkuWeekExplanation,
+  type StockPositionBreakdown,
+  type StockPositionRollingWeek,
 } from '@/api/client'
 
 export const usePlanningStore = defineStore('planning', () => {
@@ -21,11 +24,40 @@ export const usePlanningStore = defineStore('planning', () => {
     return data
   }
 
-  async function runPlan(scenarioName: string, runAt?: string) {
-    const params = new URLSearchParams({ scenario_name: scenarioName })
+  async function runPlan(
+    scenarioName: string,
+    runAt?: string,
+    demandSource: string = 'actuals',
+    freezeWeeks: number = 4,
+    notes?: string
+  ) {
+    const params = new URLSearchParams({
+      scenario_name: scenarioName,
+      demand_source: demandSource,
+      freeze_weeks: String(freezeWeeks),
+    })
     if (runAt) params.set('run_at', runAt)
+    if (notes) params.set('notes', notes)
     const { data } = await api.post<PlanRun>(`/plan/run?${params}`)
     planRuns.value = [data, ...planRuns.value]
+    return data
+  }
+
+  async function freezePlanRun(planRunId: number, scope: 'demand' | 'orders' | 'both', freezeWeeks?: number, frozenBy?: string, notes?: string) {
+    const body: Record<string, unknown> = { scope }
+    if (freezeWeeks != null) body.freeze_weeks = freezeWeeks
+    if (frozenBy) body.frozen_by = frozenBy
+    if (notes) body.notes = notes
+    await api.post(`/plan/runs/${planRunId}/freeze`, body)
+  }
+
+  async function recalculateDemand(planRunId: number) {
+    await api.post(`/plan/runs/${planRunId}/recalculate-demand`)
+  }
+
+  async function fetchExplain(planRunId: number, sku: string, warehouseCode: string, weekStart: string) {
+    const params = new URLSearchParams({ sku, warehouse_code: warehouseCode, week_start: weekStart })
+    const { data } = await api.get<Record<string, unknown>>(`/plan/runs/${planRunId}/explain?${params}`)
     return data
   }
 
@@ -91,6 +123,50 @@ export const usePlanningStore = defineStore('planning', () => {
     return data
   }
 
+  async function fetchStockPositionBreakdown(
+    planRunId: number,
+    opts?: { warehouseCode?: string; sku?: string; productFamily?: string; breachOnly?: boolean; limit?: number }
+  ) {
+    const params = new URLSearchParams({ plan_run_id: String(planRunId) })
+    if (opts?.warehouseCode) params.set('warehouse_code', opts.warehouseCode)
+    if (opts?.sku) params.set('sku', opts.sku)
+    if (opts?.productFamily) params.set('product_family', opts.productFamily)
+    if (opts?.breachOnly) params.set('breach_only', 'true')
+    if (opts?.limit != null) params.set('limit', String(opts.limit))
+    const { data } = await api.get<StockPositionBreakdown[]>(`/stock-position/breakdown?${params}`)
+    return data
+  }
+
+  async function fetchStockPositionRolling(
+    planRunId: number,
+    warehouseCode: string,
+    sku: string,
+    weeks: number = 12
+  ) {
+    const params = new URLSearchParams({
+      plan_run_id: String(planRunId),
+      warehouse_code: warehouseCode,
+      sku,
+      weeks: String(weeks),
+    })
+    const { data } = await api.get<StockPositionRollingWeek[]>(`/stock-position/rolling?${params}`)
+    return data
+  }
+
+  async function fetchDemandInputs(
+    planRunId: number,
+    fromWeek?: string,
+    toWeek?: string
+  ) {
+    const params = new URLSearchParams()
+    if (fromWeek) params.set('from_week', fromWeek)
+    if (toWeek) params.set('to_week', toWeek)
+    const { data } = await api.get<DemandInputRow[]>(
+      `/plan/runs/${planRunId}/demand-inputs${params.toString() ? `?${params}` : ''}`
+    )
+    return data
+  }
+
   const selectedRuns = computed(() =>
     planRuns.value.filter((r) => selectedRunIds.value.includes(r.id))
   )
@@ -101,6 +177,9 @@ export const usePlanningStore = defineStore('planning', () => {
     selectedRuns,
     fetchPlanRuns,
     runPlan,
+    freezePlanRun,
+    recalculateDemand,
+    fetchExplain,
     fetchProjectedInventory,
     fetchPlannedOrders,
     fetchSkuWeekExplanation,
@@ -108,5 +187,8 @@ export const usePlanningStore = defineStore('planning', () => {
     fetchReceipts,
     fetchDemandActuals,
     fetchInventorySnapshots,
+    fetchStockPositionBreakdown,
+    fetchStockPositionRolling,
+    fetchDemandInputs,
   }
 })

@@ -6,10 +6,32 @@
     <template v-else>
       <section class="content-section">
         <h2>Run a scenario</h2>
-        <form @submit.prevent="runScenario" class="form-inline">
+        <form @submit.prevent="runScenario" class="form-inline plan-run-form">
           <input v-model="scenarioName" class="app-input" placeholder="Scenario name" required style="max-width: 12rem;" />
+          <label class="form-label">Demand source</label>
+          <select v-model="demandSource" class="app-select" style="max-width: 10rem;">
+            <option value="actuals">Actuals</option>
+            <option value="baseline">Baseline forecast</option>
+            <option value="blended">Blended</option>
+          </select>
+          <label class="form-label">Freeze weeks</label>
+          <input v-model.number="freezeWeeks" type="number" min="0" max="52" class="app-input" style="max-width: 4rem;" />
           <button type="submit" class="app-btn app-btn-primary">Run plan</button>
         </form>
+      </section>
+
+      <section v-if="selectedRunId" class="content-section">
+        <h2>Plan run actions</h2>
+        <p class="muted">Selected: {{ selectedRunName }}</p>
+        <div class="actions-row">
+          <button type="button" @click="doFreeze" class="app-btn app-btn-secondary">Freeze now</button>
+          <select v-model="freezeScope" class="app-select" style="max-width: 8rem;">
+            <option value="both">Demand &amp; orders</option>
+            <option value="demand">Demand only</option>
+            <option value="orders">Orders only</option>
+          </select>
+          <button type="button" @click="doRecalculateDemand" class="app-btn app-btn-secondary">Recalculate (non-frozen demand)</button>
+        </div>
       </section>
 
       <section class="content-section">
@@ -102,13 +124,22 @@
             <thead>
               <tr>
                 <th>Scenario</th>
+                <th>Demand source</th>
+                <th>Freeze weeks</th>
                 <th>Run at</th>
                 <th>Created</th>
               </tr>
             </thead>
             <tbody>
-              <tr v-for="r in planRuns" :key="r.id">
+              <tr
+                v-for="r in planRuns"
+                :key="r.id"
+                :class="{ 'row-selected': selectedRunId === r.id }"
+                @click="selectedRunId = r.id"
+              >
                 <td>{{ r.scenario_name }}</td>
+                <td>{{ r.demand_source ?? 'actuals' }}</td>
+                <td>{{ r.freeze_weeks ?? 4 }}</td>
                 <td>{{ r.run_at }}</td>
                 <td>{{ r.created_at }}</td>
               </tr>
@@ -116,18 +147,93 @@
           </table>
         </div>
       </section>
+
+      <section class="content-section forecast-health-card">
+        <h2>Forecast health</h2>
+        <p class="muted">WAPE/Bias over last 12 weeks with actuals. Use POST /api/forecast/metrics/recompute to refresh.</p>
+        <div v-if="forecastMetricsLoading" class="muted">Loading…</div>
+        <template v-else>
+          <div class="health-summary">
+            <span><strong>Avg WAPE:</strong> {{ summary.avg_wape != null ? (summary.avg_wape * 100).toFixed(2) + '%' : '—' }}</span>
+            <span><strong>Scored:</strong> {{ summary.count_scored }}</span>
+            <span><strong>Missing:</strong> {{ summary.count_missing }}</span>
+          </div>
+          <h3 class="subsection">Top 5 worst by WAPE</h3>
+          <div v-if="top5WorstByWape.length" class="app-table-wrap">
+            <table class="app-table">
+              <thead>
+                <tr>
+                  <th>SKU</th>
+                  <th>Warehouse</th>
+                  <th>Train end</th>
+                  <th>WAPE</th>
+                  <th>Bias</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr v-for="(m, i) in top5WorstByWape" :key="i">
+                  <td>{{ m.sku }}</td>
+                  <td>{{ m.warehouse_code }}</td>
+                  <td>{{ m.train_end_week_start }}</td>
+                  <td>{{ m.wape != null ? (m.wape * 100).toFixed(2) + '%' : '—' }}</td>
+                  <td>{{ m.bias != null ? m.bias.toFixed(4) : '—' }}</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+          <p v-else class="muted">No scored metrics.</p>
+        </template>
+      </section>
     </template>
   </div>
 </template>
 
 <script setup lang="ts">
 import { ref, computed, onMounted, watch } from 'vue'
+import api from '@/api/client'
 import { usePlanningStore } from '@/stores/planning'
 import type { ProjectedInventory, PlanningException } from '@/api/client'
 
+export interface ForecastMetric {
+  model_name: string
+  model_version: string
+  train_end_week_start: string
+  sku: string
+  warehouse_code: string
+  eval_weeks?: number | null
+  wape: number | null
+  bias: number | null
+}
+
+export interface ForecastMetricsSummary {
+  avg_wape: number | null
+  avg_bias: number | null
+  count_scored: number
+  count_missing: number
+}
+
 const store = usePlanningStore()
+const forecastMetrics = ref<ForecastMetric[]>([])
+const forecastSummary = ref<ForecastMetricsSummary>({
+  avg_wape: null,
+  avg_bias: null,
+  count_scored: 0,
+  count_missing: 0,
+})
+const forecastMetricsLoading = ref(false)
+
+const summary = computed(() => forecastSummary.value)
+const top5WorstByWape = computed(() =>
+  forecastMetrics.value
+    .filter((m) => m.wape != null)
+    .sort((a, b) => (b.wape ?? 0) - (a.wape ?? 0))
+    .slice(0, 5)
+)
 const loading = ref(true)
 const scenarioName = ref('baseline')
+const demandSource = ref<'actuals' | 'baseline' | 'blended'>('actuals')
+const freezeWeeks = ref(4)
+const freezeScope = ref<'demand' | 'orders' | 'both'>('both')
 const selectedRunId = ref<number | null>(null)
 const compareRunA = ref<number | null>(null)
 const compareRunB = ref<number | null>(null)
@@ -188,16 +294,32 @@ const topRisks = computed(() => {
 
 const runAName = computed(() => planRuns.value.find((r) => r.id === compareRunA.value)?.scenario_name ?? '—')
 const runBName = computed(() => planRuns.value.find((r) => r.id === compareRunB.value)?.scenario_name ?? '—')
+const selectedRunName = computed(() => planRuns.value.find((r) => r.id === selectedRunId.value)?.scenario_name ?? '—')
 
 async function runScenario() {
-  await store.runPlan(scenarioName.value)
+  await store.runPlan(scenarioName.value, undefined, demandSource.value, freezeWeeks.value)
   await store.fetchPlanRuns()
   if (store.planRuns.length) selectedRunId.value = store.planRuns[0].id
+}
+
+async function loadForecastMetrics() {
+  forecastMetricsLoading.value = true
+  try {
+    const [metricsRes, summaryRes] = await Promise.all([
+      api.get<ForecastMetric[]>('/forecast/metrics', { params: { limit: 500 } }),
+      api.get<ForecastMetricsSummary>('/forecast/metrics/summary'),
+    ])
+    forecastMetrics.value = metricsRes.data
+    forecastSummary.value = summaryRes.data
+  } finally {
+    forecastMetricsLoading.value = false
+  }
 }
 
 onMounted(async () => {
   await store.fetchPlanRuns()
   if (store.planRuns.length) selectedRunId.value = store.planRuns[0].id
+  loadForecastMetrics()
   loading.value = false
 })
 
@@ -217,6 +339,18 @@ watch(compareRunB, async (id) => {
   if (id) exceptionsB.value = await store.fetchExceptions(id, 26, true)
   else exceptionsB.value = []
 })
+
+async function doFreeze() {
+  if (!selectedRunId.value) return
+  await store.freezePlanRun(selectedRunId.value, freezeScope.value)
+  await store.fetchPlanRuns()
+}
+
+async function doRecalculateDemand() {
+  if (!selectedRunId.value) return
+  await store.recalculateDemand(selectedRunId.value)
+  if (selectedRunId.value) projected.value = await store.fetchProjectedInventory(selectedRunId.value)
+}
 </script>
 
 <style scoped>
@@ -233,4 +367,11 @@ watch(compareRunB, async (id) => {
 .compare-card h3 { font-size: 0.9375rem; margin-bottom: 0.5rem; }
 .compare-card p { margin: 0.25rem 0; font-size: 0.875rem; }
 .compare-card .app-btn { margin-top: 0.5rem; text-decoration: none; display: inline-block; }
+.plan-run-form .form-label { margin-left: 0.5rem; margin-right: 0.25rem; }
+.actions-row { display: flex; gap: 0.5rem; align-items: center; flex-wrap: wrap; }
+.form-label { font-size: 0.875rem; }
+.app-table tbody tr { cursor: pointer; }
+.app-table tbody tr.row-selected { background: var(--border); }
+.forecast-health-card .health-summary { display: flex; gap: 1.5rem; margin-bottom: 0.75rem; font-size: 0.875rem; }
+.forecast-health-card .subsection { font-size: 0.9375rem; margin: 0.75rem 0 0.25rem; }
 </style>

@@ -68,6 +68,10 @@ Must be visible in UI and exportable (CSV + "SKU explanation report").
 
 **Current:** products, warehouses, suppliers, lanes, planning_policies, inventory_snapshots_weekly, receipts, demand_actuals, plan_runs, projected_inventory, planned_orders.
 
+**Added (ingestion + baseline):**
+- ingestion_runs, ingestion_rejections, sku_code_map, demand_stage_weekly, demand_facts_weekly (canonical weekly demand), baseline_forecasts_weekly.
+- See **docs/INGESTION_CONTRACT.md** for week bucketing (W-TUE), CSV schemas, idempotency, mapping, completeness.
+
 **To add (as needed):**
 - supplier_sku (lead times, MOQ, pack size).
 - forecast_runs / forecast_values (method, horizon, overrides).
@@ -110,14 +114,34 @@ Must be visible in UI and exportable (CSV + "SKU explanation report").
 | **Phase 4** | Reporting suite + accuracy metrics + optional AI summaries. |
 
 **Default methods (if not already set):**
-- Baseline: seasonal moving average (weekly).
+- Baseline: **seasonal_naive_52** (forecast week t = actual same week last year if exists, else rolling mean of last 8 weeks). Deterministic, no heavy deps. Exposed via POST /api/forecast/runs and GET /api/forecast/baseline; not yet integrated into planning.
 - Outlier handling: clamp extreme spikes.
 - Safety stock: weeks-of-cover target per category.
 - Ordering: reorder point + lot sizing (MOQ/pack).
 
 ---
 
-## 8. Definition of Done (Reality Check)
+## 8. Forecast scoring (WAPE / Bias)
+
+Health metrics for each forecast run (per model_name, model_version, train_end_week_start) are computed and stored in **forecast_run_metrics**. They are deterministic and reproducible.
+
+**Canonical actuals:** **demand_facts_weekly** (W-TUE week_start). Do not mix with demand_actuals; demand_facts_weekly is the single source for scoring. Quantities are summed over demand_type per (week_start, sku, warehouse_code).
+
+**Week bucketing:** W-TUE everywhere (same as baseline_forecasts_weekly and demand_facts_weekly). See docs/INGESTION_CONTRACT.md.
+
+**Eval window:** For a run with `train_end_week_start` and `eval_window_weeks` (default 12), the window is the 12 weeks *before* train_end: `[train_end_week_start - 12*7 days, train_end_week_start - 7 days]` inclusive. Only target weeks that fall in this range are considered.
+
+**Inclusion rules:** Only weeks where (1) both a forecast and an actual exist, and (2) **actual_qty > 0**, are used. Weeks with missing actuals are excluded. Weeks with actual = 0 are excluded from the WAPE denominator (and from the count of eval weeks for that SKU/warehouse).
+
+**Formulas (per SKU/warehouse over included weeks):**
+- **WAPE** = sum(|forecast − actual|) / sum(actual)
+- **Bias (ratio)** = sum(forecast − actual) / sum(actual)
+
+**API:** POST /api/forecast/metrics/recompute (body: model_name, model_version, train_end_week_start, eval_window_weeks?) to recompute and persist; GET /api/forecast/metrics (query: sku?, warehouse_code?, model_name?, train_end_week_start?) to list; GET /api/forecast/metrics/summary for aggregate avg_wape, avg_bias, count_scored, count_missing.
+
+---
+
+## 9. Definition of Done (Reality Check)
 
 - A planner can open the weekly grid and see **why** each SKU is projected to stock out.
 - They can change parameters (lead time, safety stock, overrides) and see impact immediately.
@@ -125,3 +149,5 @@ Must be visible in UI and exportable (CSV + "SKU explanation report").
 - Exec dashboard shows OOS and risk forward view with drill-down.
 
 If the explainability panel per SKU-week is missing, the system will still get stockouts because nobody will trust or tune the forecast. The UI must make the math visible and editable.
+
+**Forecast health:** SKU detail shows WAPE/Bias for the selected forecast run with a Good/OK/Poor badge; dashboard shows a small card with avg WAPE, count scored, and top 5 worst SKUs by WAPE.

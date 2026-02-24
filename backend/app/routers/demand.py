@@ -6,11 +6,13 @@ from fastapi import APIRouter, Depends, Query
 from sqlalchemy.orm import Session
 
 from app.database import get_db
-from app.models import DemandActual as DemandActualModel
+from app.models import DemandActual as DemandActualModel, DemandType
 from app.schemas import DemandActual
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
+
+_VALID_DEMAND_TYPES = {"CUSTOMER", "SAMPLES", "ADJUSTMENT"}
 
 
 @router.get("/", response_model=list[DemandActual])
@@ -29,5 +31,7 @@ def list_demand_actuals(
     if warehouse_code:
         q = q.filter(DemandActualModel.warehouse_code == warehouse_code)
     if demand_type:
-        q = q.filter(DemandActualModel.demand_type == demand_type)
+        dt_upper = demand_type.strip().upper()
+        if dt_upper in _VALID_DEMAND_TYPES:
+            q = q.filter(DemandActualModel.demand_type == DemandType[dt_upper])
     return q.order_by(DemandActualModel.week_start, DemandActualModel.sku).all()

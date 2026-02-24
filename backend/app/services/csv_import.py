@@ -190,6 +190,14 @@ def validate_products(rows: list[dict[str, Any]]) -> ImportDryRunResult:
 
 
 def read_csv(file_content: bytes) -> list[dict[str, Any]]:
-    text = file_content.decode("utf-8-sig")
+    """Decode CSV bytes to text; try UTF-8 (with BOM) first, then Windows-1252 (common for Excel)."""
+    for encoding in ("utf-8-sig", "utf-8", "cp1252", "latin-1"):
+        try:
+            text = file_content.decode(encoding)
+            break
+        except UnicodeDecodeError:
+            continue
+    else:
+        raise ValueError("Could not decode file as UTF-8, CP1252, or Latin-1")
     reader = csv.DictReader(io.StringIO(text))
     return list(reader)

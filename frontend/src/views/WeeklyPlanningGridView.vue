@@ -1,67 +1,76 @@
 <template>
-  <div class="page-content-inner">
-    <p class="muted">SKU × Week matrix. Red = stockout, amber = low cover, green = healthy. Click a cell to open the explanation panel.</p>
+  <div class="page-shell space-y-6">
+    <header class="page-header">
+      <h1>Weekly Planning Grid</h1>
+      <p class="muted mt-1">SKU × Week matrix. Red = stockout, amber = low cover, green = healthy. Click a cell to open the explanation panel.</p>
+    </header>
 
-    <section class="content-section controls">
-      <div class="form-row">
-        <label class="form-label">Scenario</label>
-        <select v-model="selectedRunId" class="app-select" style="max-width: 18rem;">
-          <option :value="null">Select scenario</option>
-          <option v-for="r in planRuns" :key="r.id" :value="r.id">{{ r.scenario_name }} ({{ r.created_at }})</option>
-        </select>
-      </div>
-      <div class="form-row">
-        <label class="form-label">Warehouse</label>
-        <input v-model="whFilter" class="app-input" placeholder="Filter warehouse" style="max-width: 10rem;" />
-      </div>
-      <div class="form-row">
-        <label class="form-label">SKU</label>
-        <input v-model="skuFilter" class="app-input" placeholder="Filter SKU" style="max-width: 10rem;" />
+    <section class="card card-body">
+      <h3 class="section-title mb-3">Filters</h3>
+      <div class="grid grid-cols-1 md:grid-cols-4 gap-3">
+        <div>
+          <label class="form-label">Scenario</label>
+          <select v-model="selectedRunId" class="select w-full max-w-xs">
+            <option :value="null">Select scenario</option>
+            <option v-for="r in planRuns" :key="r.id" :value="r.id">{{ r.scenario_name }} ({{ r.created_at }})</option>
+          </select>
+        </div>
+        <div>
+          <label class="form-label">Warehouse</label>
+          <input v-model="whFilter" class="input w-full max-w-xs" placeholder="Filter warehouse" />
+        </div>
+        <div>
+          <label class="form-label">SKU</label>
+          <input v-model="skuFilter" class="input w-full max-w-xs" placeholder="Filter SKU" />
+        </div>
       </div>
     </section>
 
-    <section v-if="loading" class="content-section">Loading...</section>
-    <template v-else>
-      <section class="content-section grid-section">
-        <div v-if="rows.length && weekColumns.length" class="planning-grid-wrap">
-          <table class="planning-grid app-table">
-            <thead>
-              <tr>
-                <th class="sticky-col sticky-header">SKU / Warehouse</th>
-                <th
-                  v-for="week in weekColumns"
-                  :key="week"
-                  class="sticky-header week-header"
-                >{{ week }}</th>
-              </tr>
-            </thead>
-            <tbody>
-              <tr v-for="row in rows" :key="row.key">
-                <td class="sticky-col row-label">
-                  <router-link
-                    :to="{ path: '/sku-detail', query: selectedRunId ? { sku: row.sku, warehouse_code: row.warehouse_code, plan_run_id: String(selectedRunId) } : { sku: row.sku, warehouse_code: row.warehouse_code } }"
-                    class="row-label-link"
-                    @click.stop
-                  >{{ row.sku }} / {{ row.warehouse_code }}</router-link>
-                </td>
-                <td
-                  v-for="week in weekColumns"
-                  :key="week"
-                  :class="cellClass(row, week)"
-                  class="grid-cell"
-                  role="button"
-                  tabindex="0"
-                  @click="openExplanationForCell(row, week)"
-                  @keydown.enter="openExplanationForCell(row, week)"
-                  @keydown.space.prevent="openExplanationForCell(row, week)"
-                >{{ cellDisplay(row, week) }}</td>
-              </tr>
-            </tbody>
-          </table>
+    <section class="card card-body">
+      <h3 class="section-title mb-3">Planning grid</h3>
+      <div v-if="loading" class="py-8 text-sm text-slate-500">Loading…</div>
+      <template v-else>
+        <div v-if="rows.length && weekColumns.length" class="grid-section">
+          <div class="planning-grid-wrap">
+            <table class="planning-grid">
+              <thead>
+                <tr>
+                  <th class="sticky-col sticky-header week-header">SKU / Warehouse</th>
+                  <th
+                    v-for="week in weekColumns"
+                    :key="week"
+                    class="sticky-header week-header"
+                  >{{ week }}</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr v-for="row in rows" :key="row.key">
+                  <td class="sticky-col row-label">
+                    <router-link
+                      :to="{ path: '/sku-detail', query: selectedRunId ? { sku: row.sku, warehouse_code: row.warehouse_code, plan_run_id: String(selectedRunId) } : { sku: row.sku, warehouse_code: row.warehouse_code } }"
+                      class="row-label-link"
+                      @click.stop
+                    >{{ row.sku }} / {{ row.warehouse_code }}</router-link>
+                  </td>
+                  <td
+                    v-for="week in weekColumns"
+                    :key="week"
+                    :class="cellClass(row, week)"
+                    class="grid-cell"
+                    role="button"
+                    tabindex="0"
+                    @click="openExplanationForCell(row, week)"
+                    @keydown.enter="openExplanationForCell(row, week)"
+                    @keydown.space.prevent="openExplanationForCell(row, week)"
+                  >{{ cellDisplay(row, week) }}</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
         </div>
-        <p v-else class="muted">No data. Select a scenario and run a plan, or adjust filters.</p>
-      </section>
-    </template>
+        <p v-else class="text-sm text-slate-500 py-4">No data. Select a scenario and run a plan, or adjust filters.</p>
+      </template>
+    </section>
 
     <Teleport to="#right-panel-body">
       <div v-if="explanation" class="explanation-panel">
@@ -277,7 +286,12 @@ onMounted(async () => {
 .planning-grid .week-header {
   min-width: 96px;
   font-size: 0.75rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.025em;
+  color: var(--muted);
   white-space: nowrap;
+  padding: 0.375rem 0.5rem;
 }
 .planning-grid .row-label {
   font-size: 0.8125rem;

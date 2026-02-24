@@ -12,11 +12,13 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 
 
+@router.get("", response_model=list[Supplier])
 @router.get("/", response_model=list[Supplier])
 def list_suppliers(db: Session = Depends(get_db)) -> list[SupplierModel]:
     return db.query(SupplierModel).all()
 
 
+@router.post("", response_model=Supplier)
 @router.post("/", response_model=Supplier)
 def create_supplier(s: SupplierCreate, db: Session = Depends(get_db)) -> SupplierModel:
     existing = db.query(SupplierModel).filter(SupplierModel.code == s.code).first()
@@ -34,6 +36,18 @@ def get_supplier(supplier_id: int, db: Session = Depends(get_db)) -> SupplierMod
     obj = db.query(SupplierModel).filter(SupplierModel.id == supplier_id).first()
     if not obj:
         raise HTTPException(status_code=404, detail="Supplier not found")
+    return obj
+
+
+@router.put("/{supplier_id}", response_model=Supplier)
+def update_supplier(supplier_id: int, s: SupplierCreate, db: Session = Depends(get_db)) -> SupplierModel:
+    obj = db.query(SupplierModel).filter(SupplierModel.id == supplier_id).first()
+    if not obj:
+        raise HTTPException(status_code=404, detail="Supplier not found")
+    for k, v in s.model_dump().items():
+        setattr(obj, k, v)
+    db.commit()
+    db.refresh(obj)
     return obj
 
 

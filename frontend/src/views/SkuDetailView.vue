@@ -52,6 +52,32 @@
         />
       </section>
 
+      <section v-if="activeTab === 'metrics'" class="content-section">
+        <p class="muted">WAPE and Bias for this SKU/warehouse (last 12 weeks with actuals).</p>
+        <div class="form-row" style="max-width: 20rem;">
+          <label class="form-label">Forecast run (train end week)</label>
+          <select v-model="metricsRunKey" class="app-select" @change="loadMetrics">
+            <option value="">— Select run —</option>
+            <option v-for="opt in metricsRunOptions" :key="opt.key" :value="opt.key">{{ opt.label }}</option>
+          </select>
+        </div>
+        <div v-if="metricsLoading" class="muted">Loading…</div>
+        <template v-else-if="currentMetric">
+          <div class="metrics-panel">
+            <dl class="explanation-dl">
+              <dt>WAPE</dt>
+              <dd>{{ currentMetric.wape != null ? (currentMetric.wape * 100).toFixed(2) + '%' : '—' }}</dd>
+              <dt>Bias</dt>
+              <dd>{{ currentMetric.bias != null ? currentMetric.bias.toFixed(4) : '—' }}</dd>
+              <dt>Eval weeks</dt>
+              <dd>{{ currentMetric.eval_weeks ?? '—' }}</dd>
+            </dl>
+            <span class="metric-badge" :class="wapeBadgeClass">{{ wapeBadgeLabel }}</span>
+          </div>
+        </template>
+        <p v-else-if="metricsRunKey && !metricsLoading" class="muted">No metrics for this run.</p>
+      </section>
+
       <section v-if="activeTab === 'explanation'" class="content-section">
         <p class="muted">Select a week to see the explain-the-forecast breakdown.</p>
         <div class="form-row" style="max-width: 14rem;">
@@ -68,6 +94,21 @@
             <dt>Start qty</dt><dd>{{ explanationData.projection.start_qty ?? '—' }}</dd>
             <dt>Receipts</dt><dd>{{ explanationData.projection.receipts_qty ?? '—' }}</dd>
             <dt>Demand</dt><dd>{{ explanationData.projection.demand_qty ?? '—' }}</dd>
+            <template v-if="explanationData.demand_breakdown">
+              <dt>Demand composition</dt>
+              <dd>
+                <span v-if="explanationData.demand_breakdown.OVERRIDE">Override ({{ explanationData.demand_breakdown.reason_code ?? '—' }})</span>
+                <template v-else-if="explanationData.demand_breakdown.FORECAST_TOTAL != null">Forecast total</template>
+                <template v-else>
+                  <span v-if="demandBreakdownIncludedLabel">In: {{ demandBreakdownIncludedLabel }}</span>
+                  <span v-if="demandBreakdownExcludedLabel"> · Ex: {{ demandBreakdownExcludedLabel }}</span>
+                  <span v-if="explanationData.demand_breakdown.CUSTOMER != null"> · CUSTOMER {{ explanationData.demand_breakdown.CUSTOMER }}</span>
+                  <span v-if="explanationData.demand_breakdown.SAMPLES != null"> SAMPLES {{ explanationData.demand_breakdown.SAMPLES }}</span>
+                  <span v-if="explanationData.demand_breakdown.ADJUSTMENT != null"> ADJUSTMENT {{ explanationData.demand_breakdown.ADJUSTMENT }}</span>
+                  <span v-if="explanationData.demand_includes_samples === false" class="muted"> (samples excluded)</span>
+                </template>
+              </dd>
+            </template>
             <dt>Projected qty</dt><dd>{{ explanationData.projection.projected_qty }}</dd>
             <dt>Weeks of cover</dt><dd>{{ explanationData.projection.weeks_of_cover ?? '—' }}</dd>
             <dt>Stockout</dt><dd>{{ explanationData.projection.stockout ? 'Yes' : 'No' }}</dd>
@@ -183,6 +224,7 @@ import { ref, computed, watch, onMounted } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { usePlanningStore } from '@/stores/planning'
 import { useAdminStore } from '@/stores/admin'
+import api from '@/api/client'
 import SkuTimeline from '@/components/SkuTimeline.vue'
 import type {
   SkuWeekExplanation,
@@ -194,6 +236,17 @@ import type {
   InventorySnapshot,
 } from '@/api/client'
 
+interface ForecastMetricRow {
+  model_name: string
+  model_version: string
+  train_end_week_start: string
+  sku: string
+  warehouse_code: string
+  eval_weeks?: number | null
+  wape: number | null
+  bias: number | null
+}
+
 const route = useRoute()
 const router = useRouter()
 const store = usePlanningStore()
@@ -202,6 +255,7 @@ const adminStore = useAdminStore()
 const tabs = [
   { id: 'timeline', label: 'Timeline' },
   { id: 'explanation', label: 'Explanation' },
+  { id: 'metrics', label: 'Forecast metrics' },
   { id: 'parameters', label: 'Parameters' },
   { id: 'history', label: 'History' },
   { id: 'orders', label: 'Orders' },
@@ -233,6 +287,9 @@ const paramsLoading = ref(false)
 const explanationWeek = ref('')
 const explanationData = ref<SkuWeekExplanation | null>(null)
 const explanationLoading = ref(false)
+const forecastMetricsRows = ref<ForecastMetricRow[]>([])
+const metricsLoading = ref(false)
+const metricsRunKey = ref('')
 
 const planRuns = computed(() => store.planRuns)
 const selectedRunName = computed(() => {
@@ -244,6 +301,58 @@ const selectedRunName = computed(() => {
 const explanationWeeks = computed(() => {
   const weeks = new Set(projected.value.map((p) => p.week_start))
   return Array.from(weeks).sort()
+})
+
+const demandBreakdownIncludedLabel = computed(() => {
+  const b = explanationData.value?.demand_breakdown as Record<string, unknown> | undefined
+  const inc = b?.included
+  return Array.isArray(inc) ? (inc as string[]).join(', ') : ''
+})
+const demandBreakdownExcludedLabel = computed(() => {
+  const b = explanationData.value?.demand_breakdown as Record<string, unknown> | undefined
+  const exc = b?.excluded
+  return Array.isArray(exc) ? (exc as string[]).join(', ') : ''
+})
+
+const metricsRunOptions = computed(() => {
+  const seen = new Set<string>()
+  const opts: { key: string; label: string }[] = []
+  for (const m of forecastMetricsRows.value) {
+    const key = `${m.model_name}|${m.model_version}|${m.train_end_week_start}`
+    if (!seen.has(key)) {
+      seen.add(key)
+      opts.push({ key, label: `${m.model_name} ${m.model_version} — ${m.train_end_week_start}` })
+    }
+  }
+  opts.sort((a, b) => b.key.localeCompare(a.key))
+  return opts
+})
+
+const currentMetric = computed(() => {
+  if (!metricsRunKey.value) return null
+  const [model_name, model_version, train_end_week_start] = metricsRunKey.value.split('|')
+  return forecastMetricsRows.value.find(
+    (m) =>
+      m.model_name === model_name &&
+      m.model_version === model_version &&
+      m.train_end_week_start === train_end_week_start
+  ) ?? null
+})
+
+const wapeBadgeLabel = computed(() => {
+  const w = currentMetric.value?.wape
+  if (w == null) return '—'
+  if (w < 0.2) return 'Good'
+  if (w < 0.4) return 'OK'
+  return 'Poor'
+})
+
+const wapeBadgeClass = computed(() => {
+  const w = currentMetric.value?.wape
+  if (w == null) return 'metric-badge--none'
+  if (w < 0.2) return 'metric-badge--good'
+  if (w < 0.4) return 'metric-badge--ok'
+  return 'metric-badge--poor'
 })
 
 function goToDetail() {
@@ -326,6 +435,23 @@ async function loadExplanation() {
   }
 }
 
+async function loadMetrics() {
+  if (!sku.value || !warehouseCode.value) return
+  metricsLoading.value = true
+  try {
+    const { data } = await api.get<ForecastMetricRow[]>('/forecast/metrics', {
+      params: { sku: sku.value, warehouse_code: warehouseCode.value, limit: 200 },
+    })
+    forecastMetricsRows.value = data
+    if (data.length && !metricsRunKey.value) {
+      const first = data[0]
+      metricsRunKey.value = `${first.model_name}|${first.model_version}|${first.train_end_week_start}`
+    }
+  } finally {
+    metricsLoading.value = false
+  }
+}
+
 watch([sku, warehouseCode, planRunId], () => {
   loadTimeline()
   loadOrders()
@@ -339,6 +465,7 @@ watch(activeTab, (tab) => {
   if (tab === 'orders' && plannedOrders.value.length === 0) loadOrders()
   if (tab === 'history') loadHistory()
   if (tab === 'parameters') loadParameters()
+  if (tab === 'metrics') loadMetrics()
 })
 
 onMounted(async () => {
@@ -377,5 +504,17 @@ onMounted(async () => {
 .explanation-dl { margin: 0; }
 .explanation-dl dt { font-weight: 500; color: var(--muted); margin-top: 0.35rem; }
 .explanation-dl dd { margin: 0 0 0 0.5rem; }
+.metrics-panel { display: flex; align-items: flex-start; gap: 1rem; flex-wrap: wrap; }
+.metric-badge {
+  display: inline-block;
+  padding: 0.25rem 0.5rem;
+  border-radius: 4px;
+  font-size: 0.875rem;
+  font-weight: 500;
+}
+.metric-badge--good { background: #d4edda; color: #155724; }
+.metric-badge--ok { background: #fff3cd; color: #856404; }
+.metric-badge--poor { background: #f8d7da; color: #721c24; }
+.metric-badge--none { background: var(--hover); color: var(--muted); }
 code { font-size: 0.8125rem; background: var(--hover); padding: 0.1rem 0.3rem; border-radius: 2px; }
 </style>

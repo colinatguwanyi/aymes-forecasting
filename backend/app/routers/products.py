@@ -12,11 +12,13 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 
 
+@router.get("", response_model=list[Product])
 @router.get("/", response_model=list[Product])
 def list_products(db: Session = Depends(get_db)) -> list[ProductModel]:
     return db.query(ProductModel).all()
 
 
+@router.post("", response_model=Product)
 @router.post("/", response_model=Product)
 def create_product(p: ProductCreate, db: Session = Depends(get_db)) -> ProductModel:
     existing = db.query(ProductModel).filter(ProductModel.sku == p.sku).first()
@@ -34,6 +36,18 @@ def get_product(product_id: int, db: Session = Depends(get_db)) -> ProductModel:
     obj = db.query(ProductModel).filter(ProductModel.id == product_id).first()
     if not obj:
         raise HTTPException(status_code=404, detail="Product not found")
+    return obj
+
+
+@router.put("/{product_id}", response_model=Product)
+def update_product(product_id: int, p: ProductCreate, db: Session = Depends(get_db)) -> ProductModel:
+    obj = db.query(ProductModel).filter(ProductModel.id == product_id).first()
+    if not obj:
+        raise HTTPException(status_code=404, detail="Product not found")
+    for k, v in p.model_dump().items():
+        setattr(obj, k, v)
+    db.commit()
+    db.refresh(obj)
     return obj
 
 

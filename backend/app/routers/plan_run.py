@@ -1,15 +1,25 @@
 from __future__ import annotations
 
 import logging
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta, timezone
+from decimal import Decimal
 from decimal import Decimal
 from typing import Any, cast
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Body, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
 
 from app.database import get_db
-from app.models import PlanRun, PlannedOrder, PlanningPolicy, ProjectedInventory
+from app.models import (
+    DemandOverrideWeekly,
+    PlanRun,
+    PlanRunDemandInputWeekly,
+    PlanRunFreezeEvent,
+    PlannedOrder,
+    PlannedOrderOverrideWeekly,
+    PlanningPolicy,
+    ProjectedInventory,
+)
 from app.schemas import (
     PlanRun as PlanRunSchema,
     PlannedOrder as PlannedOrderSchema,
@@ -19,20 +29,47 @@ from app.schemas import (
     SkuWeekExplanationPolicy,
     SkuWeekExplanationProjection,
 )
-from app.services.planning import run_plan
+from app.services.demand_resolver import resolve_demand_for_run, _frozen_mondays_for_plan
+from app.services.planning import _monday_before, run_plan
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
+
+
+def _human_breakdown(breakdown: dict[str, Any] | None, source: str) -> str | None:
+    """Human-readable demand breakdown for explain UI."""
+    if not breakdown:
+        return None
+    if "override" in breakdown:
+        return f"Override: {breakdown['override']}"
+    if "forecast_total" in breakdown:
+        return f"Forecast total: {breakdown['forecast_total']}"
+    if "preserved" in breakdown:
+        return f"Preserved (frozen): {breakdown['preserved']}"
+    parts = [f"{k}: {v}" for k, v in sorted(breakdown.items()) if isinstance(v, (int, float))]
+    return ", ".join(parts) if parts else None
 
 
 @router.post("/run", response_model=PlanRunSchema)
 def run_planning(
     scenario_name: str = Query(..., description="Scenario name for this run"),
     run_at: str | None = Query(None, description="Date to use as run date (YYYY-MM-DD)"),
+    demand_source: str = Query("actuals", description="Demand source: actuals | baseline | blended"),
+    freeze_weeks: int = Query(4, ge=0, le=52),
+    created_by: str | None = Query(None),
+    notes: str | None = Query(None),
     db: Session = Depends(get_db),
 ) -> PlanRun:
     run_date = date.fromisoformat(run_at) if run_at else date.today()
-    plan_run = run_plan(db, scenario_name=scenario_name, run_at=run_date)
+    plan_run = run_plan(
+        db,
+        scenario_name=scenario_name,
+        run_at=run_date,
+        demand_source=demand_source,
+        freeze_weeks=freeze_weeks,
+        created_by=created_by,
+        notes=notes,
+    )
     return plan_run
 
 
@@ -46,6 +83,28 @@ def get_plan_run(plan_run_id: int, db: Session = Depends(get_db)) -> PlanRun:
     run = db.query(PlanRun).filter(PlanRun.id == plan_run_id).first()
     if not run:
         raise HTTPException(status_code=404, detail="Plan run not found")
+    return run
+
+
+@router.patch("/runs/{plan_run_id}", response_model=PlanRunSchema)
+def update_plan_run(
+    plan_run_id: int,
+    demand_source: str | None = Query(None),
+    freeze_weeks: int | None = Query(None, ge=0, le=52),
+    notes: str | None = Query(None),
+    db: Session = Depends(get_db),
+) -> PlanRun:
+    run = db.query(PlanRun).filter(PlanRun.id == plan_run_id).first()
+    if not run:
+        raise HTTPException(status_code=404, detail="Plan run not found")
+    if demand_source is not None:
+        run.demand_source = demand_source
+    if freeze_weeks is not None:
+        run.freeze_weeks = freeze_weeks
+    if notes is not None:
+        run.notes = notes
+    db.commit()
+    db.refresh(run)
     return run
 
 
@@ -145,6 +204,434 @@ def get_plan_exceptions(
     return out
 
 
+@router.get("/runs/{plan_run_id}/demand-inputs")
+def get_demand_inputs(
+    plan_run_id: int,
+    from_week: str | None = Query(None),
+    to_week: str | None = Query(None),
+    db: Session = Depends(get_db),
+) -> list[dict[str, Any]]:
+    run = db.query(PlanRun).filter(PlanRun.id == plan_run_id).first()
+    if not run:
+        raise HTTPException(status_code=404, detail="Plan run not found")
+    q = db.query(PlanRunDemandInputWeekly).filter(PlanRunDemandInputWeekly.plan_run_id == plan_run_id)
+    if from_week:
+        q = q.filter(PlanRunDemandInputWeekly.week_start >= date.fromisoformat(from_week))
+    if to_week:
+        q = q.filter(PlanRunDemandInputWeekly.week_start <= date.fromisoformat(to_week))
+    rows = q.order_by(PlanRunDemandInputWeekly.week_start, PlanRunDemandInputWeekly.sku).all()
+    return [
+        {
+            "week_start": r.week_start.isoformat(),
+            "sku": r.sku,
+            "warehouse_code": r.warehouse_code,
+            "demand_qty": float(cast(Decimal, r.demand_qty)),
+            "source": r.source,
+            "source_ref": r.source_ref,
+            "demand_breakdown_json": getattr(r, "demand_breakdown_json", None),
+            "demand_includes_samples": bool(getattr(r, "demand_includes_samples", True)),
+            "is_frozen": bool(r.is_frozen),
+        }
+        for r in rows
+    ]
+
+
+@router.post("/runs/{plan_run_id}/demand-overrides")
+def upsert_demand_overrides(
+    plan_run_id: int,
+    body: list[dict[str, Any]] = Body(..., description="List of {week_start, sku, warehouse_code, override_qty, reason_code, notes?, created_by?}"),
+    db: Session = Depends(get_db),
+) -> dict[str, Any]:
+    run = db.query(PlanRun).filter(PlanRun.id == plan_run_id).first()
+    if not run:
+        raise HTTPException(status_code=404, detail="Plan run not found")
+    for row in body:
+        week_start = date.fromisoformat(row["week_start"])
+        sku = str(row["sku"])
+        warehouse_code = str(row["warehouse_code"])
+        override_qty = Decimal(str(row["override_qty"]))
+        reason_code = str(row.get("reason_code", "other"))
+        notes = row.get("notes")
+        created_by = row.get("created_by")
+        existing = (
+            db.query(DemandOverrideWeekly)
+            .filter(
+                DemandOverrideWeekly.plan_run_id == plan_run_id,
+                DemandOverrideWeekly.week_start == week_start,
+                DemandOverrideWeekly.sku == sku,
+                DemandOverrideWeekly.warehouse_code == warehouse_code,
+            )
+            .first()
+        )
+        if existing:
+            existing.override_qty = override_qty
+            existing.reason_code = reason_code
+            existing.notes = notes
+            if created_by is not None:
+                existing.created_by = created_by
+        else:
+            db.add(
+                DemandOverrideWeekly(
+                    plan_run_id=plan_run_id,
+                    week_start=week_start,
+                    sku=sku,
+                    warehouse_code=warehouse_code,
+                    override_qty=override_qty,
+                    reason_code=reason_code,
+                    notes=notes,
+                    created_by=created_by,
+                )
+            )
+    db.commit()
+    return {"updated": len(body)}
+
+
+@router.delete("/runs/{plan_run_id}/demand-overrides")
+def delete_demand_overrides(
+    plan_run_id: int,
+    body: list[dict[str, Any]] = Body(..., description="List of {week_start, sku, warehouse_code}"),
+    db: Session = Depends(get_db),
+) -> dict[str, Any]:
+    run = db.query(PlanRun).filter(PlanRun.id == plan_run_id).first()
+    if not run:
+        raise HTTPException(status_code=404, detail="Plan run not found")
+    deleted = 0
+    for row in body:
+        week_start = date.fromisoformat(row["week_start"])
+        sku = str(row["sku"])
+        warehouse_code = str(row["warehouse_code"])
+        n = (
+            db.query(DemandOverrideWeekly)
+            .filter(
+                DemandOverrideWeekly.plan_run_id == plan_run_id,
+                DemandOverrideWeekly.week_start == week_start,
+                DemandOverrideWeekly.sku == sku,
+                DemandOverrideWeekly.warehouse_code == warehouse_code,
+            )
+            .delete()
+        )
+        deleted += n
+    db.commit()
+    return {"deleted": deleted}
+
+
+@router.get("/runs/{plan_run_id}/order-overrides")
+def get_order_overrides(
+    plan_run_id: int,
+    db: Session = Depends(get_db),
+) -> list[dict[str, Any]]:
+    run = db.query(PlanRun).filter(PlanRun.id == plan_run_id).first()
+    if not run:
+        raise HTTPException(status_code=404, detail="Plan run not found")
+    rows = (
+        db.query(PlannedOrderOverrideWeekly)
+        .filter(PlannedOrderOverrideWeekly.plan_run_id == plan_run_id)
+        .order_by(PlannedOrderOverrideWeekly.week_start, PlannedOrderOverrideWeekly.sku)
+        .all()
+    )
+    out_list: list[dict[str, Any]] = []
+    for r in rows:
+        _cat = getattr(r, "created_at", None)
+        out_list.append({
+            "week_start": r.week_start.isoformat(),
+            "sku": r.sku,
+            "warehouse_code": r.warehouse_code,
+            "override_order_qty": float(cast(Decimal, r.override_order_qty)),
+            "reason_code": r.reason_code,
+            "notes": r.notes,
+            "created_at": _cat.isoformat() if _cat is not None else None,
+            "created_by": r.created_by,
+        })
+    return out_list
+
+
+@router.post("/runs/{plan_run_id}/order-overrides")
+def upsert_order_overrides(
+    plan_run_id: int,
+    body: list[dict[str, Any]] = Body(..., description="List of {week_start, sku, warehouse_code, override_order_qty, reason_code, notes?, created_by?}"),
+    db: Session = Depends(get_db),
+) -> dict[str, Any]:
+    run = db.query(PlanRun).filter(PlanRun.id == plan_run_id).first()
+    if not run:
+        raise HTTPException(status_code=404, detail="Plan run not found")
+    for row in body:
+        week_start = date.fromisoformat(row["week_start"])
+        sku = str(row["sku"])
+        warehouse_code = str(row["warehouse_code"])
+        override_order_qty = Decimal(str(row["override_order_qty"]))
+        reason_code = str(row.get("reason_code", "other"))
+        notes = row.get("notes")
+        created_by = row.get("created_by")
+        existing = (
+            db.query(PlannedOrderOverrideWeekly)
+            .filter(
+                PlannedOrderOverrideWeekly.plan_run_id == plan_run_id,
+                PlannedOrderOverrideWeekly.week_start == week_start,
+                PlannedOrderOverrideWeekly.sku == sku,
+                PlannedOrderOverrideWeekly.warehouse_code == warehouse_code,
+            )
+            .first()
+        )
+        if existing:
+            existing.override_order_qty = override_order_qty
+            existing.reason_code = reason_code
+            existing.notes = notes
+            if created_by is not None:
+                existing.created_by = created_by
+        else:
+            db.add(
+                PlannedOrderOverrideWeekly(
+                    plan_run_id=plan_run_id,
+                    week_start=week_start,
+                    sku=sku,
+                    warehouse_code=warehouse_code,
+                    override_order_qty=override_order_qty,
+                    reason_code=reason_code,
+                    notes=notes,
+                    created_by=created_by,
+                )
+            )
+    db.commit()
+    return {"updated": len(body)}
+
+
+@router.delete("/runs/{plan_run_id}/order-overrides")
+def delete_order_overrides(
+    plan_run_id: int,
+    body: list[dict[str, Any]] = Body(..., description="List of {week_start, sku, warehouse_code}"),
+    db: Session = Depends(get_db),
+) -> dict[str, Any]:
+    run = db.query(PlanRun).filter(PlanRun.id == plan_run_id).first()
+    if not run:
+        raise HTTPException(status_code=404, detail="Plan run not found")
+    deleted = 0
+    for row in body:
+        week_start = date.fromisoformat(row["week_start"])
+        sku = str(row["sku"])
+        warehouse_code = str(row["warehouse_code"])
+        n = (
+            db.query(PlannedOrderOverrideWeekly)
+            .filter(
+                PlannedOrderOverrideWeekly.plan_run_id == plan_run_id,
+                PlannedOrderOverrideWeekly.week_start == week_start,
+                PlannedOrderOverrideWeekly.sku == sku,
+                PlannedOrderOverrideWeekly.warehouse_code == warehouse_code,
+            )
+            .delete()
+        )
+        deleted += n
+    db.commit()
+    return {"deleted": deleted}
+
+
+@router.post("/runs/{plan_run_id}/freeze")
+def freeze_plan_run(
+    plan_run_id: int,
+    body: dict[str, Any] = Body(..., description="{ scope: 'demand'|'orders'|'both', freeze_weeks?: int, notes?: str, frozen_by?: str }"),
+    db: Session = Depends(get_db),
+) -> dict[str, Any]:
+    run = db.query(PlanRun).filter(PlanRun.id == plan_run_id).first()
+    if not run:
+        raise HTTPException(status_code=404, detail="Plan run not found")
+    scope = str(body.get("scope", "both"))
+    freeze_weeks = int(body.get("freeze_weeks", run.freeze_weeks))
+    notes = body.get("notes")
+    frozen_by = body.get("frozen_by")
+    plan_start = cast(date, getattr(run, "plan_start_week_start", run.run_at))
+    frozen_mondays = _frozen_mondays_for_plan(plan_start, freeze_weeks)
+    if scope in ("demand", "both"):
+        for w in frozen_mondays:
+            db.query(PlanRunDemandInputWeekly).filter(
+                PlanRunDemandInputWeekly.plan_run_id == plan_run_id,
+                PlanRunDemandInputWeekly.week_start == w,
+            ).update({"is_frozen": True}, synchronize_session=False)
+    if scope in ("orders", "both"):
+        for w in frozen_mondays:
+            db.query(PlannedOrder).filter(
+                PlannedOrder.plan_run_id == plan_run_id,
+                PlannedOrder.week_start == w,
+            ).update({"is_frozen": True}, synchronize_session=False)
+    db.add(
+        PlanRunFreezeEvent(
+            plan_run_id=plan_run_id,
+            frozen_by=frozen_by,
+            freeze_weeks=freeze_weeks,
+            scope=scope,
+            notes=notes,
+        )
+    )
+    db.commit()
+    return {"scope": scope, "freeze_weeks": freeze_weeks}
+
+
+@router.post("/runs/{plan_run_id}/unfreeze")
+def unfreeze_plan_run(
+    plan_run_id: int,
+    body: dict[str, Any] = Body(..., description="{ scope: 'demand'|'orders'|'both', from_week?: str, to_week?: str }"),
+    db: Session = Depends(get_db),
+) -> dict[str, Any]:
+    run = db.query(PlanRun).filter(PlanRun.id == plan_run_id).first()
+    if not run:
+        raise HTTPException(status_code=404, detail="Plan run not found")
+    scope = str(body.get("scope", "both"))
+    from_week = date.fromisoformat(body["from_week"]) if body.get("from_week") else None
+    to_week = date.fromisoformat(body["to_week"]) if body.get("to_week") else None
+    if scope in ("demand", "both"):
+        q = db.query(PlanRunDemandInputWeekly).filter(PlanRunDemandInputWeekly.plan_run_id == plan_run_id, PlanRunDemandInputWeekly.is_frozen.is_(True))
+        if from_week:
+            q = q.filter(PlanRunDemandInputWeekly.week_start >= from_week)
+        if to_week:
+            q = q.filter(PlanRunDemandInputWeekly.week_start <= to_week)
+        q.update({"is_frozen": False}, synchronize_session=False)
+    if scope in ("orders", "both"):
+        q = db.query(PlannedOrder).filter(PlannedOrder.plan_run_id == plan_run_id, PlannedOrder.is_frozen.is_(True))
+        if from_week:
+            q = q.filter(PlannedOrder.week_start >= from_week)
+        if to_week:
+            q = q.filter(PlannedOrder.week_start <= to_week)
+        q.update({"is_frozen": False}, synchronize_session=False)
+    db.commit()
+    return {"scope": scope}
+
+
+@router.post("/runs/{plan_run_id}/recalculate-demand")
+def recalculate_demand_inputs(
+    plan_run_id: int,
+    db: Session = Depends(get_db),
+) -> dict[str, Any]:
+    """Recompute demand inputs for non-frozen weeks only (does not re-run full planning)."""
+    run = db.query(PlanRun).filter(PlanRun.id == plan_run_id).first()
+    if not run:
+        raise HTTPException(status_code=404, detail="Plan run not found")
+    run_at = cast(date, run.run_at)
+    run_week = _monday_before(run_at)
+    to_week = run_week + timedelta(days=53 * 7)
+    resolve_demand_for_run(db, plan_run_id, run_week, to_week, recompute_non_frozen_only=True)
+    db.commit()
+    return {"plan_run_id": plan_run_id, "status": "ok"}
+
+
+@router.get("/runs/{plan_run_id}/explain")
+def explain_plan_run_cell(
+    plan_run_id: int,
+    sku: str = Query(...),
+    warehouse_code: str = Query(...),
+    week_start: str = Query(...),
+    db: Session = Depends(get_db),
+) -> dict[str, Any]:
+    """Explain demand_used, receipts, policy, why_order_qty for one SKU/warehouse/week."""
+    run = db.query(PlanRun).filter(PlanRun.id == plan_run_id).first()
+    if not run:
+        raise HTTPException(status_code=404, detail="Plan run not found")
+    week = date.fromisoformat(week_start)
+    demand_row = (
+        db.query(PlanRunDemandInputWeekly)
+        .filter(
+            PlanRunDemandInputWeekly.plan_run_id == plan_run_id,
+            PlanRunDemandInputWeekly.sku == sku,
+            PlanRunDemandInputWeekly.warehouse_code == warehouse_code,
+            PlanRunDemandInputWeekly.week_start == week,
+        )
+        .first()
+    )
+    proj = (
+        db.query(ProjectedInventory)
+        .filter(
+            ProjectedInventory.plan_run_id == plan_run_id,
+            ProjectedInventory.sku == sku,
+            ProjectedInventory.warehouse_code == warehouse_code,
+            ProjectedInventory.week_start == week,
+        )
+        .first()
+    )
+    policy_row = (
+        db.query(PlanningPolicy)
+        .filter(PlanningPolicy.sku == sku, PlanningPolicy.warehouse_code == warehouse_code)
+        .first()
+    )
+    planned = (
+        db.query(PlannedOrder)
+        .filter(
+            PlannedOrder.plan_run_id == plan_run_id,
+            PlannedOrder.sku == sku,
+            PlannedOrder.warehouse_code == warehouse_code,
+            PlannedOrder.week_start == week,
+        )
+        .first()
+    )
+    plan_start = cast(date, getattr(run, "plan_start_week_start", run.run_at))
+    freeze_weeks = int(getattr(run, "freeze_weeks", 4) or 4)
+    frozen_mondays = _frozen_mondays_for_plan(plan_start, freeze_weeks)
+    in_freeze_window = week in frozen_mondays
+
+    demand_used: dict[str, Any] = {
+        "qty": 0,
+        "source": "none",
+        "override": False,
+        "is_frozen": False,
+        "demand_breakdown": None,
+        "in_freeze_window": in_freeze_window,
+        "freeze_window_anchor": plan_start.isoformat(),
+    }
+    if demand_row:
+        breakdown = getattr(demand_row, "demand_breakdown_json", None)
+        demand_used = {
+            "qty": float(cast(Decimal, demand_row.demand_qty)),
+            "source": demand_row.source,
+            "source_ref": demand_row.source_ref,
+            "is_frozen": bool(demand_row.is_frozen),
+            "override": demand_row.source == "override",
+            "demand_breakdown": breakdown,
+            "in_freeze_window": in_freeze_window,
+            "freeze_window_anchor": plan_start.isoformat(),
+            "breakdown_summary": _human_breakdown(breakdown, str(demand_row.source)) if breakdown else None,
+        }
+    receipts_used: dict[str, Any] = {"qty": 0}
+    if proj:
+        receipts_used = {"qty": float(cast(Decimal, proj.receipts_qty))}
+    policy_params: dict[str, Any] = {}
+    if policy_row:
+        _tw = getattr(policy_row, "target_weeks", None)
+        _ss = getattr(policy_row, "safety_stock_weeks", None)
+        policy_params = {
+            "mode": getattr(policy_row.mode, "value", None),
+            "target_weeks": float(cast(Decimal, _tw)) if _tw is not None else None,
+            "safety_stock_weeks": float(cast(Decimal, _ss)) if _ss is not None else None,
+            "lead_time_weeks": sum(
+                float(getattr(policy_row, f, 0) or 0)
+                for f in ("lead_time_production_weeks", "lead_time_slot_wait_weeks", "lead_time_haulage_weeks", "lead_time_putaway_weeks", "lead_time_padding_weeks")
+            ),
+        }
+    why_order_qty: dict[str, Any] = {"order_qty": 0, "is_frozen": False, "steps": []}
+    if planned:
+        why_order_qty = {
+            "order_qty": float(cast(Decimal, planned.order_qty)),
+            "is_frozen": bool(planned.is_frozen),
+            "steps": ["Computed from WOS/ROP or applied override; frozen=" + str(bool(planned.is_frozen))],
+        }
+    proj_out: dict[str, Any] | None = None
+    if proj:
+        _woc = getattr(proj, "weeks_of_cover", None)
+        proj_out = {
+            "start_qty": float(cast(Decimal, proj.start_qty)),
+            "demand_qty": float(cast(Decimal, proj.demand_qty)),
+            "projected_qty": float(cast(Decimal, proj.projected_qty)),
+            "weeks_of_cover": float(_woc) if _woc is not None else None,
+            "stockout": bool(proj.stockout),
+        }
+    return {
+        "plan_run_id": plan_run_id,
+        "sku": sku,
+        "warehouse_code": warehouse_code,
+        "week_start": week_start,
+        "demand_used": demand_used,
+        "receipts_used": receipts_used,
+        "policy_params": policy_params,
+        "why_order_qty": why_order_qty,
+        "projection": proj_out,
+    }
+
+
 @router.get("/runs/{plan_run_id}/explanation", response_model=SkuWeekExplanation)
 def get_sku_week_explanation(
     plan_run_id: int,
@@ -204,6 +691,18 @@ def get_sku_week_explanation(
             weeks_of_cover=_r.weeks_of_cover,
             stockout=bool(_r.stockout),
         )
+    demand_input = (
+        db.query(PlanRunDemandInputWeekly)
+        .filter(
+            PlanRunDemandInputWeekly.plan_run_id == plan_run_id,
+            PlanRunDemandInputWeekly.sku == sku,
+            PlanRunDemandInputWeekly.warehouse_code == warehouse_code,
+            PlanRunDemandInputWeekly.week_start == week,
+        )
+        .first()
+    )
+    demand_breakdown = getattr(demand_input, "demand_breakdown_json", None) if demand_input else None
+    demand_includes_samples = bool(getattr(demand_input, "demand_includes_samples", True)) if demand_input else None
     return SkuWeekExplanation(
         sku=sku,
         warehouse_code=warehouse_code,
@@ -211,4 +710,6 @@ def get_sku_week_explanation(
         policy=policy,
         projection=projection,
         forecast_method="trailing_mean",
+        demand_breakdown=demand_breakdown,
+        demand_includes_samples=demand_includes_samples,
     )

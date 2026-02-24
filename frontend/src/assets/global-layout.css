@@ -1,26 +1,42 @@
-/* Enterprise layout: single font, locked colours, no gradients/shadows */
+/* Design system: slate-50 app, white cards, primary blue, compact tables */
+@import 'tailwindcss';
+
+@theme {
+  /* Primary: deep blue (single brand colour) */
+  --color-primary-50: #eff6ff;
+  --color-primary-100: #dbeafe;
+  --color-primary-200: #bfdbfe;
+  --color-primary-300: #93c5fd;
+  --color-primary-400: #60a5fa;
+  --color-primary-500: #3b82f6;
+  --color-primary-600: #2563eb;
+  --color-primary-700: #1d4ed8;
+  --color-primary-800: #1e40af;
+  --color-primary-900: #1e3a8a;
+  /* Surfaces */
+  --color-surface: #ffffff;
+  --color-bg: rgb(248 250 252); /* slate-50 */
+  /* Shadows */
+  --shadow-card: 0 1px 2px 0 rgba(0, 0, 0, 0.05);
+  /* Radius */
+  --radius-card: 0.75rem;
+  --radius-control: 0.5rem;
+}
 
 :root {
-  /* Base */
-  --main-bg: #fafafa;
-  --nav-bg: #f0f0f0;
-  --border: #e0e0e0;
-  --text: #2c2c2c;
-  --muted: #6b6b6b;
-  --hover: #e8e8e8;
-
-  /* Accent: one brand colour only */
+  --main-bg: rgb(248 250 252);
+  --nav-bg: #ffffff;
+  --border: #e2e8f0;
+  --text: #0f172a;
+  --muted: #64748b;
+  --hover: #f1f5f9;
   --accent: #2563eb;
-
-  /* Status: muted only */
   --success: #166534;
   --warning: #b45309;
   --error: #991b1b;
   --info: #475569;
-
-  /* Layout */
-  --top-bar-height: 48px;
-  --left-nav-expanded: 232px;
+  --top-bar-height: 3.5rem;
+  --left-nav-expanded: 240px;
   --left-nav-collapsed: 64px;
   --right-panel-width: 380px;
 }
@@ -29,10 +45,16 @@
   box-sizing: border-box;
 }
 
-html, body {
+html {
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+html,
+body {
   margin: 0;
   height: 100%;
-  font-family: 'Segoe UI', system-ui, -apple-system, sans-serif;
+  font-family: ui-sans-serif, system-ui, -apple-system, sans-serif;
   font-size: 14px;
   font-weight: 400;
   color: var(--text);
@@ -43,39 +65,100 @@ html, body {
   height: 100%;
 }
 
-/* Typography: single scale, no decorative emphasis */
+/* ========== Component layer: design tokens ========== */
+@layer components {
+  .page-shell {
+    @apply max-w-7xl mx-auto px-6 py-6;
+  }
+
+  .page-header {
+    @apply mb-6;
+  }
+  .page-header h1 {
+    @apply text-2xl font-semibold text-slate-900 tracking-tight;
+  }
+  .page-header .section-title {
+    @apply text-lg font-medium text-slate-800;
+  }
+
+  .card {
+    @apply bg-white border border-slate-200 rounded-xl shadow-sm;
+  }
+  .card-header {
+    @apply px-5 py-3 border-b border-slate-200 text-sm font-medium text-slate-700;
+  }
+  .card-body {
+    @apply p-5;
+  }
+
+  .form-label {
+    @apply block text-sm font-medium text-slate-600 mb-1;
+  }
+  .input {
+    @apply h-9 px-3 text-sm rounded-lg border border-slate-300 bg-white text-slate-900;
+    @apply focus:outline-none focus:ring-2 focus:ring-primary-500 focus:border-primary-500;
+  }
+  .select {
+    @apply h-9 px-3 text-sm rounded-lg border border-slate-300 bg-white text-slate-900;
+    @apply focus:outline-none focus:ring-2 focus:ring-primary-500 focus:border-primary-500;
+  }
+
+  .btn-primary {
+    @apply inline-flex items-center justify-center h-9 px-4 text-sm font-medium text-white bg-primary-600 rounded-lg;
+    @apply hover:bg-primary-700 focus:outline-none focus:ring-2 focus:ring-primary-500 focus:ring-offset-2;
+  }
+  .btn-secondary {
+    @apply inline-flex items-center justify-center h-9 px-4 text-sm font-medium text-slate-700 bg-white border border-slate-300 rounded-lg;
+    @apply hover:bg-slate-50 focus:outline-none focus:ring-2 focus:ring-primary-500 focus:ring-offset-2;
+  }
+
+  .badge-success {
+    @apply inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-emerald-50 text-emerald-700;
+  }
+  .badge-warn {
+    @apply inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-amber-50 text-amber-700;
+  }
+  .badge-danger {
+    @apply inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-red-50 text-red-700;
+  }
+  .badge-info {
+    @apply inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-slate-100 text-slate-700;
+  }
+}
+
+/* ========== Legacy compatibility (keep app-table etc.) ========== */
 h1, h2, h3, h4 {
   font-weight: 500;
   margin: 0 0 0.5rem 0;
 }
-h1 { font-size: 1.125rem; }
+h1 { font-size: 1.25rem; }
 h2 { font-size: 1rem; }
 h3, h4 { font-size: 0.9375rem; }
 p { margin: 0.25rem 0; }
 
-/* Tables: first-class, sticky headers, light separators */
 .app-table {
   width: 100%;
   border-collapse: collapse;
-  font-size: 14px;
+  font-size: 0.875rem;
 }
 .app-table thead {
   position: sticky;
   top: 0;
   z-index: 1;
-  background: var(--main-bg);
+  background: #ffffff;
   border-bottom: 1px solid var(--border);
 }
 .app-table th {
   text-align: left;
-  padding: 0.5rem 0.75rem;
-  font-weight: 500;
-  font-size: 0.8125rem;
+  padding: 0.375rem 0.75rem;
+  font-weight: 600;
+  font-size: 0.75rem;
   color: var(--muted);
-  text-transform: none;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
 }
 .app-table td {
-  padding: 0.5rem 0.75rem;
+  padding: 0.375rem 0.75rem;
   border-bottom: 1px solid var(--border);
 }
 .app-table tbody tr:hover {
@@ -86,7 +169,6 @@ p { margin: 0.25rem 0; }
   max-height: 100%;
 }
 
-/* Forms: labels above, muted help */
 .app-form-group {
   margin-bottom: 0.75rem;
 }
@@ -96,14 +178,9 @@ p { margin: 0.25rem 0; }
   color: var(--muted);
   margin-bottom: 0.25rem;
 }
-.app-form-group .help {
-  font-size: 0.75rem;
-  color: var(--muted);
-  margin-top: 0.2rem;
-}
 .app-input,
 .app-select {
-  padding: 0.4rem 0.5rem;
+  padding: 0.35rem 0.5rem;
   border: 1px solid var(--border);
   background: #fff;
   color: var(--text);
@@ -111,6 +188,8 @@ p { margin: 0.25rem 0; }
   font-family: inherit;
   width: 100%;
   max-width: 20rem;
+  border-radius: 0.5rem;
+  height: 2.25rem;
 }
 .app-input:focus,
 .app-select:focus {
@@ -119,13 +198,15 @@ p { margin: 0.25rem 0; }
   box-shadow: 0 0 0 2px rgba(37, 99, 235, 0.15);
 }
 .app-btn {
-  padding: 0.4rem 0.75rem;
+  padding: 0.35rem 0.75rem;
   border: 1px solid var(--border);
   background: #fff;
   color: var(--text);
   font-size: 14px;
   font-family: inherit;
   cursor: pointer;
+  border-radius: 0.5rem;
+  height: 2.25rem;
 }
 .app-btn-primary {
   background: var(--accent);
@@ -140,7 +221,6 @@ p { margin: 0.25rem 0; }
   cursor: not-allowed;
 }
 
-/* Content area: left-aligned, no card grids unless required */
 .page-content-inner {
   max-width: none;
   padding: 0;
@@ -159,6 +239,5 @@ p { margin: 0.25rem 0; }
   margin: 0.25rem 0 0.5rem 0;
 }
 
-/* Status row colour only when status-driven */
 .app-table tbody tr.row-status-warning { background: rgba(180, 83, 9, 0.08); }
 .app-table tbody tr.row-status-error { background: rgba(153, 27, 27, 0.08); }
