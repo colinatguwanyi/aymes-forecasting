@@ -5,7 +5,7 @@ from decimal import Decimal
 from typing import Any, cast
 
 from fastapi import APIRouter, Depends, Query
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 from sqlalchemy.orm import Session
 
 from sqlalchemy import func
@@ -20,6 +20,8 @@ router = APIRouter()
 
 
 class RecomputeMetricsBody(BaseModel):
+    model_config = ConfigDict(protected_namespaces=())
+
     model_name: str
     model_version: str
     train_end_week_start: date
@@ -47,50 +49,38 @@ def create_forecast_run(
 
 @router.get("/runs")
 def list_forecast_runs(
+    warehouse_code: str = Query("AAH", description="Scope to warehouse (e.g. AAH)"),
     db: Session = Depends(get_db),
 ) -> list[dict[str, Any]]:
-    """List published forecast runs: train_end_week_start, models, and row counts (from published_baseline_forecasts_weekly)."""
-    subq = (
+    """List published forecast runs (compact): train_end_week_start, optional model_name, count_rows. Source: published_baseline_forecasts_weekly."""
+    rows = (
         db.query(
             PublishedBaselineForecastWeekly.train_end_week_start,
-            PublishedBaselineForecastWeekly.selected_model_name,
-            PublishedBaselineForecastWeekly.selected_model_version,
-            func.count(PublishedBaselineForecastWeekly.id).label("count"),
+            func.count(PublishedBaselineForecastWeekly.id).label("count_rows"),
         )
-        .group_by(
-            PublishedBaselineForecastWeekly.train_end_week_start,
-            PublishedBaselineForecastWeekly.selected_model_name,
-            PublishedBaselineForecastWeekly.selected_model_version,
-        )
-    ).subquery()
-    runs = (
-        db.query(
-            subq.c.train_end_week_start,
-            func.sum(subq.c.count).label("total_rows"),
-        )
-        .group_by(subq.c.train_end_week_start)
-        .order_by(subq.c.train_end_week_start.desc())
+        .filter(PublishedBaselineForecastWeekly.warehouse_code == warehouse_code)
+        .group_by(PublishedBaselineForecastWeekly.train_end_week_start)
+        .order_by(PublishedBaselineForecastWeekly.train_end_week_start.desc())
         .all()
     )
     out: list[dict[str, Any]] = []
-    for train_end, total in runs:
-        models_q = (
-            db.query(
-                PublishedBaselineForecastWeekly.selected_model_name,
-                PublishedBaselineForecastWeekly.selected_model_version,
-                func.count(PublishedBaselineForecastWeekly.id).label("cnt"),
+    for train_end, count_rows in rows:
+        first = (
+            db.query(PublishedBaselineForecastWeekly.selected_model_name)
+            .filter(
+                PublishedBaselineForecastWeekly.warehouse_code == warehouse_code,
+                PublishedBaselineForecastWeekly.train_end_week_start == train_end,
             )
-            .filter(PublishedBaselineForecastWeekly.train_end_week_start == train_end)
-            .group_by(
-                PublishedBaselineForecastWeekly.selected_model_name,
-                PublishedBaselineForecastWeekly.selected_model_version,
-            )
-            .all()
+            .limit(1)
+            .first()
         )
+        model_name = first[0] if first else None
         out.append({
             "train_end_week_start": train_end.isoformat(),
-            "total_rows": total,
-            "models": [{"model_name": m, "model_version": v, "count": c} for m, v, c in models_q],
+            "model_name": model_name,
+            "count_rows": count_rows,
+            "created_at": None,
+            "notes": None,
         })
     return out
 
@@ -161,7 +151,7 @@ def get_published_baseline(
     max_week = min_week + timedelta(days=7 * (weeks - 1))
     out: list[dict[str, Any]] = []
     for r in rows:
-        if r.week_start > max_week:
+        if cast(date, r.week_start) > max_week:
             continue
         out.append({
             "sku": r.sku,

@@ -1,6 +1,7 @@
 import { defineStore } from 'pinia'
 import { ref, computed } from 'vue'
 import api, {
+  type ForecastRunOption,
   type PlanRun,
   type PlannedOrder,
   type PlanningException,
@@ -53,6 +54,30 @@ export const usePlanningStore = defineStore('planning', () => {
 
   async function recalculateDemand(planRunId: number) {
     await api.post(`/plan/runs/${planRunId}/recalculate-demand`)
+  }
+
+  async function getForecastRuns(warehouseCode: string = 'AAH') {
+    const { data } = await api.get<ForecastRunOption[]>(`/forecast/runs?warehouse_code=${encodeURIComponent(warehouseCode)}`)
+    return data
+  }
+
+  async function resetForecastRun(planRunId: number, resetAll: boolean = false, createdBy?: string) {
+    const params = new URLSearchParams()
+    if (resetAll) params.set('reset_all', 'true')
+    if (createdBy) params.set('created_by', createdBy)
+    const { data } = await api.post<PlanRun>(`/plan/runs/${planRunId}/reset-forecast-run${params.toString() ? `?${params}` : ''}`)
+    return data
+  }
+
+  async function updatePlanRunBaseline(planRunId: number, baselineTrainEndWeekStart: string | null) {
+    const params = new URLSearchParams()
+    if (baselineTrainEndWeekStart != null && baselineTrainEndWeekStart !== '') {
+      params.set('baseline_train_end_week_start', baselineTrainEndWeekStart)
+    } else {
+      params.set('clear_baseline_train_end_week_start', 'true')
+    }
+    const { data } = await api.patch<PlanRun>(`/plan/runs/${planRunId}?${params}`)
+    return data
   }
 
   async function fetchExplain(planRunId: number, sku: string, warehouseCode: string, weekStart: string) {
@@ -179,6 +204,9 @@ export const usePlanningStore = defineStore('planning', () => {
     runPlan,
     freezePlanRun,
     recalculateDemand,
+    getForecastRuns,
+    resetForecastRun,
+    updatePlanRunBaseline,
     fetchExplain,
     fetchProjectedInventory,
     fetchPlannedOrders,

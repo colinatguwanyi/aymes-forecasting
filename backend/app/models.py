@@ -259,6 +259,16 @@ class PlanRunFreezeEvent(Base):
     notes = Column(Text, nullable=True)
 
 
+class PlanRunEvent(Base):
+    __tablename__ = "plan_run_events"
+    id = Column(Integer, primary_key=True, index=True)
+    plan_run_id = Column(Integer, ForeignKey("plan_runs.id", ondelete="CASCADE"), nullable=False)
+    event_type = Column(String(64), nullable=False)
+    created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    created_by = Column(String(256), nullable=True)
+    details_json = Column(JSONB, nullable=True)
+
+
 class ProjectedInventory(Base):
     """Stored per week: start_qty, receipts_qty, demand_qty, end_qty (projected_qty), weeks_cover (weeks_of_cover), stockout."""
     __tablename__ = "projected_inventory"

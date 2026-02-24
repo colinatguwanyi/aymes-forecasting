@@ -191,6 +191,20 @@ def get_latest_train_end_week_start(
     return row[0] if row and row[0] is not None else None
 
 
+def published_run_exists(db: Session, train_end_week_start: date, warehouse_code: str = "AAH") -> bool:
+    """True if at least one row exists in published_baseline_forecasts_weekly for this train_end and warehouse."""
+    return (
+        db.query(PublishedBaselineForecastWeekly.id)
+        .filter(
+            PublishedBaselineForecastWeekly.train_end_week_start == train_end_week_start,
+            PublishedBaselineForecastWeekly.warehouse_code == warehouse_code,
+        )
+        .limit(1)
+        .first()
+        is not None
+    )
+
+
 def _resolve_baseline_train_end(db: Session, run: PlanRun, warehouse_code: str = "AAH") -> date:
     """
     Choose train_end_week_start for baseline/blended: use selected (persisted), else user override, else latest.
@@ -202,6 +216,10 @@ def _resolve_baseline_train_end(db: Session, run: PlanRun, warehouse_code: str =
         return cast(date, selected)
     user_override = getattr(run, "baseline_train_end_week_start", None)
     if user_override is not None:
+        if not published_run_exists(db, user_override, warehouse_code):
+            raise NoBaselineRunsError(
+                f"Selected forecast run {user_override!s} not found. Choose another run or reset to latest."
+            )
         run.selected_train_end_week_start = user_override
         db.flush()
         return user_override

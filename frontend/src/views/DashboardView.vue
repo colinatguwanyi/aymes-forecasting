@@ -23,6 +23,7 @@
       <section v-if="selectedRunId" class="content-section">
         <h2>Plan run actions</h2>
         <p class="muted">Selected: {{ selectedRunName }}</p>
+        <div v-if="actionMessage" class="action-message">{{ actionMessage }}</div>
         <div class="actions-row">
           <button type="button" @click="doFreeze" class="app-btn app-btn-secondary">Freeze now</button>
           <select v-model="freezeScope" class="app-select" style="max-width: 8rem;">
@@ -31,7 +32,34 @@
             <option value="orders">Orders only</option>
           </select>
           <button type="button" @click="doRecalculateDemand" class="app-btn app-btn-secondary">Recalculate (non-frozen demand)</button>
+          <template v-if="selectedRun && (selectedRun.demand_source === 'baseline' || selectedRun.demand_source === 'blended')">
+            <label class="form-label">Forecast run (optional)</label>
+            <select
+              :value="forecastRunPickerValue"
+              @change="onForecastRunChange(($event.target as HTMLSelectElement).value)"
+              class="app-select"
+              style="max-width: 14rem;"
+              :disabled="forecastRunsLoading"
+            >
+              <option value="">Latest available (auto)</option>
+              <option v-for="opt in forecastRunOptions" :key="opt.train_end_week_start" :value="opt.train_end_week_start">
+                {{ opt.train_end_week_start }} ({{ opt.count_rows }} rows)
+              </option>
+            </select>
+            <button
+              v-if="selectedRun.selected_train_end_week_start"
+              type="button"
+              @click="doResetForecastRun"
+              class="app-btn app-btn-secondary"
+              :disabled="resetForecastRunLoading"
+            >
+              Reset to latest
+            </button>
+          </template>
         </div>
+        <p v-if="selectedRun && (selectedRun.demand_source === 'baseline' || selectedRun.demand_source === 'blended')" class="muted helper-text">
+          If unset, the next recalc uses the latest available run and pins it.
+        </p>
       </section>
 
       <section class="content-section">
@@ -196,7 +224,7 @@
 import { ref, computed, onMounted, watch } from 'vue'
 import api from '@/api/client'
 import { usePlanningStore } from '@/stores/planning'
-import type { ProjectedInventory, PlanningException } from '@/api/client'
+import type { ForecastRunOption, ProjectedInventory, PlanningException } from '@/api/client'
 
 export interface ForecastMetric {
   model_name: string
@@ -299,6 +327,19 @@ const topRisks = computed(() => {
 const runAName = computed(() => planRuns.value.find((r) => r.id === compareRunA.value)?.scenario_name ?? '—')
 const runBName = computed(() => planRuns.value.find((r) => r.id === compareRunB.value)?.scenario_name ?? '—')
 const selectedRunName = computed(() => planRuns.value.find((r) => r.id === selectedRunId.value)?.scenario_name ?? '—')
+const selectedRun = computed(() => planRuns.value.find((r) => r.id === selectedRunId.value) ?? null)
+
+const forecastRunOptions = ref<ForecastRunOption[]>([])
+const forecastRunsLoading = ref(false)
+const resetForecastRunLoading = ref(false)
+const actionMessage = ref('')
+
+const forecastRunPickerValue = computed(() => selectedRun.value?.baseline_train_end_week_start ?? '')
+
+function setActionMessage(msg: string) {
+  actionMessage.value = msg
+  setTimeout(() => { actionMessage.value = '' }, 4000)
+}
 
 async function runScenario() {
   await store.runPlan(scenarioName.value, undefined, demandSource.value, freezeWeeks.value)
@@ -330,8 +371,20 @@ onMounted(async () => {
 watch(selectedRunId, async (id) => {
   if (id) {
     projected.value = await store.fetchProjectedInventory(id)
+    const run = planRuns.value.find((r) => r.id === id)
+    if (run && (run.demand_source === 'baseline' || run.demand_source === 'blended')) {
+      forecastRunsLoading.value = true
+      try {
+        forecastRunOptions.value = await store.getForecastRuns('AAH')
+      } finally {
+        forecastRunsLoading.value = false
+      }
+    } else {
+      forecastRunOptions.value = []
+    }
   } else {
     projected.value = []
+    forecastRunOptions.value = []
   }
 }, { immediate: true })
 
@@ -354,6 +407,32 @@ async function doRecalculateDemand() {
   if (!selectedRunId.value) return
   await store.recalculateDemand(selectedRunId.value)
   if (selectedRunId.value) projected.value = await store.fetchProjectedInventory(selectedRunId.value)
+}
+
+async function onForecastRunChange(value: string) {
+  if (!selectedRunId.value) return
+  const val = value.trim() || null
+  try {
+    await store.updatePlanRunBaseline(selectedRunId.value, val)
+    await store.fetchPlanRuns()
+  } catch (err: unknown) {
+    const msg = err && typeof err === 'object' && 'response' in err && typeof (err as { response?: { data?: { detail?: string } } }).response?.data?.detail === 'string'
+      ? (err as { response: { data: { detail: string } } }).response.data.detail
+      : 'Failed to update forecast run.'
+    setActionMessage(msg)
+  }
+}
+
+async function doResetForecastRun() {
+  if (!selectedRunId.value) return
+  resetForecastRunLoading.value = true
+  try {
+    await store.resetForecastRun(selectedRunId.value, false)
+    await store.fetchPlanRuns()
+    setActionMessage('Pinned forecast run cleared. Next recalc will use the latest available.')
+  } finally {
+    resetForecastRunLoading.value = false
+  }
 }
 </script>
 
@@ -378,4 +457,6 @@ async function doRecalculateDemand() {
 .app-table tbody tr.row-selected { background: var(--border); }
 .forecast-health-card .health-summary { display: flex; gap: 1.5rem; margin-bottom: 0.75rem; font-size: 0.875rem; }
 .forecast-health-card .subsection { font-size: 0.9375rem; margin: 0.75rem 0 0.25rem; }
+.action-message { font-size: 0.875rem; margin-bottom: 0.5rem; color: var(--success, green); }
+.helper-text { font-size: 0.8125rem; margin-top: 0.25rem; }
 </style>

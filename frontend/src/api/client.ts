@@ -39,6 +39,15 @@ export interface PlanRun {
   selected_train_end_week_start?: string | null
 }
 
+/** One row from GET /forecast/runs (available baseline runs to pin). */
+export interface ForecastRunOption {
+  train_end_week_start: string
+  model_name?: string | null
+  count_rows: number
+  created_at?: string | null
+  notes?: string | null
+}
+
 export interface ProjectedInventory {
   id: number
   plan_run_id: number

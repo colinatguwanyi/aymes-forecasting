@@ -3,7 +3,6 @@ from __future__ import annotations
 import logging
 from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal
-from decimal import Decimal
 from typing import Any, cast
 
 from fastapi import APIRouter, Body, Depends, HTTPException, Query
@@ -14,6 +13,7 @@ from app.models import (
     DemandOverrideWeekly,
     PlanRun,
     PlanRunDemandInputWeekly,
+    PlanRunEvent,
     PlanRunFreezeEvent,
     PlannedOrder,
     PlannedOrderOverrideWeekly,
@@ -29,7 +29,7 @@ from app.schemas import (
     SkuWeekExplanationPolicy,
     SkuWeekExplanationProjection,
 )
-from app.services.demand_resolver import NoBaselineRunsError, resolve_demand_for_run, _frozen_mondays_for_plan
+from app.services.demand_resolver import NoBaselineRunsError, published_run_exists, resolve_demand_for_run, _frozen_mondays_for_plan
 from app.services.planning import _monday_before, run_plan
 
 logger = logging.getLogger(__name__)
@@ -95,6 +95,7 @@ def update_plan_run(
     plan_run_id: int,
     demand_source: str | None = Query(None),
     baseline_train_end_week_start: date | None = Query(None, description="When demand_source=baseline, which published run to use (latest if null)"),
+    clear_baseline_train_end_week_start: bool = Query(False, description="If true, set baseline_train_end_week_start to null (use latest on next recalc)"),
     freeze_weeks: int | None = Query(None, ge=0, le=52),
     notes: str | None = Query(None),
     db: Session = Depends(get_db),
@@ -104,12 +105,52 @@ def update_plan_run(
         raise HTTPException(status_code=404, detail="Plan run not found")
     if demand_source is not None:
         run.demand_source = demand_source
-    if baseline_train_end_week_start is not None:
+    if clear_baseline_train_end_week_start:
+        run.baseline_train_end_week_start = None
+    elif baseline_train_end_week_start is not None:
+        if not published_run_exists(db, baseline_train_end_week_start, warehouse_code="AAH"):
+            raise HTTPException(
+                status_code=409,
+                detail=f"Selected forecast run {baseline_train_end_week_start!s} not found. Choose another run or reset to latest.",
+            )
         run.baseline_train_end_week_start = baseline_train_end_week_start
     if freeze_weeks is not None:
         run.freeze_weeks = freeze_weeks
     if notes is not None:
         run.notes = notes
+    db.commit()
+    db.refresh(run)
+    return run
+
+
+@router.post("/runs/{plan_run_id}/reset-forecast-run", response_model=PlanRunSchema)
+def reset_forecast_run(
+    plan_run_id: int,
+    reset_all: bool = Query(False, description="If true, also clear baseline_train_end_week_start (user override)"),
+    created_by: str | None = Query(None),
+    db: Session = Depends(get_db),
+) -> PlanRun:
+    """Clear pinned forecast run (selected_train_end_week_start). Next recalc will pick latest. Optionally clear user override (reset_all=true)."""
+    run = db.query(PlanRun).filter(PlanRun.id == plan_run_id).first()
+    if not run:
+        raise HTTPException(status_code=404, detail="Plan run not found")
+    prev_selected = getattr(run, "selected_train_end_week_start", None)
+    prev_baseline = getattr(run, "baseline_train_end_week_start", None)
+    run.selected_train_end_week_start = None
+    if reset_all:
+        run.baseline_train_end_week_start = None
+    db.add(
+        PlanRunEvent(
+            plan_run_id=plan_run_id,
+            event_type="RESET_FORECAST_RUN",
+            created_by=created_by,
+            details_json={
+                "previous_selected_train_end_week_start": prev_selected.isoformat() if prev_selected else None,
+                "previous_baseline_train_end_week_start": prev_baseline.isoformat() if prev_baseline else None,
+                "reset_all": reset_all,
+            },
+        )
+    )
     db.commit()
     db.refresh(run)
     return run
