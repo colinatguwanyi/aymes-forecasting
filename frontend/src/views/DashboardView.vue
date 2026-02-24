@@ -7,7 +7,15 @@
       <section class="content-section">
         <h2>Run a scenario</h2>
         <form @submit.prevent="runScenario" class="form-inline plan-run-form">
-          <input v-model="scenarioName" class="app-input" placeholder="Scenario name" required style="max-width: 12rem;" />
+          <label class="form-label">Scenario</label>
+          <select v-model="scenarioName" class="app-select" required style="max-width: 12rem;">
+            <option value="baseline">Baseline</option>
+            <option value="blended">Blended</option>
+            <option value="actuals">Actuals</option>
+            <option value="Conservative">Conservative</option>
+            <option value="Aggressive">Aggressive</option>
+            <option value="Promo uplift">Promo uplift</option>
+          </select>
           <label class="form-label">Demand source</label>
           <select v-model="demandSource" class="app-select" style="max-width: 10rem;">
             <option value="actuals">Actuals</option>
