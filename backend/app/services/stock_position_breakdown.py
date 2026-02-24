@@ -69,7 +69,12 @@ def _get_on_hand(
     warehouse_code: str,
     as_of_week: date,
 ) -> tuple[date | None, Decimal]:
-    """Latest on_hand_qty from inventory_snapshots_weekly where week_start <= as_of_week; prefer source_type='soh' over 'legacy'."""
+    """Latest on_hand_qty from inventory_snapshots_weekly where week_start <= as_of_week; prefer source_type='soh' over 'legacy'.
+    Only uses SOH from warehouses in sample_sales_soh_warehouses config (default BLP)."""
+    from app.services.app_settings import get_sample_sales_soh_warehouses
+
+    if warehouse_code not in get_sample_sales_soh_warehouses(db):
+        return (None, Decimal("0"))
     rows = (
         db.query(InventorySnapshotWeekly)
         .filter(

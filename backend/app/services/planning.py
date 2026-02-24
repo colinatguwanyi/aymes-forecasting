@@ -96,9 +96,14 @@ def run_plan(
     run_week = _monday_before(run_at)
 
     # 1) Starting snapshot per (sku, warehouse): max(week_start) where week_start <= run_week; prefer source_type='soh' over 'legacy'
+    # Filter by sample_sales_soh_warehouses config (default BLP only)
+    from app.services.app_settings import get_sample_sales_soh_warehouses
+
+    soh_warehouses = get_sample_sales_soh_warehouses(db)
     all_inv = (
         db.query(InventorySnapshotWeekly)
         .filter(InventorySnapshotWeekly.week_start <= run_week)
+        .filter(InventorySnapshotWeekly.warehouse_code.in_(soh_warehouses))
         .all()
     )
     latest_week_per_key: dict[tuple[str, str], date] = {}

@@ -205,7 +205,7 @@
     <!-- Stock On Hand (SOH): daily history → weekly canonical -->
     <section class="card card-body">
       <h3 class="section-title mb-2">Stock On Hand (SOH)</h3>
-      <p class="text-sm text-slate-600 mb-3">Upload CSV or XLSX: Stock at (date), Branch Name, AAH Code, STOCK, ON ORDER. Branch Name must exist in warehouse branch mapping. Stage then Execute to build daily and weekly canonical (W-TUE).</p>
+      <p class="text-sm text-slate-600 mb-3">Upload CSV or XLSX: standard format (Stock at, Branch Name, AAH Code, STOCK, ON ORDER) or BLP-AYMES (Code, Balance). For BLP-AYMES, enter warehouse code (e.g. BLP) and optionally snapshot date. Stage then Execute to build daily and weekly canonical (W-TUE).</p>
       <div class="flex flex-wrap items-center gap-3 mb-2">
         <a href="/api/templates/stock-on-hand" download class="btn-secondary">Download SOH template</a>
         <button type="button" @click="uploadSohWithMode('weekly')" :disabled="!sohFile" class="btn-primary">Upload (weekly)</button>
@@ -217,10 +217,19 @@
           <label class="form-label">File</label>
           <input type="file" ref="sohFileInput" accept=".csv,.xlsx,.xls" @change="onSohFileSelect" class="block w-full text-sm text-slate-600 file:mr-2 file:py-1.5 file:px-3 file:rounded-lg file:border file:border-slate-300 file:bg-white file:text-slate-700 file:text-sm hover:file:bg-slate-50" />
         </div>
+        <div>
+          <label class="form-label">Warehouse (BLP-AYMES)</label>
+          <input v-model="sohWarehouseCode" type="text" placeholder="e.g. BLP" class="input w-full" />
+        </div>
+        <div>
+          <label class="form-label">Snapshot date (BLP-AYMES)</label>
+          <input v-model="sohSnapshotDate" type="date" class="input w-full" />
+        </div>
       </div>
       <div v-if="sohUploadResult" class="mt-3 text-sm text-slate-600 flex flex-wrap items-center gap-2">
         <span>Run ID: <code class="text-xs bg-slate-100 px-1.5 py-0.5 rounded">{{ sohUploadResult.run_id.slice(0, 8) }}</code></span>
         <span>Staged {{ sohUploadResult.staged_count }}, rejected {{ sohUploadResult.rejected_count }}</span>
+        <span v-if="sohUploadResult.import_summary" class="text-slate-600">SKUs: {{ sohUploadResult.import_summary.distinct_skus }}, total qty: {{ sohUploadResult.import_summary.total_qty.toLocaleString() }}, parsing errors: {{ sohUploadResult.import_summary.parsing_errors }}</span>
         <span v-if="sohUploadResult.mode" class="badge" :class="sohUploadResult.mode === 'historical' ? 'badge-warn' : 'badge-info'">{{ sohUploadResult.mode }}</span>
         <button v-if="sohUploadResult.requires_confirm" type="button" @click="showConfirmModal(sohUploadResult)" class="btn-secondary text-sm border-amber-300 text-amber-800">Confirm backfill</button>
         <button type="button" @click="executeSohRun(sohUploadResult.run_id)" :disabled="sohUploadResult.requires_confirm && !sohUploadResult.confirmed" class="btn-primary text-sm">Execute (daily → weekly)</button>
@@ -341,6 +350,7 @@ interface IngestionUploadResult {
   date_max?: string
   span_days?: number
   confirm_message?: string
+  import_summary?: { distinct_skus: number; total_qty: number; row_count: number; parsing_errors: number }
 }
 
 type ImportType =
@@ -396,6 +406,8 @@ const salesOutBuildResult = ref<{ rows_staged: number; weeks_written: number; ro
 
 const sohFileInput = ref<HTMLInputElement | null>(null)
 const sohFile = ref<File | null>(null)
+const sohWarehouseCode = ref('')
+const sohSnapshotDate = ref(new Date().toISOString().slice(0, 10))
 const sohUploadResult = ref<IngestionUploadResult | null>(null)
 const confirmModalRun = ref<IngestionUploadResult | null>(null)
 
@@ -594,9 +606,12 @@ async function uploadSohWithMode(mode: 'weekly' | 'historical') {
   if (!sohFile.value) return
   const form = new FormData()
   form.append('file', sohFile.value)
+  const params: Record<string, string> = { mode }
+  if (sohWarehouseCode.value.trim()) params.warehouse_code = sohWarehouseCode.value.trim()
+  if (sohSnapshotDate.value) params.snapshot_date = sohSnapshotDate.value
   try {
     const { data } = await api.post<IngestionUploadResult>('/ingestion/stock-on-hand/upload', form, {
-      params: { mode },
+      params,
     })
     sohUploadResult.value = { ...data, confirmed: data.requires_confirm ? false : true }
     sohFile.value = null

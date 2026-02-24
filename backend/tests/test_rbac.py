@@ -62,3 +62,28 @@ def test_read_endpoint_200_with_viewer() -> None:
     tc = TestClient(app)
     r = tc.get("/api/demand/", headers=_dev_viewer_headers())
     assert r.status_code == 200
+
+
+def test_prod_mode_x_dev_user_ignored_returns_401(monkeypatch: pytest.MonkeyPatch) -> None:
+    """With ENVIRONMENT=prod, X-Dev-User is ignored; /auth/me returns 401 without Easy Auth headers."""
+    monkeypatch.setattr("app.config.settings.environment", "prod")
+    monkeypatch.setattr("app.config.settings.dev_default_user_email", None)
+    tc = TestClient(app)
+    r = tc.get("/api/v1/auth/me", headers=_dev_admin_headers())
+    assert r.status_code == 401
+
+
+def test_prod_mode_easy_auth_works(monkeypatch: pytest.MonkeyPatch) -> None:
+    """With ENVIRONMENT=prod, valid X-MS-CLIENT-PRINCIPAL authenticates."""
+    import base64
+    import json
+
+    monkeypatch.setattr("app.config.settings.environment", "prod")
+    payload = {"userId": "prod-oid-123", "userDetails": "prod@contoso.com"}
+    b64 = base64.b64encode(json.dumps(payload).encode()).decode()
+    tc = TestClient(app)
+    r = tc.get("/api/v1/auth/me", headers={"X-MS-CLIENT-PRINCIPAL": b64})
+    assert r.status_code == 200
+    data = r.json()
+    assert data["auth_mode"] == "easy_auth"
+    assert data["user"]["email"] == "prod@contoso.com"

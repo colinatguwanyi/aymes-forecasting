@@ -793,6 +793,13 @@ class UserRole(Base):
     role_id = Column(Integer, ForeignKey("roles.id", ondelete="CASCADE"), primary_key=True)
 
 
+class AppSettings(Base):
+    """Key-value app config (e.g. sample_sales_soh_warehouses)."""
+    __tablename__ = "app_settings"
+    key = Column(String(128), primary_key=True)
+    value = Column(JSONB, nullable=False)
+
+
 # Back-populate relationships on Product, Warehouse, Supplier
 Product.supplier_products = relationship("SupplierProduct", back_populates="product")
 Product.warehouse_products = relationship("WarehouseProduct", back_populates="product")

@@ -9,6 +9,7 @@ from decimal import Decimal
 from typing import Any, cast
 from uuid import UUID
 
+from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from app.models import (
@@ -19,6 +20,7 @@ from app.models import (
     InventorySnapshotDaily,
     InventorySnapshotWeekly,
     StockOnHandStage,
+    Warehouse,
     WarehouseBranchMapping,
 )
 from app.services.time_bucketing import week_start_for_date
@@ -31,11 +33,16 @@ HISTORICAL_BATCH_DAYS = 60
 
 
 def _get(row: dict[str, Any], *keys: str) -> Any:
-    row_lower = {str(k).strip().lower(): v for k, v in row.items()}
+    def _norm(k: str) -> str:
+        return str(k).strip().lower().replace(" ", "_")
+
+    row_map = {_norm(k): v for k, v in row.items()}
     for k in keys:
-        k_lower = k.strip().lower().replace(" ", "_")
-        if k_lower in row_lower and row_lower[k_lower] not in (None, ""):
-            return row_lower[k_lower]
+        nk = _norm(k)
+        if nk in row_map:
+            v = row_map[nk]
+            if v is not None and str(v).strip() != "":
+                return v
     return None
 
 
@@ -139,6 +146,69 @@ def validate_and_stage_soh_row(
     return (reject_reason is None, reject_reason)
 
 
+def stage_blp_soh(
+    db: Session,
+    run_id: UUID,
+    rows: list[dict[str, Any]],
+    warehouse_code: str,
+    snapshot_date: date,
+) -> tuple[int, int, dict[str, Any]]:
+    """
+    Stage BLP-AYMES format: normalize, aggregate, write to stock_on_hand_stage.
+    Returns (staged_count, rejected_count, summary).
+    """
+    from app.ingestion.soh.adapters.blp_aymes_report import (
+        aggregate,
+        normalize,
+    )
+
+    normalized: list[Any] = []
+    rejected = 0
+    for i, row in enumerate(rows, start=2):
+        nr = normalize(row, i)
+        normalized.append(nr)
+        if nr.reject_reason:
+            rejected += 1
+            db.add(
+                IngestionRejection(
+                    ingestion_run_id=run_id,
+                    row_number=i,
+                    raw_payload=dict(row),
+                    reason=nr.reject_reason or "validation failed",
+                )
+            )
+
+    aggregated = aggregate(normalized, snapshot_date, warehouse_code.upper())
+    snapshot_str = snapshot_date.isoformat()
+    for wh, sku, _sd, qty in aggregated:
+        row_hash = hashlib.sha256(
+            f"{snapshot_str}|{wh}|{sku}|{qty}|0".encode()
+        ).hexdigest()[:64]
+        db.add(
+            StockOnHandStage(
+                ingestion_run_id=run_id,
+                stock_at_raw=snapshot_str,
+                branch_name_raw=wh,
+                aah_code_raw=sku,
+                stock_raw=str(qty),
+                on_order_raw="0",
+                description_raw=None,
+                reject_reason=None,
+                row_hash=row_hash,
+            )
+        )
+    staged = len(aggregated)
+    total_qty = sum(qty for (_, _, _, qty) in aggregated)
+    distinct_skus = len({sku for (_, sku, _, _) in aggregated})
+    summary = {
+        "distinct_skus": distinct_skus,
+        "total_qty": total_qty,
+        "row_count": len(rows),
+        "parsing_errors": rejected,
+    }
+    return staged, rejected, summary
+
+
 def build_daily_from_stage(db: Session, run_id: UUID) -> tuple[int, int]:
     """
     Transform stock_on_hand_stage (valid rows only, reject_reason IS NULL) into inventory_snapshots_daily.
@@ -164,12 +234,21 @@ def build_daily_from_stage(db: Session, run_id: UUID) -> tuple[int, int]:
     )
 
     branch_to_wh = _branch_to_warehouse_code(db)
+    # Fallback: if branch not in mapping, treat as direct warehouse code (e.g. BLP format)
+    def _resolve_warehouse(branch_raw: str) -> str | None:
+        wh = branch_to_wh.get(branch_raw)
+        if wh:
+            return wh
+        # Direct warehouse code (e.g. BLP)
+        w = db.query(Warehouse).filter(func.upper(Warehouse.code) == branch_raw).first()
+        return cast(str, w.code) if w else None
+
     # (warehouse_code, sku, as_of_date) -> (on_hand, on_order); take max if duplicate (spec: take max)
     aggregated: dict[tuple[str, str, date], tuple[int, int]] = {}
     rejected = 0
     for row in stage_rows:
         branch_raw = (getattr(row, "branch_name_raw", None) or "").strip().upper()
-        wh = branch_to_wh.get(branch_raw)
+        wh = _resolve_warehouse(branch_raw)
         if not wh:
             rejected += 1
             continue

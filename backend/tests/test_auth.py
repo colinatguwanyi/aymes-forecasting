@@ -8,10 +8,8 @@ from unittest.mock import MagicMock
 import pytest
 
 from app.security.auth import (
-    Identity,
     parse_dev_headers,
     parse_easy_auth_headers,
-    VALID_ROLES,
 )
 
 
@@ -124,3 +122,62 @@ def test_parse_dev_headers_empty_uses_default_email(monkeypatch: pytest.MonkeyPa
     identity = parse_dev_headers(req)
     assert identity is not None
     assert identity.email == "default@test.com"
+
+
+def test_parse_easy_auth_invalid_base64_returns_none() -> None:
+    """Invalid base64 in X-MS-CLIENT-PRINCIPAL returns None without raising."""
+    req = MagicMock()
+    req.headers = {"X-MS-CLIENT-PRINCIPAL": "not-valid-base64!!!"}
+    identity = parse_easy_auth_headers(req)
+    assert identity is None
+
+
+def test_parse_easy_auth_base64_without_padding() -> None:
+    """Base64 without padding is handled (common in JWT/Easy Auth)."""
+    payload = {"userId": "oid-pad", "userDetails": "pad@test.com"}
+    b64 = base64.b64encode(json.dumps(payload).encode()).decode().rstrip("=")
+    req = MagicMock()
+    req.headers = {"X-MS-CLIENT-PRINCIPAL": b64}
+    identity = parse_easy_auth_headers(req)
+    assert identity is not None
+    assert identity.entra_oid == "oid-pad"
+    assert identity.email == "pad@test.com"
+
+
+def test_parse_easy_auth_claims_extraction() -> None:
+    """Extract oid, email, name from claims list (real Easy Auth shape)."""
+    payload = {
+        "claims": [
+            {"typ": "http://schemas.microsoft.com/identity/claims/objectidentifier", "val": "oid-from-claims"},
+            {"typ": "preferred_username", "val": "claims@tenant.com"},
+            {"typ": "name", "val": "Display Name"},
+        ],
+    }
+    b64 = base64.b64encode(json.dumps(payload).encode()).decode()
+    req = MagicMock()
+    req.headers = {"X-MS-CLIENT-PRINCIPAL": b64}
+    identity = parse_easy_auth_headers(req)
+    assert identity is not None
+    assert identity.entra_oid == "oid-from-claims"
+    assert identity.email == "claims@tenant.com"
+    assert identity.display_name == "Display Name"
+
+
+def test_get_auth_mode_dev(monkeypatch: pytest.MonkeyPatch) -> None:
+    """get_auth_mode returns 'dev' when ENVIRONMENT is dev or local."""
+    from app.security.auth import get_auth_mode
+
+    monkeypatch.setattr("app.config.settings.environment", "dev")
+    assert get_auth_mode() == "dev"
+    monkeypatch.setattr("app.config.settings.environment", "local")
+    assert get_auth_mode() == "dev"
+
+
+def test_get_auth_mode_prod(monkeypatch: pytest.MonkeyPatch) -> None:
+    """get_auth_mode returns 'easy_auth' when ENVIRONMENT is prod or stage."""
+    from app.security.auth import get_auth_mode
+
+    monkeypatch.setattr("app.config.settings.environment", "prod")
+    assert get_auth_mode() == "easy_auth"
+    monkeypatch.setattr("app.config.settings.environment", "stage")
+    assert get_auth_mode() == "easy_auth"

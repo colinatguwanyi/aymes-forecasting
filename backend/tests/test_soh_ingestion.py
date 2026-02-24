@@ -26,6 +26,7 @@ from app.models import (
 from app.services.soh_ingestion import (
     build_daily_from_stage,
     build_weekly_from_daily,
+    stage_blp_soh,
     validate_and_stage_soh_row,
 )
 from app.services.time_bucketing import week_start_for_date
@@ -248,6 +249,100 @@ def test_idempotency_re_run_no_duplicate_weekly() -> None:
         ).count()
         assert count1 == count2
         assert count1 == 1
+    finally:
+        db.query(InventorySnapshotDaily).filter(InventorySnapshotDaily.source_run_id == run_id).delete(synchronize_session=False)
+        db.query(InventorySnapshotWeekly).filter(InventorySnapshotWeekly.source_run_id == run_id).delete(synchronize_session=False)
+        db.query(StockOnHandStage).filter(StockOnHandStage.ingestion_run_id == run_id).delete(synchronize_session=False)
+        db.query(IngestionRun).filter(IngestionRun.id == run_id).delete(synchronize_session=False)
+        db.commit()
+        db.close()
+
+
+@pytest.mark.skipif(not _soh_schema_available(), reason="Migration 015 (SOH) not applied")
+def test_blp_stage_and_build_daily() -> None:
+    """BLP format: stage_blp_soh -> build_daily_from_stage (direct warehouse code)."""
+    db = SessionLocal()
+    run_id = uuid4()
+    try:
+        if not db.query(Warehouse).filter(Warehouse.code == "BLP").first():
+            db.add(Warehouse(code="BLP", name="BLP WH", timezone="Europe/London"))
+            db.commit()
+        run = IngestionRun(
+            source_type=IngestionSourceType.CSV,
+            entity=IngestionEntity.STOCK_ON_HAND,
+            file_name="blp.csv",
+            file_sha256="x",
+            status=IngestionStatus.PENDING,
+            row_count=0,
+        )
+        db.add(run)
+        db.flush()
+        run_id = cast(UUID, run.id)
+        rows = [
+            {"Code": "AC1.5-CH", "Balance": "71"},
+            {"Code": "AC1.5-CH", "Balance": "312"},
+            {"Code": "AC1.5-CH", "Balance": "1416"},
+        ]
+        staged, rejected, summary = stage_blp_soh(db, run_id, rows, "BLP", date(2025, 2, 24))
+        db.commit()
+        assert staged == 1
+        assert rejected == 0
+        assert summary["distinct_skus"] == 1
+        assert summary["total_qty"] == 71 + 312 + 1416
+        build_daily_from_stage(db, run_id)
+        db.commit()
+        daily = db.query(InventorySnapshotDaily).filter(
+            InventorySnapshotDaily.source_run_id == run_id,
+            InventorySnapshotDaily.sku == "AC1.5-CH",
+        ).first()
+        assert daily is not None
+        assert daily.on_hand_units == Decimal("1799")
+    finally:
+        db.query(InventorySnapshotDaily).filter(InventorySnapshotDaily.source_run_id == run_id).delete(synchronize_session=False)
+        db.query(StockOnHandStage).filter(StockOnHandStage.ingestion_run_id == run_id).delete(synchronize_session=False)
+        db.query(IngestionRun).filter(IngestionRun.id == run_id).delete(synchronize_session=False)
+        db.commit()
+        db.close()
+
+
+@pytest.mark.skipif(not _soh_schema_available(), reason="Migration 015 (SOH) not applied")
+def test_blp_idempotency_re_execute_no_duplicate() -> None:
+    """Re-execute same BLP run: build_daily + build_weekly twice does not duplicate."""
+    db = SessionLocal()
+    run_id = uuid4()
+    try:
+        if not db.query(Warehouse).filter(Warehouse.code == "BLP-IDEM").first():
+            db.add(Warehouse(code="BLP-IDEM", name="BLP Idem", timezone="Europe/London"))
+            db.commit()
+        run = IngestionRun(
+            source_type=IngestionSourceType.CSV,
+            entity=IngestionEntity.STOCK_ON_HAND,
+            file_name="blp.csv",
+            file_sha256="x",
+            status=IngestionStatus.PENDING,
+            row_count=0,
+        )
+        db.add(run)
+        db.flush()
+        run_id = cast(UUID, run.id)
+        rows = [{"Code": "SKU-Z", "Balance": "100"}]
+        stage_blp_soh(db, run_id, rows, "BLP-IDEM", date(2025, 2, 24))
+        db.commit()
+        build_daily_from_stage(db, run_id)
+        db.commit()
+        build_weekly_from_daily(db, run_id)
+        db.commit()
+        count1 = db.query(InventorySnapshotWeekly).filter(
+            InventorySnapshotWeekly.source_run_id == run_id,
+        ).count()
+        build_daily_from_stage(db, run_id)
+        db.commit()
+        build_weekly_from_daily(db, run_id)
+        db.commit()
+        count2 = db.query(InventorySnapshotWeekly).filter(
+            InventorySnapshotWeekly.source_run_id == run_id,
+        ).count()
+        assert count1 == count2 == 1
     finally:
         db.query(InventorySnapshotDaily).filter(InventorySnapshotDaily.source_run_id == run_id).delete(synchronize_session=False)
         db.query(InventorySnapshotWeekly).filter(InventorySnapshotWeekly.source_run_id == run_id).delete(synchronize_session=False)

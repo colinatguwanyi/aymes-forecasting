@@ -30,6 +30,7 @@ const tabs = [
   { name: 'AdminPolicies', path: '/admin/policies', label: 'Planning Policies' },
   { name: 'AdminTimelines', path: '/admin/timelines', label: 'Timelines' },
   { name: 'AdminForecastMethods', path: '/admin/forecast-methods', label: 'Forecasting Methods' },
+  { name: 'AdminSettings', path: '/admin/settings', label: 'Settings' },
 ]
 </script>
 

@@ -2,7 +2,7 @@
 from __future__ import annotations
 import hashlib
 import logging
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from decimal import Decimal
 from typing import Any, cast
 from uuid import UUID
@@ -22,17 +22,19 @@ from app.models import (
     IngestionSourceType,
     IngestionStatus,
 )
-from app.services.csv_import import read_csv, read_csv_chunked, read_csv_or_xlsx
+from app.services.csv_import import read_csv, read_csv_or_xlsx
 from app.services.import_forecast_output import import_from_stage as import_forecast_output_from_stage
 from app.services.import_forecast_output import validate_and_stage_row as validate_and_stage_forecast_output_row
 from app.services.import_forecast_output import _aah_to_sku_map
 from app.services.import_product_master import import_from_stage as import_product_master_from_stage, validate_and_stage_row as validate_and_stage_product_master_row
 from app.services.sales_out_ingestion import build_demand_from_sales_out, validate_and_stage_sales_out_row
+from app.ingestion.soh.adapters.blp_aymes_report import is_blp_aymes_format
 from app.services.soh_ingestion import (
     CHUNK_SIZE as SOH_CHUNK_SIZE,
     _branch_to_warehouse_code as soh_branch_to_warehouse_code,
     build_daily_from_stage,
     build_weekly_from_daily,
+    stage_blp_soh,
     validate_and_stage_soh_row,
 )
 from app.services.ingestion_mode import compute_date_range_and_mode
@@ -309,9 +311,11 @@ def build_sales_out_weekly(
 
 @router.post("/stock-on-hand/upload")
 async def upload_stock_on_hand(
-    file: UploadFile = File(..., description="CSV or XLSX (Stock at, Branch Name, AAH Code, STOCK, ON ORDER)"),
+    file: UploadFile = File(..., description="CSV or XLSX (Stock at, Branch Name, AAH Code, STOCK, ON ORDER) or BLP-AYMES (Code, Balance)"),
     created_by: str | None = Query(None),
     mode: str | None = Query(None, description="weekly (default) or historical"),
+    warehouse_code: str | None = Query(None, description="Required for BLP-AYMES format (e.g. BLP)"),
+    snapshot_date: str | None = Query(None, description="For BLP-AYMES: YYYY-MM-DD; default today"),
     db: Session = Depends(get_db),
 ) -> dict[str, Any]:
     """Accept SOH CSV/XLSX; parse and stage (chunked). Call execute on run_id to build daily and weekly canonical."""
@@ -320,6 +324,8 @@ async def upload_stock_on_hand(
         file=file,
         created_by=created_by,
         mode=mode,
+        warehouse_code=warehouse_code,
+        snapshot_date=snapshot_date,
         db=db,
     )
 
@@ -360,6 +366,8 @@ async def upload(
     file: UploadFile = File(..., description="CSV file"),
     created_by: str | None = Query(None),
     mode: str | None = Query(None, description="weekly (default) or historical"),
+    warehouse_code: str | None = Query(None, description="For SOH BLP-AYMES format"),
+    snapshot_date: str | None = Query(None, description="For SOH BLP-AYMES: YYYY-MM-DD"),
     db: Session = Depends(get_db),
 ) -> dict[str, Any]:
     """Accept CSV and entity type; parse and stage; create ingestion run; return run_id.
@@ -405,12 +413,7 @@ async def upload(
 
         if entity_enum == IngestionEntity.STOCK_ON_HAND:
             try:
-                fn = (file.filename or "").lower()
-                if fn.endswith(".xlsx") or fn.endswith(".xls"):
-                    rows_full = read_csv_or_xlsx(content, file.filename)
-                    rows_iter_soh: Any = [rows_full[i : i + SOH_CHUNK_SIZE] for i in range(0, len(rows_full), SOH_CHUNK_SIZE)]
-                else:
-                    rows_iter_soh = read_csv_chunked(content, chunk_size=SOH_CHUNK_SIZE)
+                rows_full = read_csv_or_xlsx(content, file.filename)
             except Exception as e:
                 detail = f"Invalid file: {e}"
                 logger.warning("ingestion/upload 400: %s", detail, exc_info=True)
@@ -428,8 +431,38 @@ async def upload(
             db.add(run)
             db.flush()
             run_id = cast(UUID, run.id)
-            staged, rejected = _validate_and_stage_soh(db, run_id, rows_iter_soh)
-            run.row_count = staged + rejected
+            headers = list(rows_full[0].keys()) if rows_full else []
+            if is_blp_aymes_format(headers):
+                wh_code = (warehouse_code or "").strip()
+                if not wh_code:
+                    fn = (file.filename or "")
+                    if "BLP" in fn.upper():
+                        wh_code = "BLP"
+                if not wh_code:
+                    raise HTTPException(
+                        status_code=400,
+                        detail="warehouse_code required for BLP-AYMES format (Code, Balance columns)",
+                    )
+                snap_date: date
+                if snapshot_date and str(snapshot_date).strip():
+                    try:
+                        snap_date = datetime.strptime(str(snapshot_date).strip(), "%Y-%m-%d").date()
+                    except ValueError:
+                        raise HTTPException(status_code=400, detail="snapshot_date must be YYYY-MM-DD")
+                else:
+                    snap_date = datetime.now(timezone.utc).date()
+                staged, rejected, blp_summary = stage_blp_soh(
+                    db, run_id, rows_full, wh_code, snap_date
+                )
+                run.row_count = staged + rejected
+                run.progress_meta = blp_summary
+            else:
+                rows_iter_soh: Any = [
+                    rows_full[i : i + SOH_CHUNK_SIZE]
+                    for i in range(0, len(rows_full), SOH_CHUNK_SIZE)
+                ]
+                staged, rejected = _validate_and_stage_soh(db, run_id, rows_iter_soh)
+                run.row_count = staged + rejected
         else:
             try:
                 if entity_enum in (IngestionEntity.FORECAST_OUTPUT, IngestionEntity.SALES_OUT):
@@ -497,6 +530,8 @@ async def upload(
             dmax = getattr(run, "date_max", None)
             out["date_min"] = dmin.isoformat() if dmin else None
             out["date_max"] = dmax.isoformat() if dmax else None
+            if run.progress_meta and "distinct_skus" in run.progress_meta:
+                out["import_summary"] = run.progress_meta
             if out["requires_confirm"] and dmin and dmax:
                 span_days = (dmax - dmin).days
                 out["confirm_message"] = (

@@ -2,18 +2,20 @@
 from __future__ import annotations
 
 import base64
+import binascii
 import json
 import logging
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any
 
-from fastapi import Depends, Header, HTTPException, Request
+from fastapi import Depends, HTTPException, Request
 from sqlalchemy.orm import Session
 
 from app.config import settings
 from app.database import get_db
 from app.models import User
+from app.security.rbac_bootstrap import bootstrap_admin_if_allowed
 
 logger = logging.getLogger(__name__)
 
@@ -25,6 +27,19 @@ ROLE_OPERATOR = "Operator"
 
 VALID_ROLES = frozenset({ROLE_ADMIN, ROLE_PLANNER, ROLE_VIEWER, ROLE_OPERATOR})
 
+# Easy Auth claim types for oid and email/upn
+OID_CLAIM_TYPES = frozenset({
+    "http://schemas.microsoft.com/identity/claims/objectidentifier",
+    "oid",
+})
+EMAIL_CLAIM_TYPES = frozenset({
+    "preferred_username",
+    "upn",
+    "email",
+    "http://schemas.xmlsoap.org/ws/2005/05/identity/claims/emailaddress",
+})
+NAME_CLAIM_TYPES = frozenset({"name", "http://schemas.xmlsoap.org/ws/2005/05/identity/claims/name"})
+
 
 @dataclass
 class Identity:
@@ -35,37 +50,101 @@ class Identity:
     runtime_roles: list[str] | None  # Dev-only: roles from X-Dev-User (not persisted)
 
 
+def get_auth_mode() -> str:
+    """Returns 'dev' when ENVIRONMENT is dev/local, else 'easy_auth'."""
+    return "dev" if _is_dev_mode() else "easy_auth"
+
+
 def _is_dev_mode() -> bool:
     return settings.environment.lower() in ("dev", "local")
+
+
+def _safe_b64decode(s: str) -> bytes | None:
+    """Decode base64, handling missing padding. Returns None on failure."""
+    try:
+        s = s.strip()
+        pad = 4 - len(s) % 4
+        if pad != 4:
+            s += "=" * pad
+        return base64.b64decode(s, validate=True)
+    except (binascii.Error, ValueError, TypeError):
+        return None
+
+
+def _extract_from_claims(data: dict[str, Any]) -> tuple[str | None, str | None, str | None]:
+    """Extract oid, email, display_name from claims list. Returns (oid, email, name)."""
+    claims = data.get("claims")
+    if not isinstance(claims, list):
+        return None, None, None
+    oid = email = name = None
+    for c in claims:
+        if not isinstance(c, dict):
+            continue
+        typ = (c.get("typ") or c.get("type") or "").strip()
+        val = c.get("val") or c.get("value")
+        if val is None or not isinstance(val, str):
+            continue
+        val = val.strip()
+        if not val:
+            continue
+        if typ in OID_CLAIM_TYPES:
+            oid = val
+        elif typ in EMAIL_CLAIM_TYPES:
+            email = val
+        elif typ in NAME_CLAIM_TYPES:
+            name = val
+    return oid, email, name
 
 
 def parse_easy_auth_headers(request: Request) -> Identity | None:
     """Parse Azure Container Apps Easy Auth headers.
     X-MS-CLIENT-PRINCIPAL (base64 JSON) preferred; fallback to NAME/ID headers.
+    Handles claims list, base64 padding. Returns None on invalid input (no 500).
     """
     principal_b64 = request.headers.get("X-MS-CLIENT-PRINCIPAL")
     if principal_b64:
-        try:
-            raw = base64.b64decode(principal_b64)
-            data = json.loads(raw)
-            user_id = data.get("userId") or data.get("oid") or data.get("user_id")
-            user_details = data.get("userDetails") or data.get("preferred_username") or ""
-            if isinstance(user_details, dict):
-                email = user_details.get("email") or user_details.get("upn") or str(user_details)
-            else:
-                email = str(user_details) if user_details else ""
-            if not email and not user_id:
+        raw = _safe_b64decode(principal_b64)
+        if raw is not None:
+            try:
+                data = json.loads(raw)
+                if not isinstance(data, dict):
+                    return None
+                user_id = data.get("userId") or data.get("oid") or data.get("user_id")
+                user_details = data.get("userDetails") or data.get("preferred_username") or ""
+                email = display_name = None
+
+                if isinstance(user_details, dict):
+                    email = user_details.get("email") or user_details.get("upn") or ""
+                    if isinstance(email, str):
+                        email = email.strip()
+                elif isinstance(user_details, str):
+                    email = user_details.strip() if "@" in user_details else ""
+
+                oid_from_claims, email_from_claims, name_from_claims = _extract_from_claims(data)
+                if oid_from_claims:
+                    user_id = user_id or oid_from_claims
+                if email_from_claims:
+                    email = email or email_from_claims
+                display_name = data.get("name") or name_from_claims
+                if isinstance(display_name, str):
+                    display_name = display_name.strip() or None
+
+                if not email and not user_id:
+                    return None
+                if not email and user_id:
+                    email = f"{user_id}@entra.local"
+                email = (email or "unknown@entra.local").strip()
+                return Identity(
+                    entra_oid=str(user_id) if user_id else None,
+                    email=email,
+                    display_name=display_name,
+                    runtime_roles=None,
+                )
+            except (json.JSONDecodeError, TypeError, ValueError) as e:
+                logger.warning("Failed to parse X-MS-CLIENT-PRINCIPAL JSON: %s", type(e).__name__)
                 return None
-            if not email and user_id:
-                email = f"{user_id}@entra.local"
-            return Identity(
-                entra_oid=str(user_id) if user_id else None,
-                email=email.strip() or "unknown@entra.local",
-                display_name=data.get("name") or data.get("userDetails") if isinstance(data.get("userDetails"), str) else None,
-                runtime_roles=None,
-            )
-        except Exception as e:
-            logger.warning("Failed to parse X-MS-CLIENT-PRINCIPAL: %s", e)
+        else:
+            logger.warning("Failed to decode X-MS-CLIENT-PRINCIPAL base64")
             return None
 
     name = request.headers.get("X-MS-CLIENT-PRINCIPAL-NAME", "").strip()
@@ -83,9 +162,11 @@ def parse_easy_auth_headers(request: Request) -> Identity | None:
 
 def parse_dev_headers(request: Request) -> Identity | None:
     """Parse X-Dev-User header (dev/local only). JSON or plain email.
-    Option B: runtime_roles from header used for auth only, not persisted.
+    Runtime roles from header are NOT persisted. Returns None when not in dev mode.
     """
     if not _is_dev_mode():
+        if request.headers.get("X-Dev-User"):
+            logger.warning("Dev auth header ignored in non-dev environment")
         return None
     raw = request.headers.get("X-Dev-User", "").strip()
     if not raw:
@@ -135,12 +216,10 @@ def get_current_user(
 ) -> CurrentUserContext:
     """Resolve identity, upsert user, load roles. Raises 401 if not authenticated."""
     identity: Identity | None = None
-    auth_mode: str = "easy_auth"
+    auth_mode = get_auth_mode()
 
-    if _is_dev_mode():
+    if auth_mode == "dev":
         identity = parse_dev_headers(request)
-        if identity:
-            auth_mode = "dev"
     if not identity:
         identity = parse_easy_auth_headers(request)
 
@@ -169,6 +248,11 @@ def get_current_user(
     user.display_name = identity.display_name or user.display_name
     db.commit()
     db.refresh(user)
+
+    if auth_mode == "easy_auth" and not user.roles:
+        if bootstrap_admin_if_allowed(db, user, identity.email):
+            db.commit()
+            db.refresh(user)
 
     role_names: list[str] = []
     if auth_mode == "dev" and identity.runtime_roles:
