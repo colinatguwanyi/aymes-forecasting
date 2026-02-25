@@ -152,11 +152,14 @@ def _validate_and_stage_sales_out(
     db: Session,
     run_id: UUID,
     rows: list[dict[str, Any]],
+    date_from: date | None = None,
+    date_to: date | None = None,
 ) -> tuple[int, int]:
-    """Validate each row; stage valid to sales_out_stage, reject to ingestion_rejections."""
+    """Validate each row; stage valid to sales_out_stage, reject to ingestion_rejections.
+    If date_from/date_to provided, rows outside range are rejected."""
     staged = 0
     for i, row in enumerate(rows, start=2):
-        ok, reason = validate_and_stage_sales_out_row(db, run_id, row, i)
+        ok, reason = validate_and_stage_sales_out_row(db, run_id, row, i, date_from=date_from, date_to=date_to)
         if ok:
             staged += 1
         else:
@@ -175,15 +178,18 @@ def _validate_and_stage_soh(
     db: Session,
     run_id: UUID,
     rows_iter: Any,
+    warehouse_code: str | None = None,
 ) -> tuple[int, int]:
-    """Validate and stage SOH rows (chunked). All rows go to stock_on_hand_stage; invalid also to ingestion_rejections. Returns (staged_count, rejected_count)."""
+    """Validate and stage SOH rows (chunked). All rows go to stock_on_hand_stage; invalid also to ingestion_rejections. Returns (staged_count, rejected_count).
+    When warehouse_code is provided, branch column is ignored and all rows use that warehouse (roll-up by product)."""
     branch_to_wh = soh_branch_to_warehouse_code(db)
+    wh_override = (warehouse_code or "").strip() or None
     staged = 0
     rejected = 0
     row_number = 2  # header is row 1
     for chunk in rows_iter:
         for row in chunk:
-            ok, reason = validate_and_stage_soh_row(db, run_id, row, row_number, branch_to_wh)
+            ok, reason = validate_and_stage_soh_row(db, run_id, row, row_number, branch_to_wh, warehouse_code_override=wh_override)
             if ok:
                 staged += 1
             else:
@@ -222,14 +228,19 @@ async def upload_sales_out(
     file: UploadFile = File(..., description="CSV or XLSX file (Sales Out columns)"),
     created_by: str | None = Query(None),
     mode: str | None = Query(None, description="weekly (default) or historical"),
+    date_from: str | None = Query(None, description="For historical: YYYY-MM-DD; only include rows on or after this date"),
+    date_to: str | None = Query(None, description="For historical: YYYY-MM-DD; only include rows on or before this date"),
     db: Session = Depends(get_db),
 ) -> dict[str, Any]:
-    """Accept Sales Out CSV/XLSX; parse and stage; create ingestion run. Call build-weekly on run_id to write demand_actuals."""
+    """Accept Sales Out CSV/XLSX; parse and stage; create ingestion run. Call build-weekly on run_id to write demand_actuals.
+    For historical mode, use date_from/date_to to limit to e.g. last 24 months."""
     return await upload(
         entity="sales_out",
         file=file,
         created_by=created_by,
         mode=mode,
+        date_from=date_from,
+        date_to=date_to,
         db=db,
     )
 
@@ -360,6 +371,16 @@ async def upload_forecast_output(
     )
 
 
+def _parse_yyyy_mm_dd(s: str | None) -> date | None:
+    """Parse YYYY-MM-DD string to date. Returns None if empty or invalid."""
+    if not s or not str(s).strip():
+        return None
+    try:
+        return datetime.strptime(str(s).strip(), "%Y-%m-%d").date()
+    except ValueError:
+        return None
+
+
 @router.post("/upload")
 async def upload(
     entity: str = Query(..., description="Entity: demand, product_master, or forecast_output"),
@@ -368,6 +389,8 @@ async def upload(
     mode: str | None = Query(None, description="weekly (default) or historical"),
     warehouse_code: str | None = Query(None, description="For SOH BLP-AYMES format"),
     snapshot_date: str | None = Query(None, description="For SOH BLP-AYMES: YYYY-MM-DD"),
+    date_from: str | None = Query(None, description="For Sales Out historical: YYYY-MM-DD; only rows on or after"),
+    date_to: str | None = Query(None, description="For Sales Out historical: YYYY-MM-DD; only rows on or before"),
     db: Session = Depends(get_db),
 ) -> dict[str, Any]:
     """Accept CSV and entity type; parse and stage; create ingestion run; return run_id.
@@ -461,7 +484,9 @@ async def upload(
                     rows_full[i : i + SOH_CHUNK_SIZE]
                     for i in range(0, len(rows_full), SOH_CHUNK_SIZE)
                 ]
-                staged, rejected = _validate_and_stage_soh(db, run_id, rows_iter_soh)
+                # AAH format: always roll to AAH; warehouse from form only when override desired
+                wh_code = (warehouse_code or "").strip() or None
+                staged, rejected = _validate_and_stage_soh(db, run_id, rows_iter_soh, warehouse_code=wh_code)
                 run.row_count = staged + rejected
         else:
             try:
@@ -493,7 +518,9 @@ async def upload(
             elif entity_enum == IngestionEntity.FORECAST_OUTPUT:
                 staged, rejected = _validate_and_stage_forecast_output(db, run_id, rows)
             else:
-                staged, rejected = _validate_and_stage_sales_out(db, run_id, rows)
+                df = _parse_yyyy_mm_dd(date_from)
+                dt = _parse_yyyy_mm_dd(date_to)
+                staged, rejected = _validate_and_stage_sales_out(db, run_id, rows, date_from=df, date_to=dt)
 
         run.inserted_count = 0
         run.updated_count = 0
@@ -618,9 +645,19 @@ def execute_run(
     run_after = db.query(IngestionRun).filter(IngestionRun.id == run_id).first()
     if not run_after:
         raise HTTPException(status_code=500, detail="Run not found after execute")
+    entity_val = run_after.entity.value if run_after.entity else None
+    table_name = {
+        "product_master": "products",
+        "demand": "demand_facts_weekly",
+        "sales_out": "demand_actuals",
+        "stock_on_hand": "inventory_snapshots_weekly",
+        "forecast_output": "baseline_forecasts_weekly",
+    }.get(str(entity_val) if entity_val else "", "data")
     return {
         "run_id": str(run_id),
         "status": run_after.status.value,
+        "entity": entity_val,
+        "table": table_name,
         "inserted_count": run_after.inserted_count,
         "updated_count": run_after.updated_count,
         "rejected_count": run_after.rejected_count,

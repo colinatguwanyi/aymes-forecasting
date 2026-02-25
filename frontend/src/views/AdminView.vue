@@ -31,6 +31,8 @@ const tabs = [
   { name: 'AdminTimelines', path: '/admin/timelines', label: 'Timelines' },
   { name: 'AdminForecastMethods', path: '/admin/forecast-methods', label: 'Forecasting Methods' },
   { name: 'AdminSettings', path: '/admin/settings', label: 'Settings' },
+  { name: 'AdminImportFormats', path: '/admin/import-formats', label: 'Import Formats' },
+  { name: 'AdminWarehouseProductCodes', path: '/admin/warehouse-product-codes', label: 'Warehouse Product Codes' },
 ]
 </script>
 

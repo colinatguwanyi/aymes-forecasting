@@ -174,20 +174,36 @@
       <h3 class="section-title mb-2">Sales Out</h3>
       <p class="text-sm text-slate-600 mb-3">Upload CSV or XLSX (AAH_Product_Code, Invoiced_Qty, Business_Processed_Date DD/MM/YYYY, etc.). Stage then build weekly demand (AAH, W-TUE).</p>
       <div class="flex flex-wrap items-center gap-3 mb-3">
-        <button type="button" @click="uploadSalesOutWithMode('weekly')" :disabled="!salesOutFile" class="btn-primary">
-          Upload (weekly)
+        <button type="button" @click="uploadSalesOutWithMode('weekly')" :disabled="!salesOutFile || salesOutUploading" class="btn-primary">
+          {{ salesOutUploading ? 'Uploading…' : 'Upload (weekly)' }}
         </button>
-        <button type="button" @click="uploadSalesOutWithMode('historical')" :disabled="!salesOutFile" class="btn-secondary border-amber-300 text-amber-800 hover:bg-amber-50">
-          Upload historical backfill
+        <button type="button" @click="uploadSalesOutWithMode('historical')" :disabled="!salesOutFile || salesOutUploading" class="btn-secondary border-amber-300 text-amber-800 hover:bg-amber-50">
+          {{ salesOutUploading ? 'Uploading…' : 'Upload historical backfill' }}
         </button>
         <span v-if="salesOutFile" class="text-xs text-slate-500">Selected: {{ salesOutFile.name }}</span>
+      </div>
+      <div v-if="salesOutUploading" class="mb-3">
+        <div class="h-2 bg-slate-200 rounded-full overflow-hidden">
+          <div class="h-full bg-primary-600 transition-all duration-300" :style="{ width: salesOutUploadProgress + '%' }" />
+        </div>
+        <span class="text-xs text-slate-500 mt-1 block">Uploading… {{ salesOutUploadProgress }}%</span>
       </div>
       <div class="flex flex-wrap items-end gap-3 md:grid md:grid-cols-4">
         <div>
           <label class="form-label">File</label>
           <input type="file" ref="salesOutFileInput" accept=".csv,.xlsx,.xls" @change="onSalesOutFileSelect" class="block w-full text-sm text-slate-600 file:mr-2 file:py-1.5 file:px-3 file:rounded-lg file:border file:border-slate-300 file:bg-white file:text-slate-700 file:text-sm hover:file:bg-slate-50" />
         </div>
+        <div>
+          <label class="form-label">Date from (historical)</label>
+          <input v-model="salesOutDateFrom" type="date" class="input w-full" placeholder="YYYY-MM-DD" title="Only include rows on or after this date (e.g. 24 months ago)" />
+        </div>
+        <div>
+          <label class="form-label">Date to (historical)</label>
+          <input v-model="salesOutDateTo" type="date" class="input w-full" placeholder="YYYY-MM-DD" title="Only include rows on or before this date" />
+        </div>
       </div>
+      <p class="text-xs text-slate-500 mt-1">For historical: set date range to limit import (e.g. last 24 months). Leave blank to import all rows.</p>
+      <button type="button" class="btn-secondary text-xs mt-1" @click="setSalesOutLast24Months">Set last 24 months</button>
       <div v-if="salesOutUploadResult" class="mt-3 text-sm text-slate-600 flex flex-wrap items-center gap-2">
         <span>Run ID: <code class="text-xs bg-slate-100 px-1.5 py-0.5 rounded">{{ salesOutUploadResult.run_id.slice(0, 8) }}</code></span>
         <span>Staged {{ salesOutUploadResult.staged_count }}, rejected {{ salesOutUploadResult.rejected_count }}</span>
@@ -205,12 +221,21 @@
     <!-- Stock On Hand (SOH): daily history → weekly canonical -->
     <section class="card card-body">
       <h3 class="section-title mb-2">Stock On Hand (SOH)</h3>
-      <p class="text-sm text-slate-600 mb-3">Upload CSV or XLSX: standard format (Stock at, Branch Name, AAH Code, STOCK, ON ORDER) or BLP-AYMES (Code, Balance). For BLP-AYMES, enter warehouse code (e.g. BLP) and optionally snapshot date. Stage then Execute to build daily and weekly canonical (W-TUE).</p>
+      <p class="text-sm text-slate-600 mb-3">Upload CSV or XLSX: standard format (Stock at, AAH Code, STOCK, ON ORDER; Branch optional if Warehouse selected) or BLP-AYMES (Code, Balance). Select Warehouse to roll up SOH by product in warehouse (branch column ignored). Stage then Execute to build daily and weekly canonical (W-TUE).</p>
+      <div v-if="sohError" class="mb-3 p-3 rounded-lg bg-red-50 text-red-800 text-sm">{{ sohError }}</div>
       <div class="flex flex-wrap items-center gap-3 mb-2">
-        <a href="/api/templates/stock-on-hand" download class="btn-secondary">Download SOH template</a>
-        <button type="button" @click="uploadSohWithMode('weekly')" :disabled="!sohFile" class="btn-primary">Upload (weekly)</button>
-        <button type="button" @click="uploadSohWithMode('historical')" :disabled="!sohFile" class="btn-secondary border-amber-300 text-amber-800 hover:bg-amber-50">Upload historical backfill</button>
+        <button type="button" @click="downloadSohTemplate" :disabled="sohTemplateDownloading" class="btn-secondary">
+          {{ sohTemplateDownloading ? 'Downloading…' : 'Download SOH template' }}
+        </button>
+        <button type="button" @click="uploadSohWithMode('weekly')" :disabled="!sohFile || sohUploading" class="btn-primary">Upload (weekly)</button>
+        <button type="button" @click="uploadSohWithMode('historical')" :disabled="!sohFile || sohUploading" class="btn-secondary border-amber-300 text-amber-800 hover:bg-amber-50">Upload historical backfill</button>
         <span v-if="sohFile" class="text-xs text-slate-500">Selected: {{ sohFile.name }}</span>
+      </div>
+      <div v-if="sohUploading" class="mb-3">
+        <div class="h-2 bg-slate-200 rounded-full overflow-hidden">
+          <div class="h-full bg-primary-600 transition-all duration-300" :style="{ width: sohUploadProgress + '%' }" />
+        </div>
+        <span class="text-xs text-slate-500 mt-1 block">Uploading… {{ sohUploadProgress }}%</span>
       </div>
       <div class="flex flex-wrap items-end gap-3 md:grid md:grid-cols-4">
         <div>
@@ -218,12 +243,29 @@
           <input type="file" ref="sohFileInput" accept=".csv,.xlsx,.xls" @change="onSohFileSelect" class="block w-full text-sm text-slate-600 file:mr-2 file:py-1.5 file:px-3 file:rounded-lg file:border file:border-slate-300 file:bg-white file:text-slate-700 file:text-sm hover:file:bg-slate-50" />
         </div>
         <div>
-          <label class="form-label">Warehouse (BLP-AYMES)</label>
-          <input v-model="sohWarehouseCode" type="text" placeholder="e.g. BLP" class="input w-full" />
+          <label class="form-label">Warehouse</label>
+          <select v-model="sohWarehouseCode" class="select w-full">
+            <option value="">—</option>
+            <option v-for="w in activeWarehouses" :key="w.id" :value="w.code">{{ w.code }} – {{ w.name || '—' }}</option>
+          </select>
         </div>
         <div>
-          <label class="form-label">Snapshot date (BLP-AYMES)</label>
+          <label class="form-label">Snapshot date</label>
           <input v-model="sohSnapshotDate" type="date" class="input w-full" />
+        </div>
+      </div>
+      <div v-if="sohUploadResult && sohUploadResult.rejected_count > 0 && sohRejectionDetail" class="mt-3 p-3 rounded-lg text-sm" :class="sohUploadResult.staged_count === 0 ? 'bg-amber-50 text-amber-900' : 'bg-slate-50 text-slate-700'">
+        <p class="font-medium">
+          <template v-if="sohUploadResult.staged_count === 0">Import failed: all {{ sohUploadResult.rejected_count.toLocaleString() }} rows were rejected.</template>
+          <template v-else>{{ sohUploadResult.rejected_count.toLocaleString() }} rows rejected ({{ sohUploadResult.staged_count }} staged).</template>
+        </p>
+        <p v-if="sohRejectionDetail.error_summary" class="mt-1">{{ sohRejectionDetail.error_summary }}</p>
+        <div v-if="sohRejectionDetail.rejections_sample?.length" class="mt-2">
+          <p class="font-medium">Sample rejection reasons:</p>
+          <ul class="mt-1 list-disc list-inside space-y-0.5">
+            <li v-for="(r, i) in sohRejectionDetail.rejections_sample.slice(0, 10)" :key="i">Row {{ r.row_number }}: {{ r.reason }}</li>
+          </ul>
+          <p v-if="sohRejectionDetail.rejections_sample.length >= 10" class="mt-1 text-xs opacity-80">… and more. Click Details in the table below for full list.</p>
         </div>
       </div>
       <div v-if="sohUploadResult" class="mt-3 text-sm text-slate-600 flex flex-wrap items-center gap-2">
@@ -232,7 +274,9 @@
         <span v-if="sohUploadResult.import_summary" class="text-slate-600">SKUs: {{ sohUploadResult.import_summary.distinct_skus }}, total qty: {{ sohUploadResult.import_summary.total_qty.toLocaleString() }}, parsing errors: {{ sohUploadResult.import_summary.parsing_errors }}</span>
         <span v-if="sohUploadResult.mode" class="badge" :class="sohUploadResult.mode === 'historical' ? 'badge-warn' : 'badge-info'">{{ sohUploadResult.mode }}</span>
         <button v-if="sohUploadResult.requires_confirm" type="button" @click="showConfirmModal(sohUploadResult)" class="btn-secondary text-sm border-amber-300 text-amber-800">Confirm backfill</button>
-        <button type="button" @click="executeSohRun(sohUploadResult.run_id)" :disabled="sohUploadResult.requires_confirm && !sohUploadResult.confirmed" class="btn-primary text-sm">Execute (daily → weekly)</button>
+        <button type="button" @click="executeSohRun(sohUploadResult.run_id)" :disabled="(sohUploadResult.requires_confirm && !sohUploadResult.confirmed) || sohExecuting" class="btn-primary text-sm">
+          {{ sohExecuting ? 'Executing…' : 'Execute (daily → weekly)' }}
+        </button>
       </div>
     </section>
 
@@ -319,6 +363,8 @@
 <script setup lang="ts">
 import { ref, computed, onMounted } from 'vue'
 import api from '@/api/client'
+import { useAdminStore } from '@/stores/admin'
+import { useBannerStore } from '@/stores/banner'
 import DataTable from '@/components/console/DataTable.vue'
 import type { DataTableColumn } from '@/components/console/DataTable.vue'
 import type { ImportDryRunResult, BackboneImportResult } from '@/api/client'
@@ -363,6 +409,10 @@ type ImportType =
   | 'samples-withdrawals'
   | 'products'
 
+const adminStore = useAdminStore()
+const bannerStore = useBannerStore()
+const activeWarehouses = computed(() => adminStore.warehouses.filter((w) => w.active))
+
 const importCards = [
   { type: 'backbone-stock-positions' as ImportType, title: 'Stock positions weekly', description: 'Warehouse, SKU, iso year/week, on_hand_units.', templateHref: null },
   { type: 'backbone-inbound-orders' as ImportType, title: 'Inbound orders weekly', description: 'Warehouse, SKU, iso year/week, inbound_units.', templateHref: null },
@@ -401,6 +451,10 @@ const drawerRun = ref<IngestionRunDetail | null>(null)
 
 const salesOutFileInput = ref<HTMLInputElement | null>(null)
 const salesOutFile = ref<File | null>(null)
+const salesOutUploading = ref(false)
+const salesOutUploadProgress = ref(0)
+const salesOutDateFrom = ref('')
+const salesOutDateTo = ref('')
 const salesOutUploadResult = ref<IngestionUploadResult | null>(null)
 const salesOutBuildResult = ref<{ rows_staged: number; weeks_written: number; rows_rejected: number } | null>(null)
 
@@ -409,6 +463,12 @@ const sohFile = ref<File | null>(null)
 const sohWarehouseCode = ref('')
 const sohSnapshotDate = ref(new Date().toISOString().slice(0, 10))
 const sohUploadResult = ref<IngestionUploadResult | null>(null)
+const sohRejectionDetail = ref<{ error_summary: string | null; rejections_sample: { row_number: number; reason: string }[] } | null>(null)
+const sohUploading = ref(false)
+const sohUploadProgress = ref(0)
+const sohError = ref<string | null>(null)
+const sohExecuting = ref(false)
+const sohTemplateDownloading = ref(false)
 const confirmModalRun = ref<IngestionUploadResult | null>(null)
 
 const selectedCard = computed(() => importCards.find((c) => c.type === selectedType.value))
@@ -557,13 +617,32 @@ function onSalesOutFileSelect(e: Event) {
   salesOutBuildResult.value = null
 }
 
+function setSalesOutLast24Months() {
+  const today = new Date()
+  const from = new Date(today)
+  from.setMonth(from.getMonth() - 24)
+  salesOutDateFrom.value = from.toISOString().slice(0, 10)
+  salesOutDateTo.value = today.toISOString().slice(0, 10)
+}
+
 async function uploadSalesOutWithMode(mode: 'weekly' | 'historical') {
   if (!salesOutFile.value) return
+  salesOutUploading.value = true
+  salesOutUploadProgress.value = 0
+  salesOutUploadResult.value = null
   const form = new FormData()
   form.append('file', salesOutFile.value)
+  const params: Record<string, string> = { mode }
+  if (mode === 'historical') {
+    if (salesOutDateFrom.value.trim()) params.date_from = salesOutDateFrom.value.trim()
+    if (salesOutDateTo.value.trim()) params.date_to = salesOutDateTo.value.trim()
+  }
   try {
     const { data } = await api.post<IngestionUploadResult>('/ingestion/sales-out/upload', form, {
-      params: { mode },
+      params,
+      onUploadProgress: (e) => {
+        salesOutUploadProgress.value = e.total ? Math.round((e.loaded / e.total) * 100) : 50
+      },
     })
     salesOutUploadResult.value = { ...data, confirmed: data.requires_confirm ? false : true }
     salesOutFile.value = null
@@ -574,6 +653,9 @@ async function uploadSalesOutWithMode(mode: 'weekly' | 'historical') {
       ? (err as { response?: { data?: { detail?: string } } }).response?.data?.detail
       : null
     alert(msg ? `Upload failed: ${typeof msg === 'string' ? msg : JSON.stringify(msg)}` : 'Upload failed. Check the file format and try again.')
+  } finally {
+    salesOutUploading.value = false
+    salesOutUploadProgress.value = 0
   }
 }
 
@@ -588,6 +670,11 @@ async function buildSalesOutWeekly(runId: string) {
       rows_rejected: data.rows_rejected,
     }
     await loadIngestionRuns()
+    bannerStore.add({
+      type: 'success',
+      title: 'Sales Out build-weekly completed',
+      message: `demand_actuals: ${data.weeks_written} weeks written${data.rows_rejected ? `, ${data.rows_rejected} rejected` : ''}.`,
+    })
   } catch (err: unknown) {
     const msg = err && typeof err === 'object' && 'response' in err
       ? (err as { response?: { data?: { detail?: string } } }).response?.data?.detail
@@ -600,10 +687,45 @@ function onSohFileSelect(e: Event) {
   const target = e.target as HTMLInputElement
   sohFile.value = target.files?.[0] ?? null
   sohUploadResult.value = null
+  sohError.value = null
+}
+
+async function downloadSohTemplate() {
+  sohError.value = null
+  sohTemplateDownloading.value = true
+  try {
+    const { data, headers } = await api.get<Blob>('/templates/stock-on-hand', { responseType: 'blob' })
+    const disposition = headers['content-disposition']
+    const match = disposition?.match(/filename="?([^";]+)"?/)
+    const filename = match?.[1] ?? 'template_stock_on_hand.csv'
+    const url = URL.createObjectURL(data)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = filename
+    a.click()
+    URL.revokeObjectURL(url)
+  } catch (err: unknown) {
+    const res = err && typeof err === 'object' && 'response' in err ? (err as { response?: { status?: number; data?: unknown } }).response : null
+    const status = res?.status
+    const detail = res?.data
+    let msg = 'Template download failed.'
+    if (status === 401) msg = 'Unauthorised: log in or check your session.'
+    else if (detail && typeof detail === 'object' && 'detail' in detail) {
+      const d = (detail as { detail: unknown }).detail
+      msg = typeof d === 'string' ? d : `Download failed: ${JSON.stringify(d)}`
+    }
+    sohError.value = msg
+  } finally {
+    sohTemplateDownloading.value = false
+  }
 }
 
 async function uploadSohWithMode(mode: 'weekly' | 'historical') {
   if (!sohFile.value) return
+  sohError.value = null
+  sohRejectionDetail.value = null
+  sohUploading.value = true
+  sohUploadProgress.value = 0
   const form = new FormData()
   form.append('file', sohFile.value)
   const params: Record<string, string> = { mode }
@@ -612,16 +734,29 @@ async function uploadSohWithMode(mode: 'weekly' | 'historical') {
   try {
     const { data } = await api.post<IngestionUploadResult>('/ingestion/stock-on-hand/upload', form, {
       params,
+      onUploadProgress: (e) => {
+        sohUploadProgress.value = e.total ? Math.round((e.loaded / e.total) * 100) : 50
+      },
     })
     sohUploadResult.value = { ...data, confirmed: data.requires_confirm ? false : true }
     sohFile.value = null
     if (sohFileInput.value) sohFileInput.value.value = ''
     await loadIngestionRuns()
+    if (data.rejected_count > 0) {
+      const { data: runDetail } = await api.get<IngestionRunDetail>(`/ingestion/runs/${data.run_id}`, { params: { rejections_limit: 20 } })
+      sohRejectionDetail.value = {
+        error_summary: runDetail.error_summary,
+        rejections_sample: runDetail.rejections_sample.map((r) => ({ row_number: r.row_number, reason: r.reason })),
+      }
+    }
   } catch (err: unknown) {
-    const msg = err && typeof err === 'object' && 'response' in err
-      ? (err as { response?: { data?: { detail?: string } } }).response?.data?.detail
-      : null
-    alert(msg ? `Upload failed: ${typeof msg === 'string' ? msg : JSON.stringify(msg)}` : 'Upload failed. Check the file format and branch mapping.')
+    const res = err && typeof err === 'object' && 'response' in err ? (err as { response?: { data?: { detail?: unknown } } }).response : null
+    const detail = res?.data?.detail
+    const msg = detail != null ? (typeof detail === 'string' ? detail : JSON.stringify(detail)) : 'Upload failed. Check the file format and branch mapping.'
+    sohError.value = msg
+  } finally {
+    sohUploading.value = false
+    sohUploadProgress.value = 0
   }
 }
 
@@ -661,19 +796,32 @@ async function confirmBackfill() {
 }
 
 async function executeSohRun(runId: string) {
+  sohError.value = null
+  sohExecuting.value = true
   try {
-    await api.post(`/ingestion/stock-on-hand/${runId}/execute`)
+    const { data } = await api.post<{ run_id: string; status: string; entity?: string; table?: string; inserted_count?: number; updated_count?: number; rejected_count?: number }>(`/ingestion/stock-on-hand/${runId}/execute`)
     await loadIngestionRuns()
     if (drawerRunId.value === runId) {
-      const { data } = await api.get<IngestionRunDetail>(`/ingestion/runs/${runId}`)
-      drawerRun.value = data
+      const { data: runData } = await api.get<IngestionRunDetail>(`/ingestion/runs/${runId}`)
+      drawerRun.value = runData
     }
     sohUploadResult.value = null
+    sohRejectionDetail.value = null
+    const table = data.table ?? 'inventory_snapshots_weekly'
+    const ins = data.inserted_count ?? 0
+    const upd = data.updated_count ?? 0
+    const rej = data.rejected_count ?? 0
+    bannerStore.add({
+      type: 'success',
+      title: 'SOH import executed',
+      message: `${table}: inserted ${ins}, updated ${upd}${rej ? `, rejected ${rej}` : ''}.`,
+    })
   } catch (err: unknown) {
-    const msg = err && typeof err === 'object' && 'response' in err
-      ? (err as { response?: { data?: { detail?: string } } }).response?.data?.detail
-      : null
-    alert(msg ? `Execute failed: ${typeof msg === 'string' ? msg : JSON.stringify(msg)}` : 'Execute failed.')
+    const res = err && typeof err === 'object' && 'response' in err ? (err as { response?: { data?: { detail?: unknown } } }).response : null
+    const detail = res?.data?.detail
+    sohError.value = detail != null ? (typeof detail === 'string' ? detail : JSON.stringify(detail)) : 'Execute failed.'
+  } finally {
+    sohExecuting.value = false
   }
 }
 
@@ -683,13 +831,22 @@ async function loadIngestionRuns() {
 }
 
 async function executeIngestionRun(runId: string) {
-  await api.post(`/ingestion/runs/${runId}/execute`)
+  const { data } = await api.post<{ run_id: string; status: string; entity?: string; table?: string; inserted_count?: number; updated_count?: number; rejected_count?: number }>(`/ingestion/runs/${runId}/execute`)
   await loadIngestionRuns()
   if (drawerRunId.value === runId) {
-    const { data } = await api.get<IngestionRunDetail>(`/ingestion/runs/${runId}`)
-    drawerRun.value = data
+    const { data: runData } = await api.get<IngestionRunDetail>(`/ingestion/runs/${runId}`)
+    drawerRun.value = runData
   }
   ingestionUploadResult.value = null
+  const table = data.table ?? 'data'
+  const ins = data.inserted_count ?? 0
+  const upd = data.updated_count ?? 0
+  const rej = data.rejected_count ?? 0
+  bannerStore.add({
+    type: 'success',
+    title: 'Import executed',
+    message: `${table}: inserted ${ins}, updated ${upd}${rej ? `, rejected ${rej}` : ''}.`,
+  })
 }
 
 async function openRunDrawer(row: { id: string }) {
@@ -722,6 +879,7 @@ function downloadRejectionsCsv() {
 }
 
 onMounted(() => {
+  adminStore.fetchWarehouses()
   loadIngestionRuns()
 })
 </script>

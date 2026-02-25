@@ -4,6 +4,7 @@ const router = createRouter({
   history: createWebHistory(),
   routes: [
     { path: '/', name: 'Dashboard', meta: { title: 'Dashboard' }, component: () => import('../views/DashboardView.vue') },
+    { path: '/setup', name: 'Setup', meta: { title: 'Getting Started' }, component: () => import('../views/SetupView.vue') },
     { path: '/stock-projection', name: 'StockProjection', meta: { title: 'Stock Projection' }, component: () => import('../views/StockProjectionView.vue') },
     { path: '/inventory-projection', name: 'InventoryProjection', meta: { title: 'Inventory Projection' }, component: () => import('../views/InventoryProjectionView.vue') },
     { path: '/planning-grid', name: 'WeeklyPlanningGrid', meta: { title: 'Weekly Planning Grid' }, component: () => import('../views/WeeklyPlanningGridView.vue') },
@@ -11,6 +12,7 @@ const router = createRouter({
     { path: '/planned-orders', name: 'PlannedOrders', meta: { title: 'Planned Orders' }, component: () => import('../views/PlannedOrdersView.vue') },
     { path: '/stock-position', name: 'StockPosition', meta: { title: 'Stock Position' }, component: () => import('../views/StockPositionBreakdownView.vue') },
     { path: '/exceptions', name: 'Exceptions', meta: { title: 'Exceptions' }, component: () => import('../views/ExceptionsView.vue') },
+    { path: '/planning/scenario-manager', name: 'ScenarioManager', meta: { title: 'Scenario Manager' }, component: () => import('../views/ScenarioManagerView.vue') },
     {
       path: '/admin',
       name: 'Admin',
@@ -31,10 +33,16 @@ const router = createRouter({
         { path: 'timelines', name: 'AdminTimelines', meta: { title: 'Admin · Timelines' }, component: () => import('../views/admin/AdminTimelinesView.vue') },
         { path: 'forecast-methods', name: 'AdminForecastMethods', meta: { title: 'Admin · Forecasting Methods' }, component: () => import('../views/admin/ForecastMethodsView.vue') },
         { path: 'settings', name: 'AdminSettings', meta: { title: 'Admin · Settings' }, component: () => import('../views/admin/AdminSettingsTab.vue') },
+        { path: 'import-formats', name: 'AdminImportFormats', meta: { title: 'Admin · Import Formats' }, component: () => import('../views/admin/AdminImportFormatsTab.vue') },
+        { path: 'warehouse-product-codes', name: 'AdminWarehouseProductCodes', meta: { title: 'Admin · Warehouse Product Codes' }, component: () => import('../views/admin/AdminWarehouseProductCodesTab.vue') },
       ],
     },
     { path: '/imports', name: 'Imports', meta: { title: 'Imports' }, component: () => import('../views/ImportsView.vue') },
     { path: '/reports', name: 'Reports', meta: { title: 'Reports' }, component: () => import('../views/ReportsView.vue') },
+    { path: '/reports/data-health', name: 'DataHealth', meta: { title: 'Data Health' }, component: () => import('../views/DataHealthView.vue') },
+    { path: '/reports/stock-on-hand-history', name: 'StockOnHandHistory', meta: { title: 'Stock On Hand History' }, component: () => import('../views/StockOnHandHistoryView.vue') },
+    { path: '/reports/stock-on-hand-grid', name: 'StockOnHandGrid', meta: { title: 'SOH History Grid' }, component: () => import('../views/StockOnHandGridView.vue') },
+    { path: '/reports/sales-grid', name: 'SalesGrid', meta: { title: 'Sales Grid' }, component: () => import('../views/SalesGridView.vue') },
     { path: '/exports', name: 'Exports', meta: { title: 'Exports' }, component: () => import('../views/ExportsView.vue') },
   ],
 })

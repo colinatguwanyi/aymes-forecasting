@@ -44,7 +44,12 @@
           </tbody>
         </table>
       </div>
-      <p v-else class="px-4 py-8 text-sm text-neutral-500">No planned orders. Select a scenario or run a plan.</p>
+      <NoDataWithReason
+        v-else
+        :title="noDataTitle"
+        :reasons="noDataReasons"
+        :actions="noDataActions"
+      />
     </div>
   </div>
 </template>
@@ -54,8 +59,10 @@ import { ref, computed, watch, onMounted } from 'vue'
 import { usePlanningStore } from '@/stores/planning'
 import { useAdminStore } from '@/stores/admin'
 import type { PlannedOrder } from '@/api/client'
+import { fetchPlanningReadiness } from '@/api/client'
 import PageHeader from '@/components/console/PageHeader.vue'
 import FilterBar from '@/components/console/FilterBar.vue'
+import NoDataWithReason from '@/components/console/NoDataWithReason.vue'
 
 const store = usePlanningStore()
 const adminStore = useAdminStore()
@@ -82,6 +89,26 @@ const exportUrl = computed(() =>
   selectedRunId.value ? `/api/exports/planned-orders?plan_run_id=${selectedRunId.value}` : '#'
 )
 
+const diagnosticsData = ref<Awaited<ReturnType<typeof fetchPlanningReadiness>> | null>(null)
+const noDataTitle = computed(() => {
+  if (!selectedRunId.value && store.planRuns.length) return 'No plan run selected'
+  if (!selectedRunId.value) return 'No plan runs yet'
+  return 'No planned orders for this plan run'
+})
+const noDataReasons = computed(() => {
+  const d = diagnosticsData.value
+  if (!d) return ['Loading diagnostics…']
+  return d.blockers.map((b) => b.message)
+})
+const noDataActions = computed(() => {
+  const d = diagnosticsData.value
+  if (!d) return []
+  const seen = new Set<string>()
+  return d.blockers
+    .filter((b) => !seen.has(b.action_href) && seen.add(b.action_href))
+    .map((b) => ({ label: b.action_label, href: b.action_href }))
+})
+
 watch(selectedRunId, async (id) => {
   if (id) {
     orders.value = await store.fetchPlannedOrders(id)
@@ -90,9 +117,20 @@ watch(selectedRunId, async (id) => {
   }
 }, { immediate: true })
 
-onMounted(() => {
-  store.fetchPlanRuns()
-  adminStore.fetchProducts()
-  adminStore.fetchWarehouses()
+watch(
+  () => ({ ordersLen: displayOrders.value.length, runId: selectedRunId.value }),
+  async ({ ordersLen, runId }) => {
+    if (ordersLen === 0) {
+      diagnosticsData.value = await fetchPlanningReadiness(runId ?? undefined)
+    } else {
+      diagnosticsData.value = null
+    }
+  },
+  { immediate: true }
+)
+
+onMounted(async () => {
+  await Promise.all([store.fetchPlanRuns(), adminStore.fetchProducts(), adminStore.fetchWarehouses()])
+  if (store.planRuns.length && !selectedRunId.value) selectedRunId.value = store.planRuns[0].id
 })
 </script>

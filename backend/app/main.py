@@ -13,6 +13,9 @@ from app.routers import (
     admin_forecast_methods,
     app_settings,
     auth,
+    data_health,
+    diagnostics,
+    sales_reports,
     products,
     warehouses,
     suppliers,
@@ -34,6 +37,8 @@ from app.routers import (
     templates,
     ingestion,
     forecast,
+    warehouse_product_codes,
+    soh_reports,
 )
 
 logger = logging.getLogger(__name__)
@@ -88,6 +93,11 @@ app.include_router(ingestion.router, prefix="/api/ingestion", tags=["ingestion"]
 app.include_router(forecast.router, prefix="/api/forecast", tags=["forecast"])
 app.include_router(admin_forecast_methods.router, prefix="/api/admin/forecast-methods", tags=["admin-forecast-methods"])
 app.include_router(app_settings.router, prefix="/api/admin/settings", tags=["admin-settings"])
+app.include_router(warehouse_product_codes.router, prefix="/api/admin/warehouse-product-codes", tags=["admin-warehouse-product-codes"])
+app.include_router(soh_reports.router, prefix="/api/v1/reports/stock-on-hand", tags=["reports-soh"])
+app.include_router(sales_reports.router, prefix="/api/v1/reports/sales", tags=["reports-sales"])
+app.include_router(data_health.router, prefix="/api/v1/reports/data-health", tags=["reports-data-health"])
+app.include_router(diagnostics.router, prefix="/api/v1/diagnostics", tags=["diagnostics"])
 
 # Serve built frontend (after: cd frontend && npm run build)
 if _SERVE_FRONTEND:

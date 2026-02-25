@@ -2,29 +2,37 @@
   <div class="space-y-4">
     <PageHeader title="Inventory Projection" :breadcrumbs="[{ label: 'Planning', path: '/' }]">
       <template #actions>
-        <button type="button" class="px-4 py-2 text-sm font-medium text-neutral-700 bg-white border border-neutral-300 rounded-lg hover:bg-neutral-50" @click="exportCsv">Export CSV</button>
+        <button type="button" class="px-4 py-2 text-sm font-medium text-neutral-700 bg-white border border-neutral-300 rounded-lg hover:bg-neutral-50" @click="exportCsv" title="Export Scenario 1 data to CSV">Export CSV</button>
       </template>
     </PageHeader>
 
+    <section v-if="!loading && !planRuns.length" class="rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-amber-800">
+      <strong>No plan runs yet.</strong> Go to the <router-link to="/" class="font-medium underline hover:no-underline">Dashboard</router-link>, run a plan (Scenario + Demand source + Run plan), then return here to select it and view projections.
+    </section>
+
+    <section v-else-if="!loading && planRuns.length && !runId1" class="rounded-lg border border-blue-200 bg-blue-50 px-4 py-3 text-blue-800">
+      <strong>Select a plan run</strong> from the dropdown above. Plan runs are created on the <router-link to="/" class="font-medium underline hover:no-underline">Dashboard</router-link>.
+    </section>
+
     <FilterBar v-model="search" search-placeholder="Search SKU or warehouse…" :has-active-filters="hasActiveFilters" @clear="runId1 = null; runId2 = null; skuFilter = ''; whFilter = ''; stockoutOnly = false; search = ''">
       <template #filters>
-        <select v-model="runId1" class="border border-neutral-300 rounded-md px-3 py-2 text-sm bg-white min-w-48">
-          <option :value="null">Plan run 1</option>
-          <option v-for="r in planRuns" :key="r.id" :value="r.id">{{ r.scenario_name }}</option>
+        <select v-model="runId1" class="border border-neutral-300 rounded-md px-3 py-2 text-sm bg-white min-w-48" title="Select a plan run to view its projected inventory. Created on the Dashboard.">
+          <option :value="null">Plan run 1 — select</option>
+          <option v-for="r in planRuns" :key="r.id" :value="r.id">{{ formatPlanRunLabel(r) }}</option>
         </select>
-        <select v-model="runId2" class="border border-neutral-300 rounded-md px-3 py-2 text-sm bg-white min-w-48">
-          <option :value="null">Plan run 2</option>
-          <option v-for="r in planRuns" :key="'2-' + r.id" :value="r.id">{{ r.scenario_name }}</option>
+        <select v-model="runId2" class="border border-neutral-300 rounded-md px-3 py-2 text-sm bg-white min-w-48" title="Optional: select a second run to compare side by side.">
+          <option :value="null">Plan run 2 — optional</option>
+          <option v-for="r in planRuns" :key="'2-' + r.id" :value="r.id">{{ formatPlanRunLabel(r) }}</option>
         </select>
-        <select v-model="skuFilter" class="border border-neutral-300 rounded-md px-3 py-2 text-sm bg-white min-w-40">
+        <select v-model="skuFilter" class="border border-neutral-300 rounded-md px-3 py-2 text-sm bg-white min-w-40" title="Filter to a specific SKU.">
           <option value="">All SKUs</option>
           <option v-for="p in products" :key="p.id" :value="p.sku">{{ p.sku }}</option>
         </select>
-        <select v-model="whFilter" class="border border-neutral-300 rounded-md px-3 py-2 text-sm bg-white min-w-40">
+        <select v-model="whFilter" class="border border-neutral-300 rounded-md px-3 py-2 text-sm bg-white min-w-40" title="Filter to a specific warehouse.">
           <option value="">All warehouses</option>
           <option v-for="w in warehouses" :key="w.id" :value="w.code">{{ w.code }}</option>
         </select>
-        <label class="flex items-center gap-2 text-sm text-neutral-700">
+        <label class="flex items-center gap-2 text-sm text-neutral-700" title="Show only rows where projected qty ≤ 0 (stockout).">
           <input v-model="stockoutOnly" type="checkbox" class="rounded border-neutral-300" />
           Stockout only
         </label>
@@ -65,7 +73,12 @@
             </tbody>
           </table>
         </div>
-        <p v-else class="px-4 py-8 text-sm text-neutral-500">No data. Select a scenario and run a plan if needed.</p>
+        <NoDataWithReason
+          v-else
+          :title="noDataTitle1"
+          :reasons="noDataReasons1"
+          :actions="noDataActions1"
+        />
       </section>
 
       <section class="border border-neutral-200 rounded-lg bg-white overflow-hidden">
@@ -100,7 +113,12 @@
             </tbody>
           </table>
         </div>
-        <p v-else class="px-4 py-8 text-sm text-neutral-500">No data.</p>
+        <NoDataWithReason
+          v-else
+          :title="noDataTitle2"
+          :reasons="noDataReasons2"
+          :actions="noDataActions2"
+        />
       </section>
 
       <section class="border border-neutral-200 rounded-lg bg-white overflow-hidden p-4">
@@ -146,9 +164,11 @@ import { useLayoutStore } from '@/stores/layout'
 import { usePlanningStore } from '@/stores/planning'
 import { useAdminStore } from '@/stores/admin'
 import type { ProjectedInventory, SkuWeekExplanation } from '@/api/client'
+import { formatPlanRunLabel, fetchPlanningReadiness } from '@/api/client'
 import { Chart, registerables } from 'chart.js'
 import PageHeader from '@/components/console/PageHeader.vue'
 import FilterBar from '@/components/console/FilterBar.vue'
+import NoDataWithReason from '@/components/console/NoDataWithReason.vue'
 
 Chart.register(...registerables)
 
@@ -181,6 +201,44 @@ function filterBySearchAndStockout(list: ProjectedInventory[], q: string): Proje
 
 const displayData1 = computed(() => filterBySearchAndStockout(data1.value, search.value))
 const displayData2 = computed(() => filterBySearchAndStockout(data2.value, search.value))
+
+const diagnostics1 = ref<Awaited<ReturnType<typeof fetchPlanningReadiness>> | null>(null)
+const diagnostics2 = ref<Awaited<ReturnType<typeof fetchPlanningReadiness>> | null>(null)
+const noDataTitle1 = computed(() => {
+  if (!runId1.value && store.planRuns.length) return 'No plan run selected'
+  if (!runId1.value) return 'No plan runs yet'
+  return 'No projection rows for this run'
+})
+const noDataReasons1 = computed(() => {
+  const d = diagnostics1.value
+  if (!d) return ['Loading diagnostics…']
+  return d.blockers.map((b) => b.message)
+})
+const noDataActions1 = computed(() => {
+  const d = diagnostics1.value
+  if (!d) return []
+  const seen = new Set<string>()
+  return d.blockers
+    .filter((b) => !seen.has(b.action_href) && seen.add(b.action_href))
+    .map((b) => ({ label: b.action_label, href: b.action_href }))
+})
+const noDataTitle2 = computed(() => {
+  if (!runId2.value) return 'Optional: select Plan run 2 to compare'
+  return 'No projection rows for this run and filters'
+})
+const noDataReasons2 = computed(() => {
+  const d = diagnostics2.value
+  if (!d) return []
+  return d.blockers.map((b) => b.message)
+})
+const noDataActions2 = computed(() => {
+  const d = diagnostics2.value
+  if (!d) return []
+  const seen = new Set<string>()
+  return d.blockers
+    .filter((b) => !seen.has(b.action_href) && seen.add(b.action_href))
+    .map((b) => ({ label: b.action_label, href: b.action_href }))
+})
 
 function exportCsv() {
   const rows = [...displayData1.value]
@@ -273,6 +331,28 @@ function updateChart() {
 }
 
 watch([runId1, runId2, skuFilter, whFilter], load)
+watch(
+  () => ({ len1: displayData1.value.length, run1: runId1.value }),
+  async ({ len1, run1 }) => {
+    if (len1 === 0) {
+      diagnostics1.value = await fetchPlanningReadiness(run1 ?? undefined)
+    } else {
+      diagnostics1.value = null
+    }
+  },
+  { immediate: true }
+)
+watch(
+  () => ({ len2: displayData2.value.length, run2: runId2.value }),
+  async ({ len2, run2 }) => {
+    if (len2 === 0 && run2) {
+      diagnostics2.value = await fetchPlanningReadiness(run2)
+    } else {
+      diagnostics2.value = null
+    }
+  },
+  { immediate: true }
+)
 watch(
   () => layout.rightPanelOpen,
   (open) => {

@@ -70,7 +70,12 @@
           </tbody>
         </table>
       </div>
-      <p v-else class="px-5 py-8 text-sm text-slate-500">No breakdown. Select a plan run and run a plan if needed.</p>
+      <NoDataWithReason
+        v-else
+        :title="noDataTitle"
+        :reasons="noDataReasons"
+        :actions="noDataActions"
+      />
     </section>
 
     <Teleport to="#right-panel-body">
@@ -203,8 +208,10 @@ import { usePlanningStore } from '@/stores/planning'
 import { useAdminStore } from '@/stores/admin'
 import { useLayoutStore } from '@/stores/layout'
 import type { StockPositionBreakdown } from '@/api/client'
+import { fetchPlanningReadiness } from '@/api/client'
 import PageHeader from '@/components/console/PageHeader.vue'
 import FilterBar from '@/components/console/FilterBar.vue'
+import NoDataWithReason from '@/components/console/NoDataWithReason.vue'
 
 const store = usePlanningStore()
 const adminStore = useAdminStore()
@@ -251,6 +258,26 @@ const displayRows = computed(() => {
   const q = search.value.toLowerCase()
   if (q) list = list.filter((r) => r.sku.toLowerCase().includes(q) || r.warehouse_code.toLowerCase().includes(q))
   return list
+})
+
+const diagnosticsData = ref<Awaited<ReturnType<typeof fetchPlanningReadiness>> | null>(null)
+const noDataTitle = computed(() => {
+  if (!planRunId.value && store.planRuns.length) return 'No plan run selected'
+  if (!planRunId.value) return 'No plan runs yet'
+  return 'No breakdown for this plan run'
+})
+const noDataReasons = computed(() => {
+  const d = diagnosticsData.value
+  if (!d) return ['Loading diagnostics…']
+  return d.blockers.map((b) => b.message)
+})
+const noDataActions = computed(() => {
+  const d = diagnosticsData.value
+  if (!d) return []
+  const seen = new Set<string>()
+  return d.blockers
+    .filter((b) => !seen.has(b.action_href) && seen.add(b.action_href))
+    .map((b) => ({ label: b.action_label, href: b.action_href }))
 })
 
 async function load() {
@@ -306,10 +333,21 @@ function openDetail(row: StockPositionBreakdown) {
 
 watch([planRunId, warehouseFilter, productFamilyFilter, breachOnly], load, { immediate: true })
 
-onMounted(() => {
-  store.fetchPlanRuns()
-  adminStore.fetchProducts()
-  adminStore.fetchWarehouses()
+watch(
+  () => ({ loading: loading.value, rows: displayRows.value.length, runId: planRunId.value }),
+  async ({ loading: ld, rows, runId }) => {
+    if (!ld && rows === 0) {
+      diagnosticsData.value = await fetchPlanningReadiness(runId ?? undefined)
+    } else {
+      diagnosticsData.value = null
+    }
+  },
+  { immediate: true }
+)
+
+onMounted(async () => {
+  await Promise.all([store.fetchPlanRuns(), adminStore.fetchProducts(), adminStore.fetchWarehouses()])
+  if (store.planRuns.length && !planRunId.value) planRunId.value = store.planRuns[0].id
 })
 </script>
 

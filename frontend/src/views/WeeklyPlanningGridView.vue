@@ -68,7 +68,12 @@
             </table>
           </div>
         </div>
-        <p v-else class="text-sm text-slate-500 py-4">No data. Select a scenario and run a plan, or adjust filters.</p>
+        <NoDataWithReason
+          v-else
+          :title="noDataTitle"
+          :reasons="noDataReasons"
+          :actions="noDataActions"
+        />
       </template>
     </section>
 
@@ -107,6 +112,8 @@ import { useRoute } from 'vue-router'
 import { useLayoutStore } from '@/stores/layout'
 import { usePlanningStore } from '@/stores/planning'
 import type { ProjectedInventory, SkuWeekExplanation } from '@/api/client'
+import { fetchPlanningReadiness } from '@/api/client'
+import NoDataWithReason from '@/components/console/NoDataWithReason.vue'
 
 const LOW_COVER_WEEKS = 2
 
@@ -148,6 +155,26 @@ const rows = computed(() => {
     sku,
     warehouse_code,
   }))
+})
+
+const diagnosticsData = ref<Awaited<ReturnType<typeof fetchPlanningReadiness>> | null>(null)
+const noDataTitle = computed(() => {
+  if (!selectedRunId.value && store.planRuns.length) return 'No plan run selected'
+  if (!selectedRunId.value) return 'No plan runs yet'
+  return 'No data for this plan run'
+})
+const noDataReasons = computed(() => {
+  const d = diagnosticsData.value
+  if (!d) return ['Loading diagnostics…']
+  return d.blockers.map((b) => b.message)
+})
+const noDataActions = computed(() => {
+  const d = diagnosticsData.value
+  if (!d) return []
+  const seen = new Set<string>()
+  return d.blockers
+    .filter((b) => !seen.has(b.action_href) && seen.add(b.action_href))
+    .map((b) => ({ label: b.action_label, href: b.action_href }))
 })
 
 function cellClass(
@@ -216,6 +243,17 @@ async function load() {
 
 watch([selectedRunId, whFilter, skuFilter], load)
 watch(
+  () => ({ loading: loading.value, rowsLen: rows.value.length, runId: selectedRunId.value }),
+  async ({ loading: ld, rowsLen, runId }) => {
+    if (!ld && rowsLen === 0) {
+      diagnosticsData.value = await fetchPlanningReadiness(runId ?? undefined)
+    } else {
+      diagnosticsData.value = null
+    }
+  },
+  { immediate: true }
+)
+watch(
   () => layout.rightPanelOpen,
   (open) => {
     if (!open) {
@@ -232,6 +270,10 @@ onMounted(async () => {
     if (!isNaN(id) && store.planRuns.some((r) => r.id === id)) selectedRunId.value = id
   }
   if (selectedRunId.value == null && store.planRuns.length) selectedRunId.value = store.planRuns[0].id
+  const skuQ = route.query.sku
+  const whQ = route.query.warehouse_code
+  if (typeof skuQ === 'string' && skuQ) skuFilter.value = skuQ
+  if (typeof whQ === 'string' && whQ) whFilter.value = whQ
   loading.value = false
   await load()
 })

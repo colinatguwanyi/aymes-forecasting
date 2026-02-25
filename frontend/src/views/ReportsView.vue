@@ -1,6 +1,22 @@
 <template>
   <div class="page-content-inner">
     <p class="muted">View and export Breaches and Out-of-stock risk for a projection run. Use the run_id from Stock Projection after generating.</p>
+    <p class="mb-4">
+      <router-link to="/reports/stock-on-hand-history" class="text-blue-600 hover:underline">Stock On Hand History</router-link>
+      — View on-hand units trend by week from imported SOH data (single SKU).
+    </p>
+    <p class="mb-4">
+      <router-link to="/reports/stock-on-hand-grid" class="text-blue-600 hover:underline">SOH History Grid</router-link>
+      — All products week-by-week SOH table (paginated).
+    </p>
+    <p class="mb-4">
+      <router-link to="/reports/sales-grid" class="text-blue-600 hover:underline">Sales Grid</router-link>
+      — Weekly customer sales by product (demand_facts_weekly CUSTOMER).
+    </p>
+    <p class="mb-4">
+      <router-link to="/reports/data-health" class="text-blue-600 hover:underline">Data Health</router-link>
+      — Readiness to run plan (products, demand, SOH, policies).
+    </p>
 
     <section class="content-section controls">
       <div class="form-row">

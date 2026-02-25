@@ -30,6 +30,7 @@ logger = logging.getLogger(__name__)
 SOH_SOURCE_TYPE = "soh"
 CHUNK_SIZE = 5000
 HISTORICAL_BATCH_DAYS = 60
+DEFAULT_AAH_WAREHOUSE = "AAH"
 
 
 def _get(row: dict[str, Any], *keys: str) -> Any:
@@ -90,8 +91,10 @@ def validate_and_stage_soh_row(
     row: dict[str, Any],
     row_number: int,
     branch_to_wh: dict[str, str],
+    warehouse_code_override: str | None = None,
 ) -> tuple[bool, str | None]:
-    """Validate one row; always insert into stock_on_hand_stage (set reject_reason if invalid). Returns (staged_ok, reason_if_rejected)."""
+    """Validate one row; always insert into stock_on_hand_stage (set reject_reason if invalid). Returns (staged_ok, reason_if_rejected).
+    When warehouse_code_override is provided, branch column is ignored and all rows use that warehouse (roll-up by product)."""
     stock_at_raw = _get(row, "Stock at", "stock_at", "Stock at (date)")
     branch_raw = _get(row, "Branch Name", "branch_name", "Branch Name")
     aah_raw = _get(row, "AAH Code", "aah_code", "AAH Code")
@@ -99,6 +102,7 @@ def validate_and_stage_soh_row(
     on_order_raw = _get(row, "ON ORDER", "on_order")
 
     reject_reason: str | None = None
+    warehouse_code: str | None = None
     if not aah_raw or not str(aah_raw).strip():
         reject_reason = "AAH Code required"
     else:
@@ -106,10 +110,13 @@ def validate_and_stage_soh_row(
         if not date_ok:
             reject_reason = str(date_val)
         else:
-            branch_name = (str(branch_raw or "").strip()).upper()
-            warehouse_code = branch_to_wh.get(branch_name)
+            if warehouse_code_override:
+                warehouse_code = warehouse_code_override.strip().upper()
+            else:
+                # AAH format: roll all branches to ONE warehouse (AAH); branch read but not persisted
+                warehouse_code = DEFAULT_AAH_WAREHOUSE
             if not warehouse_code:
-                reject_reason = "unknown branch mapping"
+                reject_reason = "unknown branch mapping" if not warehouse_code_override else "warehouse_code required"
             else:
                 stock_ok, stock_val, stock_err = _parse_int_soh(stock_raw, 0)
                 if not stock_ok:
@@ -122,19 +129,23 @@ def validate_and_stage_soh_row(
                         reject_reason = on_order_err or "Invalid ON ORDER"
 
     sku = str(aah_raw).strip() if aah_raw else ""
-    branch_name = (str(branch_raw or "").strip()).upper()
+    # Store warehouse_code for build_daily (AAH or override); rejected rows use None
+    warehouse_for_storage: str | None = None
+    if not reject_reason and warehouse_code:
+        warehouse_for_storage = warehouse_code.strip().upper()
+    branch_to_store = warehouse_for_storage
     stock_val = 0
     on_order_val = 0
     if not reject_reason:
         _, stock_val, _ = _parse_int_soh(stock_raw, 0)
         _, on_order_val, _ = _parse_int_soh(on_order_raw, 0)
-    row_hash = hashlib.sha256(f"{stock_at_raw}|{branch_name}|{sku}|{stock_val}|{on_order_val}".encode()).hexdigest()[:64]
+    row_hash = hashlib.sha256(f"{stock_at_raw}|{branch_to_store or ''}|{sku}|{stock_val}|{on_order_val}".encode()).hexdigest()[:64]
 
     db.add(
         StockOnHandStage(
             ingestion_run_id=run_id,
             stock_at_raw=str(stock_at_raw) if stock_at_raw is not None else None,
-            branch_name_raw=str(branch_raw) if branch_raw is not None else None,
+            branch_name_raw=branch_to_store,
             aah_code_raw=sku or None,
             stock_raw=str(stock_raw) if stock_raw is not None else None,
             on_order_raw=str(on_order_raw) if on_order_raw is not None else None,
@@ -154,19 +165,28 @@ def stage_blp_soh(
     snapshot_date: date,
 ) -> tuple[int, int, dict[str, Any]]:
     """
-    Stage BLP-AYMES format: normalize, aggregate, write to stock_on_hand_stage.
-    Returns (staged_count, rejected_count, summary).
+    Stage BLP-AYMES format: normalize, resolve Code to canonical sku, aggregate, write to stock_on_hand_stage.
+    Location and Expiry Date ignored for stock totals. Returns (staged_count, rejected_count, summary).
     """
-    from app.ingestion.soh.adapters.blp_aymes_report import (
-        aggregate,
-        normalize,
-    )
+    from app.ingestion.soh.adapters.blp_aymes_report import normalize
+    from app.ingestion.soh.product_resolution import resolve_code_to_sku
 
-    normalized: list[Any] = []
+    wh_upper = warehouse_code.strip().upper()
+    resolved_by_mapping_table = 0
+    resolved_by_sku = 0
+    resolved_by_aah_code = 0
+    resolved_by_hs_code = 0
     rejected = 0
+    # Coverage: unique codes and units
+    codes_mapped: set[str] = set()
+    codes_missing: set[str] = set()
+    units_total = 0
+    units_missing = 0
+    # (resolved_sku, qty) for aggregation
+    resolved_rows: list[tuple[str, int]] = []
+
     for i, row in enumerate(rows, start=2):
         nr = normalize(row, i)
-        normalized.append(nr)
         if nr.reject_reason:
             rejected += 1
             db.add(
@@ -177,10 +197,47 @@ def stage_blp_soh(
                     reason=nr.reject_reason or "validation failed",
                 )
             )
+            continue
+        ext_code = (nr.sku or "").strip()
+        qty = nr.qty_on_hand
+        units_total += qty
+        desc = _get(row, "Description", "description") or ""
+        desc_str = str(desc).strip() if desc else ""
+        sku, method = resolve_code_to_sku(db, nr.sku, desc_str, warehouse_code=wh_upper)
+        if not sku:
+            rejected += 1
+            if ext_code:
+                codes_missing.add(ext_code)
+            units_missing += qty
+            db.add(
+                IngestionRejection(
+                    ingestion_run_id=run_id,
+                    row_number=i,
+                    raw_payload=dict(row),
+                    reason="product_not_found",
+                )
+            )
+            continue
+        if ext_code:
+            codes_mapped.add(ext_code)
+        if method == "mapping_table":
+            resolved_by_mapping_table += 1
+        elif method == "sku":
+            resolved_by_sku += 1
+        elif method == "aah_code":
+            resolved_by_aah_code += 1
+        elif method == "hs_code":
+            resolved_by_hs_code += 1
+        resolved_rows.append((sku, nr.qty_on_hand))
 
-    aggregated = aggregate(normalized, snapshot_date, warehouse_code.upper())
+    # Aggregate by (warehouse, resolved_sku) with SUM
+    by_key: dict[tuple[str, str], int] = {}
+    for sku, qty in resolved_rows:
+        key = (wh_upper, sku)
+        by_key[key] = by_key.get(key, 0) + qty
+
     snapshot_str = snapshot_date.isoformat()
-    for wh, sku, _sd, qty in aggregated:
+    for (wh, sku), qty in by_key.items():
         row_hash = hashlib.sha256(
             f"{snapshot_str}|{wh}|{sku}|{qty}|0".encode()
         ).hexdigest()[:64]
@@ -197,14 +254,32 @@ def stage_blp_soh(
                 row_hash=row_hash,
             )
         )
-    staged = len(aggregated)
-    total_qty = sum(qty for (_, _, _, qty) in aggregated)
-    distinct_skus = len({sku for (_, sku, _, _) in aggregated})
+    staged = len(by_key)
+    total_qty = sum(by_key.values())
+    distinct_skus = len({sku for (_, sku) in by_key})
+    total_unique_codes = len(codes_mapped) + len(codes_missing)
+    pct_coverage = (len(codes_mapped) / total_unique_codes * 100) if total_unique_codes else 100.0
+    pct_units_missing = (units_missing / units_total * 100) if units_total else 0.0
     summary = {
         "distinct_skus": distinct_skus,
         "total_qty": total_qty,
         "row_count": len(rows),
         "parsing_errors": rejected,
+        "resolved_by_mapping_table": resolved_by_mapping_table,
+        "resolved_by_sku": resolved_by_sku,
+        "resolved_by_aah_code": resolved_by_aah_code,
+        "resolved_by_hs_code": resolved_by_hs_code,
+        "rejected_rows": rejected,
+        "total_units_imported": total_qty,
+        "coverage": {
+            "total_unique_codes": total_unique_codes,
+            "mapped_codes": len(codes_mapped),
+            "missing_codes": len(codes_missing),
+            "pct_coverage_codes": round(pct_coverage, 2),
+            "units_total": units_total,
+            "units_missing": units_missing,
+            "pct_units_missing": round(pct_units_missing, 2),
+        },
     }
     return staged, rejected, summary
 
@@ -243,7 +318,7 @@ def build_daily_from_stage(db: Session, run_id: UUID) -> tuple[int, int]:
         w = db.query(Warehouse).filter(func.upper(Warehouse.code) == branch_raw).first()
         return cast(str, w.code) if w else None
 
-    # (warehouse_code, sku, as_of_date) -> (on_hand, on_order); take max if duplicate (spec: take max)
+    # (warehouse_code, sku, as_of_date) -> (on_hand, on_order); sum when duplicate (roll up to product in warehouse)
     aggregated: dict[tuple[str, str, date], tuple[int, int]] = {}
     rejected = 0
     for row in stage_rows:
@@ -269,7 +344,7 @@ def build_daily_from_stage(db: Session, run_id: UUID) -> tuple[int, int]:
         key = (wh, sku, as_of_date)
         if key in aggregated:
             existing_oh, existing_oo = aggregated[key]
-            aggregated[key] = (max(existing_oh, on_hand), max(existing_oo, on_order))
+            aggregated[key] = (existing_oh + on_hand, existing_oo + on_order)
         else:
             aggregated[key] = (on_hand, on_order)
 

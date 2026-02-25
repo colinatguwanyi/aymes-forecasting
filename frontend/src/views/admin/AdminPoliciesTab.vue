@@ -2,6 +2,7 @@
   <div class="space-y-4">
     <PageHeader title="Planning Policies (SKU × Warehouse)" :breadcrumbs="[{ label: 'Admin', path: '/admin/policies' }]">
       <template #actions>
+        <button type="button" class="px-4 py-2 text-sm font-medium text-emerald-700 bg-emerald-50 border border-emerald-200 rounded-lg hover:bg-emerald-100" :disabled="generateLoading" @click="generateDefaults">Generate Default Policies for AAH</button>
         <button type="button" class="px-4 py-2 text-sm font-medium text-white bg-neutral-700 rounded-lg hover:bg-neutral-800" @click="openDrawer('add')">Add policy</button>
         <button type="button" class="px-4 py-2 text-sm font-medium text-neutral-700 bg-white border border-neutral-300 rounded-lg hover:bg-neutral-50" @click="exportCsv">Export CSV</button>
       </template>
@@ -94,6 +95,7 @@
 import { ref, computed, reactive, onMounted, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { useAdminStore } from '@/stores/admin'
+import api from '@/api/client'
 import type { PlanningPolicy } from '@/api/client'
 import PageHeader from '@/components/console/PageHeader.vue'
 import FilterBar from '@/components/console/FilterBar.vue'
@@ -105,6 +107,7 @@ import { useDebounce } from '@/composables/useDebounce'
 const router = useRouter()
 const store = useAdminStore()
 const search = ref('')
+const generateLoading = ref(false)
 const debouncedSearch = useDebounce(search, 300)
 const loading = ref(false)
 
@@ -229,6 +232,22 @@ async function submitDrawer() {
   if (drawerMode.value === 'add') await store.createPlanningPolicy(payload)
   else if (editingId.value != null) await store.updatePlanningPolicy(editingId.value, payload)
   drawerOpen.value = false
+}
+
+async function generateDefaults() {
+  generateLoading.value = true
+  try {
+    const { data } = await api.post<{ created: number }>('/planning-policies/generate-defaults', null, {
+      params: { warehouse_code: 'AAH', default_target_weeks: 4, default_safety_stock_weeks: 1, default_lead_time_weeks: 2 },
+    })
+    await store.fetchPlanningPolicies()
+    alert(`Created ${data.created} default policies for AAH.`)
+  } catch (e: unknown) {
+    const msg = e && typeof e === 'object' && 'response' in e && (e as { response?: { data?: { detail?: string } } }).response?.data?.detail
+    alert(msg || 'Failed to generate policies.')
+  } finally {
+    generateLoading.value = false
+  }
 }
 
 function exportCsv() {

@@ -62,8 +62,11 @@ def validate_and_stage_sales_out_row(
     run_id: UUID,
     row: dict[str, Any],
     row_number: int,
+    date_from: date | None = None,
+    date_to: date | None = None,
 ) -> tuple[bool, str | None]:
-    """Parse one row, insert into sales_out_stage or ingestion_rejections. Return (staged_ok, reason_if_rejected)."""
+    """Parse one row, insert into sales_out_stage or ingestion_rejections. Return (staged_ok, reason_if_rejected).
+    If date_from/date_to are set, rows outside that range are rejected with date_out_of_range."""
     aah = _get(row, "AAH_Product_Code", "aah_product_code")
     if not aah or not str(aah).strip():
         return False, "AAH_Product_Code required"
@@ -74,6 +77,10 @@ def validate_and_stage_sales_out_row(
         return False, str(date_val)
 
     processed_date = cast(date, date_val)
+    if date_from is not None and processed_date < date_from:
+        return False, "date_out_of_range (before date_from)"
+    if date_to is not None and processed_date > date_to:
+        return False, "date_out_of_range (after date_to)"
     raw_json = dict(row) if row else None
 
     db.add(

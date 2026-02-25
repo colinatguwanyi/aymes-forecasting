@@ -47,6 +47,13 @@ export interface PlanRun {
   freeze_weeks?: number
   baseline_train_end_week_start?: string | null
   selected_train_end_week_start?: string | null
+  notes?: string | null
+}
+
+/** Display label for a plan run: notes if set, else "scenario (date) #id" */
+export function formatPlanRunLabel(r: PlanRun): string {
+  if (r.notes && String(r.notes).trim()) return String(r.notes).trim()
+  return `${r.scenario_name} (${r.run_at}) #${r.id}`
 }
 
 /** One row from GET /forecast/runs (available baseline runs to pin). */
@@ -360,4 +367,32 @@ export interface StockPositionRollingWeek {
   weeks_of_cover: number | null
   stockout: boolean
   planned_order_qty: string | null
+}
+
+/** Planning readiness diagnostics from GET /api/v1/diagnostics/planning-readiness */
+export interface PlanningReadinessDiagnostics {
+  ready_to_plan: boolean
+  blockers: Array<{ code: string; message: string; action_label: string; action_href: string }>
+  stats: {
+    products_count: number
+    policies_count: number
+    demand_rows: number
+    demand_latest_week: string | null
+    demand_warehouses: string[]
+    soh_rows: number
+    soh_latest_week: string | null
+    soh_warehouses: string[]
+    soh_config_warehouses: string[]
+    receipts_rows: number
+    receipts_latest_week: string | null
+    plan_runs_count: number
+    projected_inventory_rows_for_run: number
+    planned_orders_rows_for_run: number
+  }
+}
+
+export async function fetchPlanningReadiness(planRunId?: number | null): Promise<PlanningReadinessDiagnostics> {
+  const params = planRunId != null ? `?plan_run_id=${planRunId}` : ''
+  const { data } = await api.get<PlanningReadinessDiagnostics>(`/v1/diagnostics/planning-readiness${params}`)
+  return data
 }

@@ -4,6 +4,9 @@
       <span class="nav-toggle-icon">{{ layout.navCollapsed ? '→' : '←' }}</span>
     </button>
     <nav class="nav-list">
+      <span class="nav-section">GETTING STARTED</span>
+      <router-link to="/setup" class="nav-item" active-class="active">Getting Started</router-link>
+
       <span class="nav-section">PLANNING</span>
       <router-link to="/" class="nav-item" active-class="active">Dashboard</router-link>
       <router-link to="/stock-position" class="nav-item" active-class="active">Stock Position</router-link>
@@ -11,6 +14,7 @@
       <router-link to="/planning-grid" class="nav-item" active-class="active">Weekly Planning Grid</router-link>
       <router-link to="/planned-orders" class="nav-item" active-class="active">Planned Orders</router-link>
       <router-link to="/exceptions" class="nav-item" active-class="active">Exceptions</router-link>
+      <router-link to="/planning/scenario-manager" class="nav-item" active-class="active">Advanced Planning</router-link>
 
       <span class="nav-section">DATA & SETUP</span>
       <router-link v-if="auth.canAdmin() || auth.canOperator()" to="/imports" class="nav-item" active-class="active">Imports</router-link>
@@ -24,6 +28,10 @@
 
       <span class="nav-section">OUTPUT</span>
       <router-link to="/reports" class="nav-item" active-class="active">Reports</router-link>
+      <router-link to="/reports/data-health" class="nav-item" active-class="active">Data Health</router-link>
+      <router-link to="/reports/stock-on-hand-history" class="nav-item" active-class="active">SOH History</router-link>
+      <router-link to="/reports/stock-on-hand-grid" class="nav-item" active-class="active">SOH Grid</router-link>
+      <router-link to="/reports/sales-grid" class="nav-item" active-class="active">Sales Grid</router-link>
       <router-link to="/exports" class="nav-item" active-class="active">Exports</router-link>
     </nav>
   </aside>

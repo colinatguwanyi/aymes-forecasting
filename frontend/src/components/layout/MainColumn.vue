@@ -1,6 +1,7 @@
 <template>
   <div class="main-column">
     <TopBar />
+    <BannerBar />
     <div class="page-content">
       <router-view v-slot="{ Component }">
         <component :is="Component" />
@@ -11,6 +12,7 @@
 
 <script setup lang="ts">
 import TopBar from './TopBar.vue'
+import BannerBar from './BannerBar.vue'
 </script>
 
 <style scoped>

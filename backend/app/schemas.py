@@ -1,6 +1,6 @@
 from __future__ import annotations
 import logging
-from datetime import date
+from datetime import date, datetime
 from decimal import Decimal
 from typing import Any, Optional
 
@@ -338,3 +338,41 @@ class ImportDryRunResult(BaseModel):
     valid_rows: int
     errors: list[ImportRowError] = Field(default_factory=list)
     preview: Optional[list[dict[str, Any]]] = None
+
+
+# Warehouse Product Codes (external_code → sku mapping per warehouse)
+class WarehouseProductCodeCreate(BaseModel):
+    warehouse_code: str = Field(..., min_length=1, max_length=32)
+    external_code: str = Field(..., min_length=1, max_length=128)
+    sku: str = Field(..., min_length=1, max_length=64)
+    external_name: Optional[str] = None
+    hs_code: Optional[str] = Field(None, max_length=64)
+    active: bool = True
+    match_method: Optional[str] = Field(None, max_length=32)
+    match_confidence: Optional[int] = Field(None, ge=0, le=100)
+
+
+class WarehouseProductCodeUpdate(BaseModel):
+    sku: Optional[str] = Field(None, min_length=1, max_length=64)
+    external_name: Optional[str] = None
+    hs_code: Optional[str] = Field(None, max_length=64)
+    active: Optional[bool] = None
+    match_method: Optional[str] = Field(None, max_length=32)
+    match_confidence: Optional[int] = Field(None, ge=0, le=100)
+
+
+class WarehouseProductCodeResponse(BaseModel):
+    id: int
+    warehouse_code: str
+    external_code: str
+    sku: str
+    external_name: Optional[str]
+    hs_code: Optional[str]
+    active: bool
+    match_method: Optional[str]
+    match_confidence: Optional[int]
+    created_at: datetime
+    updated_at: datetime
+
+    class Config:
+        from_attributes = True

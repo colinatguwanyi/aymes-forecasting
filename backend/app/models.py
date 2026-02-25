@@ -670,6 +670,23 @@ class WarehouseBranchMapping(Base):
     warehouse_code = Column(String(32), nullable=False, index=True)
 
 
+class WarehouseProductCode(Base):
+    """Persistent mapping: (warehouse_code, external_code) -> canonical products.sku. Used first in SOH resolution."""
+    __tablename__ = "warehouse_product_codes"
+    __table_args__ = (UniqueConstraint("warehouse_code", "external_code", name="uq_warehouse_product_codes_wh_ext"),)
+    id = Column(Integer, primary_key=True, index=True)
+    warehouse_code = Column(String(32), nullable=False, index=True)
+    external_code = Column(String(128), nullable=False, index=True)
+    sku = Column(String(64), ForeignKey("products.sku", ondelete="CASCADE"), nullable=False, index=True)
+    external_name = Column(Text, nullable=True)
+    hs_code = Column(String(64), nullable=True)
+    active = Column(Boolean, nullable=False, server_default="true")
+    match_method = Column(String(32), nullable=True)
+    match_confidence = Column(Integer, nullable=True)
+    created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False)
+
+
 class StockOnHandStage(Base):
     """Staging rows for SOH ingestion (CSV/XLSX)."""
     __tablename__ = "stock_on_hand_stage"
