@@ -10,13 +10,14 @@
     </section>
 
     <section v-if="runPlanError" class="content-section run-plan-error-banner">
-      <strong>Plan run failed:</strong> {{ runPlanError.message }}
+      <strong>Plan run failed:</strong> {{ runPlanError.code === 'demo_data_detected' ? 'Demo data disabled; please load real data.' : runPlanError.message }}
       <ul v-if="runPlanError.skipped_warehouses?.length" class="mt-2 list-disc list-inside">
         <li v-for="s in runPlanError.skipped_warehouses" :key="s.warehouse_code">{{ s.warehouse_code }}: {{ s.blockers.join('; ') }}</li>
       </ul>
       <div class="mt-2 flex gap-2">
         <router-link to="/imports" class="text-sm font-medium underline">Imports</router-link>
         <router-link to="/admin/policies" class="text-sm font-medium underline">Policies</router-link>
+        <router-link v-if="runPlanError.code === 'demo_data_detected'" to="/reports/data-health" class="text-sm font-medium underline">View diagnostics</router-link>
       </div>
     </section>
 

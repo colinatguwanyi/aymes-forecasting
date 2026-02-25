@@ -90,6 +90,11 @@ def run_planning(
                 "skipped_warehouses": e.skipped_warehouses,
             },
         )
+    except ValueError as e:
+        db.rollback()
+        msg = str(e)
+        code = "demo_data_detected" if "Demo data disabled" in msg or "demo" in msg.lower() else "planning_outputs_invalid"
+        raise HTTPException(status_code=400, detail={"code": code, "message": msg})
     return plan_run
 
 

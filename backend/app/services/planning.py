@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import logging
 import math
+import os
 from collections import defaultdict
 from datetime import date, timedelta
 from decimal import Decimal
@@ -28,9 +29,11 @@ from app.models import (
     PlanRun,
     PlanningMode,
     PlanningPolicy,
+    Product,
     ProjectedInventory,
     Receipt,
     SafetyStockMethod,
+    Warehouse,
 )
 from app.services.time_bucketing import week_start_for_date
 
@@ -391,6 +394,29 @@ def run_plan(
                     last_proj["projected_qty"] = inv
                     last_proj["weeks_of_cover"] = Decimal(str(round(woc, 2)))
                     last_proj["stockout"] = inv < 0
+
+    # Safety guard: all SKUs and warehouses in outputs must exist in products/warehouses
+    output_skus = {r["sku"] for r in projected_rows} | {r["sku"] for r in planned_order_rows}
+    output_whs = {r["warehouse_code"] for r in projected_rows} | {r["warehouse_code"] for r in planned_order_rows}
+    demo_skus = {"SKU1", "SKU2", "SKU3", "SKU4", "SKU001", "SKU002", "SKU003", "SKU004"}
+    allow_demo = os.environ.get("ALLOW_DEMO_DATA", "false").strip().lower() in ("1", "true", "yes")
+
+    if output_skus or output_whs:
+        existing_skus = {r[0] for r in db.query(Product.sku).filter(Product.sku.in_(output_skus)).all() if r[0]}
+        existing_whs = {r[0] for r in db.query(Warehouse.code).filter(Warehouse.code.in_(output_whs)).all() if r[0]}
+        missing_skus = output_skus - existing_skus
+        missing_whs = output_whs - existing_whs
+        if missing_skus or missing_whs:
+            raise ValueError(
+                f"Planning outputs reference unknown SKUs ({missing_skus}) or warehouses ({missing_whs}). "
+                "Ensure products and warehouses exist before running a plan."
+            )
+        if not allow_demo and (output_skus & demo_skus):
+            raise ValueError(
+                "Demo data disabled: outputs contain demo SKUs (SKU1/SKU2/SKU3/SKU4 or SKU001-004). "
+                "Set ALLOW_DEMO_DATA=true for dev, or load real data via Imports and remove demo products. "
+                "See docs/FAKE_DATA_ROOT_CAUSE_REPORT.md."
+            )
 
     for r in projected_rows:
         db.add(ProjectedInventory(**r))

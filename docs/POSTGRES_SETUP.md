@@ -108,19 +108,23 @@ If you don’t use a venv and see `OSError` or `WinError 2` when installing, cre
 
 ---
 
-## 6. Seed demo data (optional but recommended)
+## 6. Seed demo data (optional, dev only)
+
+**Demo data is disabled by default.** Set `ALLOW_DEMO_DATA=true` to enable seed scripts.
 
 Backbone demo data (warehouses, products, suppliers, calendar weeks, warehouse-products, sample stock/demand):
 
 ```bash
-python -m app.seed_backbone
+ALLOW_DEMO_DATA=true python -m app.seed_backbone
 ```
 
 Legacy seed (if you use older features):
 
 ```bash
-python -m app.seed
+ALLOW_DEMO_DATA=true python -m app.seed
 ```
+
+**Production:** Use real data via Imports. Do not run seed scripts.
 
 ---
 
