@@ -145,6 +145,17 @@ def test_run_plan_scope_blp_not_ready_returns_400(db_session) -> None:
     assert any(s["warehouse_code"] == "BLP" for s in exc_info.value.skipped_warehouses)
 
 
+def test_warehouse_readiness_endpoint(db_session) -> None:
+    """GET /api/v1/diagnostics/warehouse-readiness returns per-warehouse readiness."""
+    from fastapi.testclient import TestClient
+    from app.main import app
+    tc = TestClient(app)
+    r = tc.get("/api/v1/diagnostics/warehouse-readiness", params={"demand_source": "actuals"})
+    assert r.status_code == 200
+    data = r.json()
+    assert isinstance(data, list)
+
+
 def test_run_plan_scope_aah_blp_plans_aah_skips_blp(db_session) -> None:
     """run_plan with scope [AAH, BLP]: plans AAH, records BLP skipped."""
     _ensure_aah_blp(db_session)

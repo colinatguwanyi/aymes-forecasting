@@ -8,6 +8,7 @@
     >
       <span class="banner-title">{{ b.title }}</span>
       <span class="banner-message">{{ b.message }}</span>
+      <router-link v-if="b.actionLink" :to="b.actionLink.to" class="banner-action-link">{{ b.actionLink.label }}</router-link>
       <button
         v-if="b.dismissible"
         type="button"
@@ -58,6 +59,12 @@ const banner = useBannerStore()
 }
 .banner-title { font-weight: 600; flex-shrink: 0; }
 .banner-message { flex: 1; }
+.banner-action-link {
+  flex-shrink: 0;
+  font-weight: 600;
+  text-decoration: underline;
+}
+.banner-action-link:hover { opacity: 0.9; }
 .banner-dismiss {
   flex-shrink: 0;
   width: 1.5rem;

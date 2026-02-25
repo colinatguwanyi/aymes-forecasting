@@ -397,10 +397,28 @@ def run_plan(
     for r in planned_order_rows:
         db.add(PlannedOrder(**r))
 
-    # Record progress_meta
+    # Record progress_meta with per-warehouse explainability
     planned_wh = list({r["warehouse_code"] for r in projected_rows})
+    warehouses_planned_detail: list[dict[str, Any]] = []
+    for wh in planned_wh:
+        r = readiness_by_wh.get(wh, {})
+        policy_pairs = sum(1 for (_, w) in policy_by_key if w == wh)
+        start_pairs = sum(1 for (_, w) in starting_inv if w == wh)
+        skus_planned = len({r["sku"] for r in projected_rows if r["warehouse_code"] == wh})
+        warehouses_planned_detail.append({
+            "warehouse_code": wh,
+            "latest_soh_week_start": r.get("soh_latest_week"),
+            "latest_demand_week_start": r.get("demand_latest_week"),
+            "policy_pairs_count": policy_pairs,
+            "starting_inv_pairs_count": start_pairs,
+            "overlap_pairs_count": r.get("overlap_pairs", 0),
+            "skus_planned": skus_planned,
+        })
     plan_run.progress_meta = {
+        "demand_source": demand_source,
+        "plan_start_week_start": plan_start_week_start.isoformat() if plan_start_week_start else None,
         "warehouses_planned": planned_wh,
+        "warehouses_planned_detail": warehouses_planned_detail,
         "warehouses_skipped": [s["warehouse_code"] for s in skipped_warehouses],
         "projected_inventory_rows_written": len(projected_rows),
         "planned_orders_rows_written": len(planned_order_rows),

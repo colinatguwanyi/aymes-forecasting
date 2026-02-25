@@ -50,7 +50,18 @@ export interface PlanRun {
   notes?: string | null
   warehouses_scope?: string[] | null
   progress_meta?: {
+    demand_source?: string
+    plan_start_week_start?: string | null
     warehouses_planned?: string[]
+    warehouses_planned_detail?: Array<{
+      warehouse_code: string
+      latest_soh_week_start?: string | null
+      latest_demand_week_start?: string | null
+      policy_pairs_count?: number
+      starting_inv_pairs_count?: number
+      overlap_pairs_count?: number
+      skus_planned?: number
+    }>
     warehouses_skipped?: string[]
     projected_inventory_rows_written?: number
     planned_orders_rows_written?: number

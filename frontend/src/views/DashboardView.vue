@@ -21,7 +21,9 @@
     </section>
 
     <section v-if="planCreatedSuccess" class="content-section plan-created-banner">
-      <strong>Plan created successfully.</strong> {{ planCreatedSuccess }} Select it below to see stockout risk, or <router-link to="/inventory-projection" class="text-blue-600 hover:underline font-medium">view projections in Inventory Projection</router-link>.
+      <strong>Plan created successfully.</strong> {{ planCreatedSuccess }}
+      <router-link to="/reports/data-health" class="text-blue-600 hover:underline font-medium ml-1">View diagnostics</router-link>
+      — Select it below to see stockout risk, or <router-link to="/inventory-projection" class="text-blue-600 hover:underline font-medium">view projections in Inventory Projection</router-link>.
     </section>
 
     <section v-if="planRuns.length && !selectedRunId" class="content-section info-banner">
@@ -253,6 +255,15 @@ function goToPlanningGrid(row: { sku: string; warehouse_code: string }) {
 function readinessFor(wh: string): WarehouseReadinessItem | undefined {
   return warehouseReadiness.value.find((r) => r.warehouse_code === wh)
 }
+
+/** Condense blockers into "missing SOH/demand/policies" format */
+function condenseBlockers(blockers: string[]): string {
+  const parts: string[] = []
+  if (blockers.some((b) => /SOH|Stock On Hand/i.test(b))) parts.push('SOH')
+  if (blockers.some((b) => /demand|sales|Direct sales/i.test(b))) parts.push('demand')
+  if (blockers.some((b) => /polic/i.test(b))) parts.push('policies')
+  return parts.length ? `missing ${parts.join('/')}` : 'not ready'
+}
 const projected = ref<ProjectedInventory[]>([])
 const weeks8 = 8
 const weeks13 = 13
@@ -323,17 +334,32 @@ async function runScenario() {
     const run = await store.runPlan(scenarioName.value, undefined, demandSource.value, freezeWeeks.value, notes, whScope)
     await store.fetchPlanRuns()
     if (store.planRuns.length) selectedRunId.value = store.planRuns[0].id
-    const meta = run.progress_meta as { warehouses_planned?: string[]; warehouses_skipped?: string[]; projected_inventory_rows_written?: number; planned_orders_rows_written?: number } | undefined
-    const planned = meta?.warehouses_planned ?? []
-    const skipped = meta?.warehouses_skipped ?? []
-    const proj = meta?.projected_inventory_rows_written ?? 0
-    const orders = meta?.planned_orders_rows_written ?? 0
-    planCreatedSuccess.value = `"${run.scenario_name}" created.`
-    let msg = `plan_run_id: ${run.id} — ${planned.length ? planned.join(', ') + ' planned' : ''}${skipped.length ? (planned.length ? '; ' : '') + skipped.join(', ') + ' skipped' : ''}. Rows: projected=${proj}, orders=${orders}.`
+    const meta = run.progress_meta as {
+      warehouses_planned?: string[]
+      warehouses_planned_detail?: Array<{ warehouse_code: string; latest_soh_week_start?: string; latest_demand_week_start?: string; skus_planned?: number }>
+      warehouses_skipped?: string[]
+      skipped_warehouses_detail?: Array<{ warehouse_code: string; blockers: string[] }>
+    } | undefined
+    const plannedDetail = meta?.warehouses_planned_detail ?? []
+    const skippedDetail = meta?.skipped_warehouses_detail ?? []
+    const plannedParts = plannedDetail.length
+      ? plannedDetail.map((d) => `${d.warehouse_code} (SOH week: ${d.latest_soh_week_start ?? '—'}, Demand week: ${d.latest_demand_week_start ?? '—'}, SKUs planned: ${d.skus_planned ?? 0})`)
+      : (meta?.warehouses_planned ?? []).map((wh) => wh)
+    const plannedMsg = plannedParts.length ? `Planned: ${plannedDetail.length ? plannedParts.join('. ') : plannedParts.join(', ')}.` : ''
+    const skippedMsg = skippedDetail.map((s) => {
+      const missing = condenseBlockers(s.blockers)
+      return `${s.warehouse_code} (${missing})`
+    }).join(', ')
+    const planMsg = plannedMsg
+    const skipMsg = skippedMsg ? `Skipped: ${skippedMsg}.` : ''
+    planCreatedSuccess.value = [planMsg, skipMsg].filter(Boolean).join(' ') || `"${run.scenario_name}" created.`
+    runPlanError.value = null
+    const msg = [planMsg, skipMsg].filter(Boolean).join(' ') || `"${run.scenario_name}" created.`
     bannerStore.add({
       type: 'success',
       title: 'Plan run created',
       message: msg,
+      actionLink: { to: '/reports/data-health', label: 'View diagnostics' },
     })
     setTimeout(() => { planCreatedSuccess.value = '' }, 8000)
   } catch (err: unknown) {

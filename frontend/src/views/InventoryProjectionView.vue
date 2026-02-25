@@ -164,6 +164,7 @@
 
 <script setup lang="ts">
 import { ref, computed, onMounted, watch } from 'vue'
+import { useRoute, useRouter } from 'vue-router'
 import { useLayoutStore } from '@/stores/layout'
 import { usePlanningStore } from '@/stores/planning'
 import { useAdminStore } from '@/stores/admin'
@@ -176,6 +177,8 @@ import NoDataWithReason from '@/components/console/NoDataWithReason.vue'
 
 Chart.register(...registerables)
 
+const route = useRoute()
+const router = useRouter()
 const store = usePlanningStore()
 const adminStore = useAdminStore()
 const layout = useLayoutStore()
@@ -215,16 +218,34 @@ const noDataTitle1 = computed(() => {
 })
 const noDataReasons1 = computed(() => {
   const d = diagnostics1.value
-  if (!d) return ['Loading diagnostics…']
-  return d.blockers.map((b) => b.message)
+  const run1 = runId1.value ? planRuns.value.find((r) => r.id === runId1.value) : null
+  const meta = run1?.progress_meta as { warehouses_planned_detail?: Array<{ overlap_pairs_count?: number }>; skipped_warehouses_detail?: Array<{ warehouse_code: string; blockers: string[] }> } | undefined
+  const reasons: string[] = d ? d.blockers.map((b) => b.message) : ['Loading diagnostics…']
+  if (meta?.skipped_warehouses_detail?.length) {
+    for (const s of meta.skipped_warehouses_detail) {
+      reasons.push(`${s.warehouse_code} skipped: ${s.blockers.join('; ')}`)
+    }
+  }
+  const planned = meta?.warehouses_planned_detail ?? []
+  if (planned.length && planned.every((p) => (p.overlap_pairs_count ?? 0) === 0)) {
+    reasons.push('No overlapping SKUs in SOH, demand, and policies for planned warehouses.')
+  }
+  return reasons
 })
 const noDataActions1 = computed(() => {
+  const actions: { label: string; href: string }[] = []
+  if (store.planRuns.length === 0) actions.push({ label: 'Run plan', href: '/' })
   const d = diagnostics1.value
-  if (!d) return []
-  const seen = new Set<string>()
-  return d.blockers
-    .filter((b) => !seen.has(b.action_href) && seen.add(b.action_href))
-    .map((b) => ({ label: b.action_label, href: b.action_href }))
+  if (d) {
+    const seen = new Set<string>()
+    for (const b of d.blockers) {
+      if (!seen.has(b.action_href)) {
+        seen.add(b.action_href)
+        actions.push({ label: b.action_label, href: b.action_href })
+      }
+    }
+  }
+  return actions
 })
 const noDataTitle2 = computed(() => {
   if (!runId2.value) return 'Optional: select Plan run 2 to compare'
@@ -373,7 +394,15 @@ watch(
 )
 onMounted(async () => {
   await Promise.all([store.fetchPlanRuns(), adminStore.fetchProducts(), adminStore.fetchWarehouses()])
-  if (store.planRuns.length) runId1.value = store.planRuns[0].id
+  const q = route.query.plan_run_id
+  if (typeof q === 'string' && q) {
+    const id = parseInt(q, 10)
+    if (!isNaN(id) && store.planRuns.some((r) => r.id === id)) runId1.value = id
+  }
+  if (runId1.value == null && store.planRuns.length) {
+    runId1.value = store.planRuns[0].id
+    router.replace({ path: route.path, query: { ...route.query, plan_run_id: String(store.planRuns[0].id) } })
+  }
   loading.value = false
   await load()
 })

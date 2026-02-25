@@ -7,6 +7,8 @@ export interface BannerItem {
   title: string
   message: string
   dismissible?: boolean
+  /** Optional link shown after the message (e.g. "View diagnostics") */
+  actionLink?: { to: string; label: string }
 }
 
 export const useBannerStore = defineStore('banner', () => {

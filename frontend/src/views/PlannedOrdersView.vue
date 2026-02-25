@@ -60,6 +60,7 @@
 
 <script setup lang="ts">
 import { ref, computed, watch, onMounted } from 'vue'
+import { useRoute, useRouter } from 'vue-router'
 import { usePlanningStore } from '@/stores/planning'
 import { useAdminStore } from '@/stores/admin'
 import type { PlannedOrder } from '@/api/client'
@@ -68,6 +69,8 @@ import PageHeader from '@/components/console/PageHeader.vue'
 import FilterBar from '@/components/console/FilterBar.vue'
 import NoDataWithReason from '@/components/console/NoDataWithReason.vue'
 
+const route = useRoute()
+const router = useRouter()
 const store = usePlanningStore()
 const adminStore = useAdminStore()
 const selectedRunId = ref<number | null>(null)
@@ -106,16 +109,33 @@ const noDataTitle = computed(() => {
 })
 const noDataReasons = computed(() => {
   const d = diagnosticsData.value
-  if (!d) return ['Loading diagnostics…']
-  return d.blockers.map((b) => b.message)
+  const meta = selectedRun.value?.progress_meta as { warehouses_planned_detail?: Array<{ overlap_pairs_count?: number }>; skipped_warehouses_detail?: Array<{ warehouse_code: string; blockers: string[] }> } | undefined
+  const reasons: string[] = d ? d.blockers.map((b) => b.message) : ['Loading diagnostics…']
+  if (meta?.skipped_warehouses_detail?.length) {
+    for (const s of meta.skipped_warehouses_detail) {
+      reasons.push(`${s.warehouse_code} skipped: ${s.blockers.join('; ')}`)
+    }
+  }
+  const planned = meta?.warehouses_planned_detail ?? []
+  if (planned.length && planned.every((p) => (p.overlap_pairs_count ?? 0) === 0)) {
+    reasons.push('No overlapping SKUs in SOH, demand, and policies for planned warehouses.')
+  }
+  return reasons
 })
 const noDataActions = computed(() => {
+  const actions: { label: string; href: string }[] = []
+  if (store.planRuns.length === 0) actions.push({ label: 'Run plan', href: '/' })
   const d = diagnosticsData.value
-  if (!d) return []
-  const seen = new Set<string>()
-  return d.blockers
-    .filter((b) => !seen.has(b.action_href) && seen.add(b.action_href))
-    .map((b) => ({ label: b.action_label, href: b.action_href }))
+  if (d) {
+    const seen = new Set<string>()
+    for (const b of d.blockers) {
+      if (!seen.has(b.action_href)) {
+        seen.add(b.action_href)
+        actions.push({ label: b.action_label, href: b.action_href })
+      }
+    }
+  }
+  return actions
 })
 
 watch(selectedRunId, async (id) => {
@@ -140,6 +160,14 @@ watch(
 
 onMounted(async () => {
   await Promise.all([store.fetchPlanRuns(), adminStore.fetchProducts(), adminStore.fetchWarehouses()])
-  if (store.planRuns.length && !selectedRunId.value) selectedRunId.value = store.planRuns[0].id
+  const q = route.query.plan_run_id
+  if (typeof q === 'string' && q) {
+    const id = parseInt(q, 10)
+    if (!isNaN(id) && store.planRuns.some((r) => r.id === id)) selectedRunId.value = id
+  }
+  if (selectedRunId.value == null && store.planRuns.length) {
+    selectedRunId.value = store.planRuns[0].id
+    router.replace({ path: route.path, query: { ...route.query, plan_run_id: String(store.planRuns[0].id) } })
+  }
 })
 </script>
