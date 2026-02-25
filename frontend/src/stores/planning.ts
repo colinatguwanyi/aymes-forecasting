@@ -30,7 +30,8 @@ export const usePlanningStore = defineStore('planning', () => {
     runAt?: string,
     demandSource: string = 'actuals',
     freezeWeeks: number = 4,
-    notes?: string
+    notes?: string,
+    warehousesScope?: string[] | null
   ) {
     const params = new URLSearchParams({
       scenario_name: scenarioName,
@@ -39,6 +40,7 @@ export const usePlanningStore = defineStore('planning', () => {
     })
     if (runAt) params.set('run_at', runAt)
     if (notes) params.set('notes', notes)
+    if (warehousesScope && warehousesScope.length) params.set('warehouses_scope', warehousesScope.join(','))
     const { data } = await api.post<PlanRun>(`/plan/run?${params}`)
     planRuns.value = [data, ...planRuns.value]
     return data

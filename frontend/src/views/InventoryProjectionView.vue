@@ -14,6 +14,10 @@
       <strong>Select a plan run</strong> from the dropdown above. Plan runs are created on the <router-link to="/" class="font-medium underline hover:no-underline">Dashboard</router-link>.
     </section>
 
+    <section v-if="selectedRunSkippedWarehouses.length" class="mb-4 p-3 rounded-lg bg-amber-50 border border-amber-200 text-amber-800 text-sm">
+      Some warehouses were skipped: {{ selectedRunSkippedWarehouses.join(', ') }}.
+    </section>
+
     <FilterBar v-model="search" search-placeholder="Search SKU or warehouse…" :has-active-filters="hasActiveFilters" @clear="runId1 = null; runId2 = null; skuFilter = ''; whFilter = ''; stockoutOnly = false; search = ''">
       <template #filters>
         <select v-model="runId1" class="border border-neutral-300 rounded-md px-3 py-2 text-sm bg-white min-w-48" title="Select a plan run to view its projected inventory. Created on the Dashboard.">
@@ -259,6 +263,11 @@ const explanationData = ref<SkuWeekExplanation | null>(null)
 let chartInstance: Chart | null = null
 
 const planRuns = computed(() => store.planRuns)
+const selectedRun = computed(() => runId1.value ? planRuns.value.find((r) => r.id === runId1.value) : null)
+const selectedRunSkippedWarehouses = computed(() => {
+  const meta = selectedRun.value?.progress_meta as { warehouses_skipped?: string[] } | undefined
+  return meta?.warehouses_skipped ?? []
+})
 
 async function openExplanation(planRunId: number, row: ProjectedInventory) {
   explanation.value = true

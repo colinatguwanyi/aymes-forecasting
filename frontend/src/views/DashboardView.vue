@@ -9,6 +9,17 @@
       <router-link v-if="!dataHealth.ready_to_plan" to="/setup" class="text-amber-600 hover:underline font-medium">Complete setup →</router-link>
     </section>
 
+    <section v-if="runPlanError" class="content-section run-plan-error-banner">
+      <strong>Plan run failed:</strong> {{ runPlanError.message }}
+      <ul v-if="runPlanError.skipped_warehouses?.length" class="mt-2 list-disc list-inside">
+        <li v-for="s in runPlanError.skipped_warehouses" :key="s.warehouse_code">{{ s.warehouse_code }}: {{ s.blockers.join('; ') }}</li>
+      </ul>
+      <div class="mt-2 flex gap-2">
+        <router-link to="/imports" class="text-sm font-medium underline">Imports</router-link>
+        <router-link to="/admin/policies" class="text-sm font-medium underline">Policies</router-link>
+      </div>
+    </section>
+
     <section v-if="planCreatedSuccess" class="content-section plan-created-banner">
       <strong>Plan created successfully.</strong> {{ planCreatedSuccess }} Select it below to see stockout risk, or <router-link to="/inventory-projection" class="text-blue-600 hover:underline font-medium">view projections in Inventory Projection</router-link>.
     </section>
@@ -22,6 +33,32 @@
       <section class="content-section">
         <h2>Run a scenario</h2>
         <p class="text-sm text-slate-600 mb-3">Create a new plan run. Check <router-link to="/reports/data-health" class="text-blue-600 hover:underline">Data Health</router-link> if the run fails.</p>
+        <div class="mb-3">
+          <label class="form-label block mb-1">Warehouse scope</label>
+          <div class="flex flex-wrap gap-4 items-center">
+            <label class="flex items-center gap-2 cursor-pointer">
+              <input v-model="warehouseScope" type="radio" value="AAH" />
+              <span>AAH</span>
+              <span v-if="warehouseReadiness" class="text-xs" :class="readinessFor('AAH')?.ready ? 'text-green-600' : 'text-amber-600'">
+                {{ readinessFor('AAH')?.ready ? '✅ Ready' : readinessFor('AAH') ? `❌ ${(readinessFor('AAH')?.blockers ?? []).join(', ')}` : '' }}
+              </span>
+            </label>
+            <label class="flex items-center gap-2 cursor-pointer">
+              <input v-model="warehouseScope" type="radio" value="BLP" />
+              <span>BLP</span>
+              <span v-if="warehouseReadiness" class="text-xs" :class="readinessFor('BLP')?.ready ? 'text-green-600' : 'text-amber-600'">
+                {{ readinessFor('BLP')?.ready ? '✅ Ready' : readinessFor('BLP') ? `❌ ${(readinessFor('BLP')?.blockers ?? []).slice(0, 2).join(', ')}` : '' }}
+              </span>
+            </label>
+            <label class="flex items-center gap-2 cursor-pointer">
+              <input v-model="warehouseScope" type="radio" value="all_ready" />
+              <span>All ready warehouses</span>
+              <span v-if="warehouseReadiness" class="text-xs text-slate-500">
+                ({{ warehouseReadiness.filter(r => r.ready).length }} ready)
+              </span>
+            </label>
+          </div>
+        </div>
         <form @submit.prevent="runScenario" class="form-inline plan-run-form">
           <div>
             <button
@@ -162,7 +199,7 @@ import { ref, computed, onMounted, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { usePlanningStore } from '@/stores/planning'
 import type { ProjectedInventory } from '@/api/client'
-import { formatPlanRunLabel, fetchPlanningReadiness } from '@/api/client'
+import { formatPlanRunLabel, fetchPlanningReadiness, fetchWarehouseReadiness, type WarehouseReadinessItem } from '@/api/client'
 import { useBannerStore } from '@/stores/banner'
 import api from '@/api/client'
 
@@ -186,6 +223,9 @@ const freezeWeeks = ref(4)
 const selectedRunId = ref<number | null>(null)
 const dataHealth = ref<DataHealth | null>(null)
 const dataHealthLoading = ref(true)
+const warehouseScope = ref<'AAH' | 'BLP' | 'all_ready'>('AAH')
+const warehouseReadiness = ref<WarehouseReadinessItem[]>([])
+const runPlanError = ref<{ code?: string; message?: string; skipped_warehouses?: Array<{ warehouse_code: string; blockers: string[] }> } | null>(null)
 
 const planRuns = computed(() => store.planRuns)
 const readyToPlan = computed(() => !!dataHealth.value?.ready_to_plan)
@@ -208,6 +248,10 @@ function planningGridLink(row: { sku: string; warehouse_code: string }) {
 
 function goToPlanningGrid(row: { sku: string; warehouse_code: string }) {
   router.push(planningGridLink(row))
+}
+
+function readinessFor(wh: string): WarehouseReadinessItem | undefined {
+  return warehouseReadiness.value.find((r) => r.warehouse_code === wh)
 }
 const projected = ref<ProjectedInventory[]>([])
 const weeks8 = 8
@@ -259,24 +303,47 @@ const topRisks = computed(() => {
     .slice(0, 20)
 })
 
+function resolveWarehousesScope(): string[] | null {
+  if (warehouseScope.value === 'AAH') return ['AAH']
+  if (warehouseScope.value === 'BLP') return ['BLP']
+  if (warehouseScope.value === 'all_ready') {
+    const ready = warehouseReadiness.value.filter((r) => r.ready).map((r) => r.warehouse_code)
+    return ready.length ? ready : null
+  }
+  return null
+}
+
 async function runScenario() {
   runPlanLoading.value = true
   planCreatedSuccess.value = ''
+  runPlanError.value = null
   const notes = runName.value.trim() || `${scenarioName.value} ${new Date().toISOString().slice(0, 10)}`
+  const whScope = resolveWarehousesScope()
   try {
-    const run = await store.runPlan(scenarioName.value, undefined, demandSource.value, freezeWeeks.value, notes)
+    const run = await store.runPlan(scenarioName.value, undefined, demandSource.value, freezeWeeks.value, notes, whScope)
     await store.fetchPlanRuns()
     if (store.planRuns.length) selectedRunId.value = store.planRuns[0].id
-    const diag = await fetchPlanningReadiness(run.id)
-    const proj = diag.stats.projected_inventory_rows_for_run
-    const orders = diag.stats.planned_orders_rows_for_run
+    const meta = run.progress_meta as { warehouses_planned?: string[]; warehouses_skipped?: string[]; projected_inventory_rows_written?: number; planned_orders_rows_written?: number } | undefined
+    const planned = meta?.warehouses_planned ?? []
+    const skipped = meta?.warehouses_skipped ?? []
+    const proj = meta?.projected_inventory_rows_written ?? 0
+    const orders = meta?.planned_orders_rows_written ?? 0
     planCreatedSuccess.value = `"${run.scenario_name}" created.`
+    let msg = `plan_run_id: ${run.id} — ${planned.length ? planned.join(', ') + ' planned' : ''}${skipped.length ? (planned.length ? '; ' : '') + skipped.join(', ') + ' skipped' : ''}. Rows: projected=${proj}, orders=${orders}.`
     bannerStore.add({
       type: 'success',
       title: 'Plan run created',
-      message: `plan_run_id: ${run.id} — Projected inventory: ${proj} rows, Planned orders: ${orders} rows.`,
+      message: msg,
     })
     setTimeout(() => { planCreatedSuccess.value = '' }, 8000)
+  } catch (err: unknown) {
+    const res = err && typeof err === 'object' && 'response' in err ? (err as { response?: { status?: number; data?: unknown } }).response : null
+    if (res?.status === 400 && res?.data && typeof res.data === 'object' && 'detail' in res.data) {
+      const detail = res.data.detail as { code?: string; message?: string; skipped_warehouses?: Array<{ warehouse_code: string; blockers: string[] }> }
+      runPlanError.value = detail
+    } else {
+      throw err
+    }
   } finally {
     runPlanLoading.value = false
   }
@@ -292,8 +359,14 @@ async function loadDataHealth() {
   }
 }
 
+async function loadWarehouseReadiness() {
+  warehouseReadiness.value = await fetchWarehouseReadiness(demandSource.value)
+}
+
+watch([demandSource], loadWarehouseReadiness)
+
 onMounted(async () => {
-  await Promise.all([store.fetchPlanRuns(), loadDataHealth()])
+  await Promise.all([store.fetchPlanRuns(), loadDataHealth(), loadWarehouseReadiness()])
   if (store.planRuns.length && selectedRunId.value == null) selectedRunId.value = store.planRuns[0].id
   loading.value = false
 })
@@ -314,6 +387,13 @@ watch(selectedRunId, async (id) => {
 .form-label { font-size: 0.875rem; }
 .app-table tbody tr { cursor: pointer; }
 .app-table tbody tr.row-selected { background: var(--border); }
+.run-plan-error-banner {
+  background: rgb(254 226 226);
+  border: 1px solid rgb(252 165 165);
+  border-radius: 0.5rem;
+  padding: 0.75rem 1rem;
+  color: rgb(127 29 29);
+}
 .plan-created-banner {
   background: rgb(220 252 231);
   border: 1px solid rgb(134 239 172);

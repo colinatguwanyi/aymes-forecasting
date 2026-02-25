@@ -5,6 +5,10 @@
       <p class="muted mt-1">SKU × Week matrix. Red = stockout, amber = low cover, green = healthy. Click a cell to open the explanation panel.</p>
     </header>
 
+    <section v-if="selectedRunSkippedWarehouses.length" class="mb-4 p-3 rounded-lg bg-amber-50 border border-amber-200 text-amber-800 text-sm">
+      Some warehouses were skipped: {{ selectedRunSkippedWarehouses.join(', ') }}.
+    </section>
+
     <section class="card card-body">
       <h3 class="section-title mb-3">Filters</h3>
       <div class="grid grid-cols-1 md:grid-cols-4 gap-3">
@@ -130,6 +134,11 @@ const explanationLoading = ref(false)
 const explanationData = ref<SkuWeekExplanation | null>(null)
 
 const planRuns = computed(() => store.planRuns)
+const selectedRun = computed(() => selectedRunId.value ? planRuns.value.find((r) => r.id === selectedRunId.value) : null)
+const selectedRunSkippedWarehouses = computed(() => {
+  const meta = selectedRun.value?.progress_meta as { warehouses_skipped?: string[] } | undefined
+  return meta?.warehouses_skipped ?? []
+})
 
 const cellMap = computed(() => {
   const m = new Map<string, ProjectedInventory>()

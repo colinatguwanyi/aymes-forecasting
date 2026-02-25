@@ -82,6 +82,18 @@ def _demand_inputs_for_run(
     return out
 
 
+class AllWarehousesSkippedError(Exception):
+    """Raised when run_plan skips all warehouses due to readiness failures."""
+
+    def __init__(self, skipped_warehouses: list[dict[str, Any]]) -> None:
+        self.skipped_warehouses = skipped_warehouses
+        super().__init__(
+            "All warehouses skipped: " + "; ".join(
+                f"{s['warehouse_code']}: {', '.join(s['blockers'])}" for s in skipped_warehouses
+            )
+        )
+
+
 def run_plan(
     db: Session,
     scenario_name: str,
@@ -90,22 +102,49 @@ def run_plan(
     freeze_weeks: int = 4,
     created_by: str | None = None,
     notes: str | None = None,
+    warehouses_scope: list[str] | None = None,
 ) -> PlanRun:
     if run_at is None:
         run_at = date.today()
     run_week = _monday_before(run_at)
 
-    # 1) Starting snapshot per (sku, warehouse): max(week_start) where week_start <= run_week; prefer source_type='soh' over 'legacy'
-    # Filter by sample_sales_soh_warehouses config (default BLP only)
-    from app.services.app_settings import get_sample_sales_soh_warehouses
+    from app.services.warehouse_readiness import check_planning_readiness
 
-    soh_warehouses = get_sample_sales_soh_warehouses(db)
-    all_inv = (
-        db.query(InventorySnapshotWeekly)
-        .filter(InventorySnapshotWeekly.week_start <= run_week)
-        .filter(InventorySnapshotWeekly.warehouse_code.in_(soh_warehouses))
-        .all()
-    )
+    readiness = check_planning_readiness(db, demand_source=demand_source)
+    readiness_by_wh: dict[str, dict[str, Any]] = {r["warehouse_code"]: r for r in readiness}
+
+    # Determine target warehouses
+    if warehouses_scope is not None and len(warehouses_scope) > 0:
+        target_warehouses = [w.strip() for w in warehouses_scope if w and w.strip()]
+    else:
+        # Legacy: all warehouses present in planning_policies
+        target_warehouses = list(
+            {r[0] for r in db.query(PlanningPolicy.warehouse_code).distinct().all() if r[0]}
+        )
+
+    # Check readiness per target warehouse; collect skipped
+    skipped_warehouses: list[dict[str, Any]] = []
+    ready_warehouses: list[str] = []
+    for wh in target_warehouses:
+        r = readiness_by_wh.get(wh)
+        if r and r.get("ready"):
+            ready_warehouses.append(wh)
+        else:
+            blockers = r.get("blockers", []) if r else [f"Warehouse {wh} not in readiness check"]
+            skipped_warehouses.append({"warehouse_code": wh, "blockers": blockers})
+
+    if not ready_warehouses and target_warehouses:
+        raise AllWarehousesSkippedError(skipped_warehouses)
+
+    # Use ready_warehouses for filtering; if legacy and no explicit scope, use all from policies
+    scope_warehouses = ready_warehouses if ready_warehouses else target_warehouses
+
+    # 1) Starting snapshot per (sku, warehouse): max(week_start) where week_start <= run_week
+    # Filter by scope_warehouses
+    inv_q = db.query(InventorySnapshotWeekly).filter(InventorySnapshotWeekly.week_start <= run_week)
+    if scope_warehouses:
+        inv_q = inv_q.filter(InventorySnapshotWeekly.warehouse_code.in_(scope_warehouses))
+    all_inv = inv_q.all()
     latest_week_per_key: dict[tuple[str, str], date] = {}
     starting_inv: dict[tuple[str, str], tuple[date, Decimal]] = {}
     for row in all_inv:
@@ -163,6 +202,8 @@ def run_plan(
         ] += cast(Decimal, d.qty)
 
     policies = db.query(PlanningPolicy).all()
+    if scope_warehouses:
+        policies = [p for p in policies if cast(str, p.warehouse_code) in scope_warehouses]
     policy_by_key: dict[tuple[str, str], PlanningPolicy] = {
         (cast(str, p.sku), cast(str, p.warehouse_code)): p for p in policies
     }
@@ -202,6 +243,7 @@ def run_plan(
         plan_start_week_start=plan_start_week_start,
         created_by=created_by,
         notes=notes,
+        warehouses_scope=warehouses_scope if warehouses_scope else None,
     )
     db.add(plan_run)
     db.flush()
@@ -354,6 +396,16 @@ def run_plan(
         db.add(ProjectedInventory(**r))
     for r in planned_order_rows:
         db.add(PlannedOrder(**r))
+
+    # Record progress_meta
+    planned_wh = list({r["warehouse_code"] for r in projected_rows})
+    plan_run.progress_meta = {
+        "warehouses_planned": planned_wh,
+        "warehouses_skipped": [s["warehouse_code"] for s in skipped_warehouses],
+        "projected_inventory_rows_written": len(projected_rows),
+        "planned_orders_rows_written": len(planned_order_rows),
+        "skipped_warehouses_detail": skipped_warehouses,
+    }
 
     db.commit()
     db.refresh(plan_run)

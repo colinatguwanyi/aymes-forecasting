@@ -2,7 +2,12 @@
   <div class="space-y-4">
     <PageHeader title="Planning Policies (SKU × Warehouse)" :breadcrumbs="[{ label: 'Admin', path: '/admin/policies' }]">
       <template #actions>
-        <button type="button" class="px-4 py-2 text-sm font-medium text-emerald-700 bg-emerald-50 border border-emerald-200 rounded-lg hover:bg-emerald-100" :disabled="generateLoading" @click="generateDefaults">Generate Default Policies for AAH</button>
+        <select v-model="generateWarehouse" class="px-3 py-2 text-sm border border-emerald-200 rounded-lg bg-white mr-2">
+          <option value="AAH">AAH</option>
+          <option value="BLP">BLP</option>
+          <option v-for="w in otherWarehouses" :key="w.id" :value="w.code">{{ w.code }}</option>
+        </select>
+        <button type="button" class="px-4 py-2 text-sm font-medium text-emerald-700 bg-emerald-50 border border-emerald-200 rounded-lg hover:bg-emerald-100" :disabled="generateLoading" @click="generateDefaults">Generate Default Policies for {{ generateWarehouse }}</button>
         <button type="button" class="px-4 py-2 text-sm font-medium text-white bg-neutral-700 rounded-lg hover:bg-neutral-800" @click="openDrawer('add')">Add policy</button>
         <button type="button" class="px-4 py-2 text-sm font-medium text-neutral-700 bg-white border border-neutral-300 rounded-lg hover:bg-neutral-50" @click="exportCsv">Export CSV</button>
       </template>
@@ -234,14 +239,19 @@ async function submitDrawer() {
   drawerOpen.value = false
 }
 
+const generateWarehouse = ref('AAH')
+const otherWarehouses = computed(() =>
+  store.warehouses.filter((w) => w.code !== 'AAH' && w.code !== 'BLP')
+)
+
 async function generateDefaults() {
   generateLoading.value = true
   try {
     const { data } = await api.post<{ created: number }>('/planning-policies/generate-defaults', null, {
-      params: { warehouse_code: 'AAH', default_target_weeks: 4, default_safety_stock_weeks: 1, default_lead_time_weeks: 2 },
+      params: { warehouse_code: generateWarehouse.value, default_target_weeks: 4, default_safety_stock_weeks: 1, default_lead_time_weeks: 2 },
     })
     await store.fetchPlanningPolicies()
-    alert(`Created ${data.created} default policies for AAH.`)
+    alert(`Created ${data.created} default policies for ${generateWarehouse.value}.`)
   } catch (e: unknown) {
     const msg = e && typeof e === 'object' && 'response' in e && (e as { response?: { data?: { detail?: string } } }).response?.data?.detail
     alert(msg || 'Failed to generate policies.')

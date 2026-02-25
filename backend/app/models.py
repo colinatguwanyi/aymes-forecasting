@@ -193,6 +193,8 @@ class PlanRun(Base):
     notes = Column(Text, nullable=True)
     baseline_train_end_week_start = Column(Date, nullable=True)
     selected_train_end_week_start = Column(Date, nullable=True)
+    warehouses_scope = Column(JSONB, nullable=True)  # e.g. ["AAH"], ["BLP"], ["AAH","BLP"]; NULL = legacy all
+    progress_meta = Column(JSONB, nullable=True)  # warehouses_planned, warehouses_skipped, row counts, etc.
 
 
 class PlanRunDemandInputWeekly(Base):

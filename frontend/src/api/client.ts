@@ -48,6 +48,14 @@ export interface PlanRun {
   baseline_train_end_week_start?: string | null
   selected_train_end_week_start?: string | null
   notes?: string | null
+  warehouses_scope?: string[] | null
+  progress_meta?: {
+    warehouses_planned?: string[]
+    warehouses_skipped?: string[]
+    projected_inventory_rows_written?: number
+    planned_orders_rows_written?: number
+    skipped_warehouses_detail?: Array<{ warehouse_code: string; blockers: string[] }>
+  } | null
 }
 
 /** Display label for a plan run: notes if set, else "scenario (date) #id" */
@@ -394,5 +402,23 @@ export interface PlanningReadinessDiagnostics {
 export async function fetchPlanningReadiness(planRunId?: number | null): Promise<PlanningReadinessDiagnostics> {
   const params = planRunId != null ? `?plan_run_id=${planRunId}` : ''
   const { data } = await api.get<PlanningReadinessDiagnostics>(`/v1/diagnostics/planning-readiness${params}`)
+  return data
+}
+
+/** Per-warehouse readiness from GET /api/v1/diagnostics/warehouse-readiness */
+export interface WarehouseReadinessItem {
+  warehouse_code: string
+  has_soh: boolean
+  has_demand: boolean
+  has_policies: boolean
+  overlap_pairs: number
+  ready: boolean
+  blockers: string[]
+  soh_latest_week: string | null
+  demand_latest_week: string | null
+}
+
+export async function fetchWarehouseReadiness(demandSource: string = 'actuals'): Promise<WarehouseReadinessItem[]> {
+  const { data } = await api.get<WarehouseReadinessItem[]>(`/v1/diagnostics/warehouse-readiness?demand_source=${demandSource}`)
   return data
 }

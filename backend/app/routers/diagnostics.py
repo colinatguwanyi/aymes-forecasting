@@ -23,8 +23,21 @@ from app.models import (
 )
 from app.security.auth import require_any_auth
 from app.services.app_settings import get_sample_sales_soh_warehouses
+from app.services.warehouse_readiness import check_planning_readiness
 
 router = APIRouter(dependencies=[Depends(require_any_auth)])
+
+
+@router.get("/warehouse-readiness")
+def get_warehouse_readiness(
+    demand_source: str = Query("actuals", description="actuals | baseline | blended"),
+    db: Session = Depends(get_db),
+) -> list[dict[str, Any]]:
+    """
+    Per-warehouse planning readiness.
+    Returns list of {warehouse_code, has_soh, has_demand, has_policies, overlap_pairs, ready, blockers[]}.
+    """
+    return check_planning_readiness(db, demand_source=demand_source)
 
 
 @router.get("/planning-readiness")

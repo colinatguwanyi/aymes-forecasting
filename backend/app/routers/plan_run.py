@@ -31,7 +31,7 @@ from app.schemas import (
     SkuWeekExplanationProjection,
 )
 from app.services.demand_resolver import NoBaselineRunsError, published_run_exists, resolve_demand_for_run, _frozen_mondays_for_plan
-from app.services.planning import _monday_before, run_plan
+from app.services.planning import AllWarehousesSkippedError, _monday_before, run_plan
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -59,9 +59,13 @@ def run_planning(
     freeze_weeks: int = Query(4, ge=0, le=52),
     created_by: str | None = Query(None),
     notes: str | None = Query(None),
+    warehouses_scope: str | None = Query(None, description="Comma-separated warehouse codes, e.g. AAH,BLP. Omit for legacy (all from policies)."),
     db: Session = Depends(get_db),
 ) -> PlanRun:
     run_date = date.fromisoformat(run_at) if run_at else date.today()
+    wh_list: list[str] | None = None
+    if warehouses_scope and warehouses_scope.strip():
+        wh_list = [w.strip() for w in warehouses_scope.split(",") if w.strip()]
     try:
         plan_run = run_plan(
             db,
@@ -71,10 +75,21 @@ def run_planning(
             freeze_weeks=freeze_weeks,
             created_by=created_by,
             notes=notes,
+            warehouses_scope=wh_list,
         )
     except NoBaselineRunsError as e:
         db.rollback()
         raise HTTPException(status_code=409, detail=str(e))
+    except AllWarehousesSkippedError as e:
+        db.rollback()
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "code": "all_warehouses_skipped",
+                "message": str(e),
+                "skipped_warehouses": e.skipped_warehouses,
+            },
+        )
     return plan_run
 
 

@@ -6,6 +6,10 @@
       </template>
     </PageHeader>
 
+    <section v-if="selectedRunSkippedWarehouses.length" class="mb-4 p-3 rounded-lg bg-amber-50 border border-amber-200 text-amber-800 text-sm">
+      Some warehouses were skipped: {{ selectedRunSkippedWarehouses.join(', ') }}.
+    </section>
+
     <FilterBar v-model="search" search-placeholder="Search SKU or warehouse…" :has-active-filters="!!selectedRunId || !!skuFilter || !!whFilter" @clear="selectedRunId = null; skuFilter = ''; whFilter = ''; search = ''">
       <template #filters>
         <select v-model="selectedRunId" class="border border-neutral-300 rounded-md px-3 py-2 text-sm bg-white min-w-48">
@@ -73,6 +77,11 @@ const skuFilter = ref('')
 const whFilter = ref('')
 
 const planRuns = computed(() => store.planRuns)
+const selectedRun = computed(() => selectedRunId.value ? planRuns.value.find((r) => r.id === selectedRunId.value) : null)
+const selectedRunSkippedWarehouses = computed(() => {
+  const meta = selectedRun.value?.progress_meta as { warehouses_skipped?: string[] } | undefined
+  return meta?.warehouses_skipped ?? []
+})
 const products = computed(() => adminStore.products)
 const warehouses = computed(() => adminStore.warehouses)
 

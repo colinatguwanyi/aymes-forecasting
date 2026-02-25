@@ -4,6 +4,10 @@
       <PageHeader title="Stock Position Breakdown" :breadcrumbs="[{ label: 'Planning', path: '/' }]" />
     </header>
 
+    <section v-if="selectedRunSkippedWarehouses.length" class="mb-4 p-3 rounded-lg bg-amber-50 border border-amber-200 text-amber-800 text-sm">
+      Some warehouses were skipped: {{ selectedRunSkippedWarehouses.join(', ') }}.
+    </section>
+
     <section class="card card-body">
       <FilterBar
         v-model="search"
@@ -229,6 +233,11 @@ const rollingWeeks = ref<{ week_start: string; opening_qty: string; receipts_qty
 const demandInputsForDetail = ref<{ week_start: string; sku: string; warehouse_code: string; demand_qty: number; source: string; demand_breakdown_json: Record<string, unknown> | null; demand_includes_samples: boolean }[]>([])
 
 const planRuns = computed(() => store.planRuns)
+const selectedRun = computed(() => planRunId.value ? planRuns.value.find((r) => r.id === planRunId.value) : null)
+const selectedRunSkippedWarehouses = computed(() => {
+  const meta = selectedRun.value?.progress_meta as { warehouses_skipped?: string[] } | undefined
+  return meta?.warehouses_skipped ?? []
+})
 const warehouses = computed(() => adminStore.warehouses)
 const products = computed(() => adminStore.products)
 

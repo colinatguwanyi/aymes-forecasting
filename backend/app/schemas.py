@@ -228,6 +228,8 @@ class PlanRunBase(BaseModel):
     selected_train_end_week_start: Optional[date] = None
     created_by: Optional[str] = None
     notes: Optional[str] = None
+    warehouses_scope: Optional[list[str]] = None
+    progress_meta: Optional[dict[str, Any]] = None
 
 
 class PlanRun(PlanRunBase):
