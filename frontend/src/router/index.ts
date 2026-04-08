@@ -32,6 +32,7 @@ const router = createRouter({
         { path: 'policies/:id', name: 'AdminPolicyDetail', meta: { title: 'Admin · Policy' }, component: () => import('../views/admin/AdminPolicyDetailView.vue') },
         { path: 'timelines', name: 'AdminTimelines', meta: { title: 'Admin · Timelines' }, component: () => import('../views/admin/AdminTimelinesView.vue') },
         { path: 'forecast-methods', name: 'AdminForecastMethods', meta: { title: 'Admin · Forecasting Methods' }, component: () => import('../views/admin/ForecastMethodsView.vue') },
+        { path: 'forecast-engine', name: 'AdminForecastEngine', meta: { title: 'Admin · Forecast Engine' }, component: () => import('../views/admin/AdminForecastEngineTab.vue') },
         { path: 'settings', name: 'AdminSettings', meta: { title: 'Admin · Settings' }, component: () => import('../views/admin/AdminSettingsTab.vue') },
         { path: 'import-formats', name: 'AdminImportFormats', meta: { title: 'Admin · Import Formats' }, component: () => import('../views/admin/AdminImportFormatsTab.vue') },
         { path: 'warehouse-product-codes', name: 'AdminWarehouseProductCodes', meta: { title: 'Admin · Warehouse Product Codes' }, component: () => import('../views/admin/AdminWarehouseProductCodesTab.vue') },
@@ -43,6 +44,7 @@ const router = createRouter({
     { path: '/reports/stock-on-hand-history', name: 'StockOnHandHistory', meta: { title: 'Stock On Hand History' }, component: () => import('../views/StockOnHandHistoryView.vue') },
     { path: '/reports/stock-on-hand-grid', name: 'StockOnHandGrid', meta: { title: 'SOH History Grid' }, component: () => import('../views/StockOnHandGridView.vue') },
     { path: '/reports/sales-grid', name: 'SalesGrid', meta: { title: 'Sales Grid' }, component: () => import('../views/SalesGridView.vue') },
+    { path: '/reports/stock-coverage', name: 'StockCoverage', meta: { title: 'Stock Coverage' }, component: () => import('../views/StockCoverageView.vue') },
     { path: '/exports', name: 'Exports', meta: { title: 'Exports' }, component: () => import('../views/ExportsView.vue') },
   ],
 })

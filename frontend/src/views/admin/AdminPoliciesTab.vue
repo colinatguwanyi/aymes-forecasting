@@ -80,11 +80,11 @@
         <div class="flex items-center justify-between">
           <div>
             <label class="block text-sm font-medium text-neutral-700 mb-1">Forecast window (weeks)</label>
-            <input v-model.number="drawerForm.forecast_window_weeks" type="number" min="1" class="w-full border border-neutral-300 rounded-md px-3 py-2 text-sm max-w-[8rem]" />
+            <input v-model.number="drawerForm.forecast_window_weeks" type="number" min="1" class="w-full border border-neutral-300 rounded-md px-3 py-2 text-sm max-w-32" />
           </div>
           <label class="flex items-center gap-2">
             <input v-model="drawerForm.include_samples" type="checkbox" class="rounded border-neutral-300" />
-            <span class="text-sm text-neutral-700">Include samples</span>
+            <span class="text-sm text-neutral-700">Include samples (BLP only)</span>
           </label>
         </div>
       </form>
@@ -149,7 +149,7 @@ const columns: DataTableColumn[] = [
   { key: 'target_weeks', label: 'Target weeks' },
   { key: 'safety_display', label: 'Safety (weeks / service)' },
   { key: 'forecast_window_weeks', label: 'Forecast window' },
-  { key: 'include_samples', label: 'Include samples', format: 'boolean' },
+  { key: 'include_samples', label: 'Include samples (BLP only)', format: 'boolean' },
 ]
 
 const sortField = ref<string>('sku')
@@ -261,7 +261,7 @@ async function generateDefaults() {
 }
 
 function exportCsv() {
-  const headers = ['SKU', 'Warehouse', 'Mode', 'Target weeks', 'Safety', 'Forecast window', 'Include samples']
+  const headers = ['SKU', 'Warehouse', 'Mode', 'Target weeks', 'Safety', 'Forecast window', 'Include samples (BLP only)']
   const rows = filteredRows.value.map((r) => [r.sku, r.warehouse_code, r.mode, r.target_weeks, r.safety_display, r.forecast_window_weeks, r.include_samples ? 'Yes' : 'No'])
   const csv = [headers.join(','), ...rows.map((r) => r.map((c) => `"${String(c).replace(/"/g, '""')}"`).join(','))].join('\n')
   const a = document.createElement('a')

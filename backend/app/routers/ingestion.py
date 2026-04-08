@@ -179,9 +179,11 @@ def _validate_and_stage_soh(
     run_id: UUID,
     rows_iter: Any,
     warehouse_code: str | None = None,
+    snapshot_date_override: date | None = None,
 ) -> tuple[int, int]:
     """Validate and stage SOH rows (chunked). All rows go to stock_on_hand_stage; invalid also to ingestion_rejections. Returns (staged_count, rejected_count).
-    When warehouse_code is provided, branch column is ignored and all rows use that warehouse (roll-up by product)."""
+    When warehouse_code is provided, branch column is ignored and all rows use that warehouse (roll-up by product).
+    When snapshot_date_override is provided it is used as the date for any row whose 'Stock at' column is empty."""
     branch_to_wh = soh_branch_to_warehouse_code(db)
     wh_override = (warehouse_code or "").strip() or None
     staged = 0
@@ -189,7 +191,11 @@ def _validate_and_stage_soh(
     row_number = 2  # header is row 1
     for chunk in rows_iter:
         for row in chunk:
-            ok, reason = validate_and_stage_soh_row(db, run_id, row, row_number, branch_to_wh, warehouse_code_override=wh_override)
+            ok, reason = validate_and_stage_soh_row(
+                db, run_id, row, row_number, branch_to_wh,
+                warehouse_code_override=wh_override,
+                snapshot_date_override=snapshot_date_override,
+            )
             if ok:
                 staged += 1
             else:
@@ -478,16 +484,28 @@ async def upload(
                     db, run_id, rows_full, wh_code, snap_date
                 )
                 run.row_count = staged + rejected
-                run.progress_meta = blp_summary
+                run.progress_meta = {**(blp_summary or {}), "warehouse_code": wh_code}
             else:
                 rows_iter_soh: Any = [
                     rows_full[i : i + SOH_CHUNK_SIZE]
                     for i in range(0, len(rows_full), SOH_CHUNK_SIZE)
                 ]
-                # AAH format: always roll to AAH; warehouse from form only when override desired
+                # AAH format: always roll to AAH; warehouse from form only when override desired.
+                # snapshot_date_override used when the file has no "Stock at" date column.
                 wh_code = (warehouse_code or "").strip() or None
-                staged, rejected = _validate_and_stage_soh(db, run_id, rows_iter_soh, warehouse_code=wh_code)
+                snap_date_aah: date | None = None
+                if snapshot_date and str(snapshot_date).strip():
+                    try:
+                        snap_date_aah = datetime.strptime(str(snapshot_date).strip(), "%Y-%m-%d").date()
+                    except ValueError:
+                        pass
+                staged, rejected = _validate_and_stage_soh(
+                    db, run_id, rows_iter_soh,
+                    warehouse_code=wh_code,
+                    snapshot_date_override=snap_date_aah,
+                )
                 run.row_count = staged + rejected
+                run.progress_meta = {"warehouse_code": wh_code or "AAH"}
         else:
             try:
                 if entity_enum in (IngestionEntity.FORECAST_OUTPUT, IngestionEntity.SALES_OUT):
@@ -521,6 +539,7 @@ async def upload(
                 df = _parse_yyyy_mm_dd(date_from)
                 dt = _parse_yyyy_mm_dd(date_to)
                 staged, rejected = _validate_and_stage_sales_out(db, run_id, rows, date_from=df, date_to=dt)
+                run.progress_meta = {"warehouse_code": "AAH"}
 
         run.inserted_count = 0
         run.updated_count = 0
@@ -645,7 +664,8 @@ def execute_run(
     run_after = db.query(IngestionRun).filter(IngestionRun.id == run_id).first()
     if not run_after:
         raise HTTPException(status_code=500, detail="Run not found after execute")
-    entity_val = run_after.entity.value if run_after.entity else None
+    e = getattr(run_after, "entity", None)
+    entity_val = e.value if e is not None else None
     table_name = {
         "product_master": "products",
         "demand": "demand_facts_weekly",
@@ -662,6 +682,45 @@ def execute_run(
         "updated_count": run_after.updated_count,
         "rejected_count": run_after.rejected_count,
     }
+
+
+@router.get("/runs/latest")
+def get_latest_run(
+    entity: IngestionEntity = Query(..., description="Entity: sales_out, stock_on_hand, demand, product_master"),
+    warehouse_code: str | None = Query(None, description="Filter by warehouse (e.g. AAH, BLP). sales_out=AAH only."),
+    db: Session = Depends(get_db),
+) -> dict[str, Any] | None:
+    """Return latest ingestion run for entity (and warehouse when applicable)."""
+    q = db.query(IngestionRun).filter(IngestionRun.entity == entity).order_by(IngestionRun.started_at.desc())
+    runs = q.limit(50).all()
+    for r in runs:
+        pm = getattr(r, "progress_meta", None) or {}
+        wh = pm.get("warehouse_code") if isinstance(pm, dict) else None
+        if entity == IngestionEntity.SALES_OUT:
+            run_wh = wh or "AAH"
+        elif entity == IngestionEntity.STOCK_ON_HAND:
+            run_wh = wh
+        else:
+            run_wh = wh
+        if warehouse_code and run_wh and run_wh.upper() != warehouse_code.upper():
+            continue
+        if warehouse_code and not run_wh and entity == IngestionEntity.SALES_OUT and warehouse_code.upper() != "AAH":
+            continue
+        _started = getattr(r, "started_at", None)
+        _finished = getattr(r, "finished_at", None)
+        return {
+            "id": str(r.id),
+            "entity": r.entity.value,
+            "file_name": r.file_name,
+            "status": r.status.value,
+            "row_count": r.row_count,
+            "inserted_count": r.inserted_count,
+            "rejected_count": r.rejected_count,
+            "started_at": _started.isoformat() if _started else None,
+            "finished_at": _finished.isoformat() if _finished else None,
+            "warehouse_code": run_wh,
+        }
+    return None
 
 
 @router.get("/runs")

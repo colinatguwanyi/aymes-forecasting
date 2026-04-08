@@ -142,7 +142,7 @@ def get_planning_readiness(
     if demand_rows == 0 or demand_latest is None:
         blockers.append({
             "code": "no_demand",
-            "message": "No demand data (Sales Out). Import Sales Out and execute build-weekly.",
+            "message": "No demand data. AAH: Import Sales Out (AAH). BLP: Import Direct sales or Samples (BLP only).",
             "action_label": "Imports",
             "action_href": "/imports",
         })
@@ -164,7 +164,7 @@ def get_planning_readiness(
     if soh_config_set and not (soh_wh_set & soh_config_set):
         blockers.append({
             "code": "soh_warehouse_mismatch",
-            "message": f"Planning expects SOH for warehouses {list(soh_config_set)} but SOH data is for {soh_warehouses_list}. Update Admin → Settings → sample_sales_soh_warehouses to match your data.",
+            "message": f"Planning expects SOH for warehouses {list(soh_config_set)} but SOH data is for {soh_warehouses_list}. Update Admin → Settings → SOH warehouses to match your data.",
             "action_label": "Admin → Settings",
             "action_href": "/admin/settings",
         })
@@ -175,7 +175,7 @@ def get_planning_readiness(
     if policy_wh_set and soh_config_set and not (policy_wh_set & soh_config_set):
         blockers.append({
             "code": "policy_warehouse_mismatch",
-            "message": f"Policies exist for {policy_warehouses_list} but planning uses SOH from {list(soh_config_set)}. Create policies for warehouses in sample_sales_soh_warehouses.",
+            "message": f"Policies exist for {policy_warehouses_list} but planning uses SOH from {list(soh_config_set)}. Create policies for warehouses in SOH config.",
             "action_label": "Admin → Policies",
             "action_href": "/admin/policies",
         })
@@ -199,7 +199,7 @@ def get_planning_readiness(
     if plan_run_id and projected_inventory_rows_for_run == 0 and plan_runs_count > 0:
         blockers.append({
             "code": "no_projections",
-            "message": "Plan run produced no projections. Ensure policies, SOH, and demand align for the same warehouses (see sample_sales_soh_warehouses in Admin → Settings).",
+            "message": "Plan run produced no projections. Ensure policies, SOH, and demand align for the same warehouses (see Admin → Settings → SOH warehouses).",
             "action_label": "Data Health",
             "action_href": "/reports/data-health",
         })

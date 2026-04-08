@@ -2,12 +2,12 @@
   <div class="page-shell space-y-6">
     <header class="page-header">
       <h1>Settings</h1>
-      <p class="muted mt-1">App configuration (sample sales SOH warehouses, etc.).</p>
+      <p class="muted mt-1">App configuration (SOH warehouses for planning, etc.).</p>
     </header>
 
     <section class="card card-body">
-      <h3 class="section-title mb-2">Sample sales SOH warehouses</h3>
-      <p class="text-sm text-slate-600 mb-3">Warehouse codes used for SOH in sample sales / planning. Default: BLP only. Comma-separated (e.g. BLP, WH2).</p>
+      <h3 class="section-title mb-2">SOH warehouses for planning</h3>
+      <p class="text-sm text-slate-600 mb-3">Warehouse codes used for SOH in planning. AAH = Sales Out (AAH); BLP = Direct sales + Samples (BLP only). Default: BLP. Comma-separated (e.g. AAH, BLP).</p>
       <div class="flex flex-wrap items-end gap-3">
         <div class="flex-1 min-w-[200px]">
           <label class="form-label">Warehouse codes</label>

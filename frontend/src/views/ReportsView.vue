@@ -14,6 +14,10 @@
       — Weekly customer sales by product (demand_facts_weekly CUSTOMER).
     </p>
     <p class="mb-4">
+      <router-link to="/reports/stock-coverage" class="text-blue-600 hover:underline">Stock Coverage</router-link>
+      — Weeks of cover by warehouse (on-hand ÷ avg demand). AAH: CUSTOMER only; BLP: CUSTOMER + SAMPLES.
+    </p>
+    <p class="mb-4">
       <router-link to="/reports/data-health" class="text-blue-600 hover:underline">Data Health</router-link>
       — Readiness to run plan (products, demand, SOH, policies).
     </p>

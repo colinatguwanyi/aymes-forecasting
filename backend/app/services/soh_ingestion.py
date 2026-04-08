@@ -92,13 +92,15 @@ def validate_and_stage_soh_row(
     row_number: int,
     branch_to_wh: dict[str, str],
     warehouse_code_override: str | None = None,
+    snapshot_date_override: date | None = None,
 ) -> tuple[bool, str | None]:
     """Validate one row; always insert into stock_on_hand_stage (set reject_reason if invalid). Returns (staged_ok, reason_if_rejected).
-    When warehouse_code_override is provided, branch column is ignored and all rows use that warehouse (roll-up by product)."""
+    When warehouse_code_override is provided, branch column is ignored and all rows use that warehouse (roll-up by product).
+    When snapshot_date_override is provided it is used when the row has no 'Stock at' date column."""
     stock_at_raw = _get(row, "Stock at", "stock_at", "Stock at (date)")
     branch_raw = _get(row, "Branch Name", "branch_name", "Branch Name")
     aah_raw = _get(row, "AAH Code", "aah_code", "AAH Code")
-    stock_raw = _get(row, "STOCK", "stock")
+    stock_raw = _get(row, "ON STOCK", "STOCK", "stock")
     on_order_raw = _get(row, "ON ORDER", "on_order")
 
     reject_reason: str | None = None
@@ -106,7 +108,13 @@ def validate_and_stage_soh_row(
     if not aah_raw or not str(aah_raw).strip():
         reject_reason = "AAH Code required"
     else:
-        date_ok, date_val = _parse_date_soh(str(stock_at_raw or ""))
+        # Use file-level date if present; fall back to the snapshot_date_override from the upload form
+        if stock_at_raw:
+            date_ok, date_val = _parse_date_soh(str(stock_at_raw))
+        elif snapshot_date_override is not None:
+            date_ok, date_val = True, snapshot_date_override
+        else:
+            date_ok, date_val = False, "Empty date (provide snapshot_date when file has no 'Stock at' column)"
         if not date_ok:
             reject_reason = str(date_val)
         else:
@@ -134,17 +142,21 @@ def validate_and_stage_soh_row(
     if not reject_reason and warehouse_code:
         warehouse_for_storage = warehouse_code.strip().upper()
     branch_to_store = warehouse_for_storage
+    # When file has no 'Stock at' column, persist the override date so build_daily_from_stage can read it
+    effective_stock_at_raw = str(stock_at_raw) if stock_at_raw is not None else (
+        snapshot_date_override.strftime("%Y-%m-%d") if snapshot_date_override is not None else None
+    )
     stock_val = 0
     on_order_val = 0
     if not reject_reason:
         _, stock_val, _ = _parse_int_soh(stock_raw, 0)
         _, on_order_val, _ = _parse_int_soh(on_order_raw, 0)
-    row_hash = hashlib.sha256(f"{stock_at_raw}|{branch_to_store or ''}|{sku}|{stock_val}|{on_order_val}".encode()).hexdigest()[:64]
+    row_hash = hashlib.sha256(f"{effective_stock_at_raw}|{branch_to_store or ''}|{sku}|{stock_val}|{on_order_val}".encode()).hexdigest()[:64]
 
     db.add(
         StockOnHandStage(
             ingestion_run_id=run_id,
-            stock_at_raw=str(stock_at_raw) if stock_at_raw is not None else None,
+            stock_at_raw=effective_stock_at_raw,
             branch_name_raw=branch_to_store,
             aah_code_raw=sku or None,
             stock_raw=str(stock_raw) if stock_raw is not None else None,

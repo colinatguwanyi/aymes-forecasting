@@ -19,7 +19,7 @@ def check_planning_readiness(
     Returns list of {warehouse_code, has_soh, has_demand, has_policies, overlap_pairs, ready, blockers[]}.
 
     - has_soh: inventory_snapshots_weekly exists for that warehouse (latest week_start)
-    - has_demand: demand_actuals exists for that warehouse (latest week_start), CUSTOMER (and SAMPLES optional)
+    - has_demand: demand_actuals exists for that warehouse. AAH: CUSTOMER only (Sales Out). BLP: CUSTOMER and/or SAMPLES.
     - has_policies: planning_policies exists for that warehouse
     - overlap_pairs: count of (sku, warehouse) present in BOTH SOH and policies (and demand for actuals)
     - ready: has_soh && has_policies && has_demand (for demand_source=actuals)
@@ -35,6 +35,7 @@ def check_planning_readiness(
         .all()
         if r[0]
     }
+    # AAH: CUSTOMER only (Sales Out). BLP: CUSTOMER or SAMPLES.
     all_warehouses = sorted(policy_wh | soh_wh | demand_wh)
     if not all_warehouses:
         return []
@@ -49,15 +50,25 @@ def check_planning_readiness(
         )
         has_soh = soh_latest is not None
 
-        # has_demand (CUSTOMER required; SAMPLES optional for actuals)
-        demand_latest = (
-            db.query(func.max(DemandActual.week_start))
-            .filter(
-                DemandActual.warehouse_code == wh,
-                DemandActual.demand_type == DemandType.CUSTOMER,
+        # has_demand: AAH = Sales Out (CUSTOMER only); BLP = Direct sales (CUSTOMER) or Samples (SAMPLES)
+        if wh == "AAH":
+            demand_latest = (
+                db.query(func.max(DemandActual.week_start))
+                .filter(
+                    DemandActual.warehouse_code == wh,
+                    DemandActual.demand_type == DemandType.CUSTOMER,
+                )
+                .scalar()
             )
-            .scalar()
-        )
+        else:
+            demand_latest = (
+                db.query(func.max(DemandActual.week_start))
+                .filter(
+                    DemandActual.warehouse_code == wh,
+                    DemandActual.demand_type.in_([DemandType.CUSTOMER, DemandType.SAMPLES]),
+                )
+                .scalar()
+            )
         has_demand = demand_latest is not None
 
         # has_policies
@@ -83,19 +94,32 @@ def check_planning_readiness(
         }
         overlap_soh_policy = len(soh_skus & policy_skus)
 
-        # For actuals, demand overlap matters
+        # For actuals, demand overlap matters. AAH: CUSTOMER only (Sales Out). BLP: CUSTOMER or SAMPLES.
         if demand_source == "actuals" and has_demand:
-            demand_skus = {
-                r[0]
-                for r in db.query(DemandActual.sku)
-                .filter(
-                    DemandActual.warehouse_code == wh,
-                    DemandActual.demand_type == DemandType.CUSTOMER,
-                )
-                .distinct()
-                .all()
-                if r[0]
-            }
+            if wh == "AAH":
+                demand_skus = {
+                    r[0]
+                    for r in db.query(DemandActual.sku)
+                    .filter(
+                        DemandActual.warehouse_code == wh,
+                        DemandActual.demand_type == DemandType.CUSTOMER,
+                    )
+                    .distinct()
+                    .all()
+                    if r[0]
+                }
+            else:
+                demand_skus = {
+                    r[0]
+                    for r in db.query(DemandActual.sku)
+                    .filter(
+                        DemandActual.warehouse_code == wh,
+                        DemandActual.demand_type.in_([DemandType.CUSTOMER, DemandType.SAMPLES]),
+                    )
+                    .distinct()
+                    .all()
+                    if r[0]
+                }
             overlap_pairs = len(soh_skus & policy_skus & demand_skus)
         else:
             overlap_pairs = overlap_soh_policy
@@ -112,9 +136,18 @@ def check_planning_readiness(
         if not has_soh:
             blockers.append(f"No SOH loaded for {wh} → Import Stock On Hand for {wh}")
         if not has_demand and demand_source == "actuals":
-            blockers.append(
-                f"No Sales Out / Direct sales loaded for {wh} → Import Demand for {wh}"
-            )
+            if wh == "AAH":
+                blockers.append(
+                    f"No Sales Out (AAH) loaded for {wh} → Import Sales Out for AAH"
+                )
+            elif wh == "BLP":
+                blockers.append(
+                    f"No Direct sales or Samples (BLP only) loaded for {wh} → Import Demand for BLP"
+                )
+            else:
+                blockers.append(
+                    f"No demand loaded for {wh} → Import Demand for {wh}"
+                )
         if not has_policies:
             blockers.append(f"No policies for {wh} → Generate default policies for {wh}")
 

@@ -225,8 +225,8 @@ def run_plan(
                 continue
             if dt == DemandType.CUSTOMER:
                 history_c.append((w, qty))
-            elif dt == DemandType.SAMPLES:
-                history_s.append((w, qty))
+            elif dt == DemandType.SAMPLES and wh_code != "AAH":
+                history_s.append((w, qty))  # AAH never uses SAMPLES
         history_c.sort(key=lambda x: x[0])
         history_s.sort(key=lambda x: x[0])
         last_n_c = history_c[-n:] if len(history_c) >= n else history_c
@@ -285,6 +285,8 @@ def run_plan(
         total_lt_float = lt_prod + lt_slot + lt_haul + lt_put + lt_pad
         lt_weeks_int = max(0, math.ceil(total_lt_float))
         include_samples: bool = cast(bool, getattr(policy, "include_samples", True))
+        if wh_code == "AAH":
+            include_samples = False  # AAH never includes SAMPLES (Sales Out = CUSTOMER only)
         fc_c: Decimal = forecast_customer.get((sku, wh_code), Decimal("0"))
         fc_s: Decimal = (
             forecast_samples.get((sku, wh_code), Decimal("0")) if include_samples else Decimal("0")

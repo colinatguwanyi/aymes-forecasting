@@ -20,6 +20,7 @@
       <router-link v-if="auth.canAdmin() || auth.canOperator()" to="/imports" class="nav-item" active-class="active">Imports</router-link>
       <template v-if="auth.canAdmin()">
         <router-link to="/admin/forecast-methods" class="nav-item" active-class="active">Forecasting Methods</router-link>
+        <router-link to="/admin/forecast-engine" class="nav-item" active-class="active">Forecast Engine</router-link>
         <router-link to="/admin/products" class="nav-item" active-class="active">Products</router-link>
         <router-link to="/admin/suppliers" class="nav-item" active-class="active">Suppliers</router-link>
         <router-link to="/admin/warehouses" class="nav-item" active-class="active">Warehouses</router-link>
@@ -32,6 +33,7 @@
       <router-link to="/reports/stock-on-hand-history" class="nav-item" active-class="active">SOH History</router-link>
       <router-link to="/reports/stock-on-hand-grid" class="nav-item" active-class="active">SOH Grid</router-link>
       <router-link to="/reports/sales-grid" class="nav-item" active-class="active">Sales Grid</router-link>
+      <router-link to="/reports/stock-coverage" class="nav-item" active-class="active">Stock Coverage</router-link>
       <router-link to="/exports" class="nav-item" active-class="active">Exports</router-link>
     </nav>
   </aside>

@@ -128,6 +128,28 @@ ALLOW_DEMO_DATA=true python -m app.seed
 
 ---
 
+## 6b. Cleanup demo data (optional)
+
+To remove demo/seed SKUs (e.g. SKU1–4, SKU001–004) and related rows:
+
+1. **Preview first** (no changes):
+   ```bash
+   python scripts/cleanup_demo_data.py --dry-run
+   ```
+   This prints the database name and host, the SKUs that match, row counts per table, and plan run IDs that would be deleted.
+
+2. **Confirm** the database and host are correct before proceeding.
+
+3. **Run cleanup** (from project root):
+   ```bash
+   python scripts/cleanup_demo_data.py
+   ```
+   Deletions run in a transaction; on error, everything is rolled back.
+
+See `docs/FAKE_DATA_ROOT_CAUSE_REPORT.md` for context.
+
+---
+
 ## 7. Verify
 
 1. Start the backend:
@@ -154,7 +176,8 @@ ALLOW_DEMO_DATA=true python -m app.seed
 | Create DB         | `createdb -U postgres supply_planning` or `CREATE DATABASE` in psql |
 | Backend config    | `backend/.env` with `DATABASE_URL=postgresql://...`     |
 | Migrations        | `cd backend && alembic upgrade head`                    |
-| Seed (backbone)   | `cd backend && python -m app.seed_backbone`            |
+| Seed (backbone)   | `cd backend && ALLOW_DEMO_DATA=true python -m app.seed_backbone` |
+| Cleanup demo data | `python scripts/cleanup_demo_data.py --dry-run` then `python scripts/cleanup_demo_data.py` |
 | Run API           | `cd backend && uvicorn app.main:app --reload --port 8000` |
 
 Default URL used by the app if `.env` is missing:

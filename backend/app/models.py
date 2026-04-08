@@ -824,3 +824,20 @@ Product.supplier_products = relationship("SupplierProduct", back_populates="prod
 Product.warehouse_products = relationship("WarehouseProduct", back_populates="product")
 Supplier.supplier_products = relationship("SupplierProduct", back_populates="supplier")
 Warehouse.warehouse_products = relationship("WarehouseProduct", back_populates="warehouse")
+
+# Forecasting subsystem models — kept in a separate module to isolate scope.
+# Importing here ensures they are registered with Base.metadata for Alembic.
+from app.forecast_models import (  # noqa: E402, F401
+    ForecastSourceConfig,
+    ForecastModelConfig,
+    ForecastRuntimeConfig,
+    ForecastSkuHistoryRule,
+    ForecastProductProfile,
+    ForecastSalesWeekly,
+    ForecastStockWeekly,
+    ForecastRun,
+    ForecastRunModel,
+    ForecastResultWeekly,
+    ForecastTrainingSeriesWeekly,
+    ForecastRunDiagnostic,
+)

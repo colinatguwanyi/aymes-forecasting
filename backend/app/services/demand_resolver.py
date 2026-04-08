@@ -118,7 +118,11 @@ def _actuals_by_week_with_breakdown(
     breakdowns: dict[tuple[date, str, str], dict[str, Any]] = {}
     for key, by_type in raw_breakdowns.items():
         _w, sku, wh = key
-        include_samples = policy_include_samples.get((sku, wh), True)
+        # AAH: never include SAMPLES (Sales Out = CUSTOMER only). BLP: include SAMPLES only when policy says.
+        if wh == "AAH":
+            include_samples = False
+        else:
+            include_samples = policy_include_samples.get((sku, wh), True)
         total, breakdown = build_actuals_breakdown(dict(by_type), include_samples)
         totals[key] = total
         breakdowns[key] = breakdown
@@ -329,7 +333,7 @@ def resolve_demand_for_run(
         base, base_breakdowns = _actuals_by_week_with_breakdown(db, from_week, to_week, policy_include_samples)
         base_source = "actuals"
         for (w, sku, wh) in base:
-            base_includes_samples[(w, sku, wh)] = policy_include_samples.get((sku, wh), True)
+            base_includes_samples[(w, sku, wh)] = False if wh == "AAH" else policy_include_samples.get((sku, wh), True)
     elif demand_source == "baseline":
         train_end = _resolve_baseline_train_end(db, run, warehouse_code="AAH")
         base, base_refs = _published_baseline_by_week(db, from_week, to_week, train_end)
@@ -353,7 +357,7 @@ def resolve_demand_for_run(
             if w <= run_week:
                 base[k] = actuals.get(k, Decimal("0"))
                 base_breakdowns[k] = actuals_breakdown.get(k, {})
-                base_includes_samples[k] = policy_include_samples.get((s, wh), True)
+                base_includes_samples[k] = False if wh == "AAH" else policy_include_samples.get((s, wh), True)
             else:
                 base[k] = baseline.get(k, Decimal("0"))
                 ref = baseline_refs.get(k, {})
@@ -370,7 +374,7 @@ def resolve_demand_for_run(
         base, base_breakdowns = _actuals_by_week_with_breakdown(db, from_week, to_week, policy_include_samples)
         base_source = "actuals"
         for (w, sku, wh) in base:
-            base_includes_samples[(w, sku, wh)] = policy_include_samples.get((sku, wh), True)
+            base_includes_samples[(w, sku, wh)] = False if wh == "AAH" else policy_include_samples.get((sku, wh), True)
 
     all_keys = set(base) | set(overrides)
     if not all_keys:

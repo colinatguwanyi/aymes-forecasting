@@ -6,16 +6,19 @@ const api = axios.create({
   withCredentials: true,
 })
 
-// In dev mode only, add X-Dev-User so backend can authenticate without Entra.
-// NEVER send in production: guard on MODE to prevent accidental VITE_DEV_USER in prod build.
+// Add X-Dev-User so backend can authenticate without Entra (dev/local only on server).
+// - Vite dev server (npm run dev): always sends (MODE !== production).
+// - Built SPA: set VITE_SEND_DEV_AUTH_HEADER=true at build time for local “all on :8000” only.
 const devUser =
   import.meta.env.VITE_DEV_USER ??
   JSON.stringify({ email: 'dev@local', name: 'Dev User', roles: ['Admin'] })
 
-const isNonProduction = import.meta.env.MODE !== 'production'
+const sendDevAuthHeader =
+  import.meta.env.MODE !== 'production' ||
+  import.meta.env.VITE_SEND_DEV_AUTH_HEADER === 'true'
 
 api.interceptors.request.use((config) => {
-  if (isNonProduction) {
+  if (sendDevAuthHeader) {
     config.headers['X-Dev-User'] = devUser
   }
   if (config.data instanceof FormData) {
