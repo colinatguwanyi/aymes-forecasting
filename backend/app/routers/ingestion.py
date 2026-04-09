@@ -499,6 +499,10 @@ async def upload(
                         snap_date_aah = datetime.strptime(str(snapshot_date).strip(), "%Y-%m-%d").date()
                     except ValueError:
                         pass
+                logger.warning(
+                    "SOH_AAH_UPLOAD: snapshot_date_param=%r parsed=%r wh_code=%r rows=%d",
+                    snapshot_date, snap_date_aah, wh_code, len(rows_full),
+                )
                 staged, rejected = _validate_and_stage_soh(
                     db, run_id, rows_iter_soh,
                     warehouse_code=wh_code,

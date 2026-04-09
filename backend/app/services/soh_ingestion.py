@@ -9,6 +9,9 @@ from decimal import Decimal
 from typing import Any, cast
 from uuid import UUID
 
+# SOH_INGESTION_VERSION: used to confirm hot-reload picked up this file
+SOH_INGESTION_VERSION = "v2-snapshot-date-fix"
+
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 
@@ -26,6 +29,7 @@ from app.models import (
 from app.services.time_bucketing import week_start_for_date
 
 logger = logging.getLogger(__name__)
+logger.warning("SOH_INGESTION_LOADED: %s", SOH_INGESTION_VERSION)
 
 SOH_SOURCE_TYPE = "soh"
 CHUNK_SIZE = 5000
@@ -102,6 +106,12 @@ def validate_and_stage_soh_row(
     aah_raw = _get(row, "AAH Code", "aah_code", "AAH Code")
     stock_raw = _get(row, "ON STOCK", "STOCK", "stock")
     on_order_raw = _get(row, "ON ORDER", "on_order")
+
+    if row_number == 2:  # first data row only
+        logger.warning(
+            "SOH_ROW_DEBUG row=%d keys=%s stock_at_raw=%r aah_raw=%r snapshot_override=%r",
+            row_number, list(row.keys())[:8], stock_at_raw, aah_raw, snapshot_date_override,
+        )
 
     reject_reason: str | None = None
     warehouse_code: str | None = None
