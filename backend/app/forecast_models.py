@@ -64,7 +64,7 @@ class ForecastSourceConfig(Base):
     password_env_var = Column(String(128), nullable=False)    # e.g. "MYSQL_PASSWORD"
     database_name = Column(String(128), nullable=False)       # e.g. "aymes_reports"
     table_name = Column(String(256), nullable=False)          # e.g. "adhl_data_daily"
-    active = Column(Boolean, nullable=False, server_default="true")
+    active = Column(Boolean, nullable=False, server_default=text("1"))
     notes = Column(Text, nullable=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
     updated_at = Column(
@@ -94,7 +94,7 @@ class ForecastModelConfig(Base):
     display_name = Column(String(256), nullable=False)
     method_type = Column(String(64), nullable=False)             # "trailing_mean" | "seasonal_naive" | "ets"
     hyperparams = Column(JSON, nullable=False, server_default=text("'{}'"))
-    active = Column(Boolean, nullable=False, server_default="true")
+    active = Column(Boolean, nullable=False, server_default=text("1"))
     notes = Column(Text, nullable=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
 
@@ -126,8 +126,8 @@ class ForecastRuntimeConfig(Base):
     sku_filter_sql = Column(Text, nullable=True)         # optional extra WHERE clause
     train_window_weeks = Column(Integer, nullable=False, server_default="104")
     horizon_weeks = Column(Integer, nullable=False, server_default="52")
-    wtue_alignment = Column(Boolean, nullable=False, server_default="true")
-    active = Column(Boolean, nullable=False, server_default="true")
+    wtue_alignment = Column(Boolean, nullable=False, server_default=text("1"))
+    active = Column(Boolean, nullable=False, server_default=text("1"))
     notes = Column(Text, nullable=True)
     stock_params = Column(JSON, nullable=True)                  # stock-aware preprocessing thresholds
     created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
@@ -167,7 +167,7 @@ class ForecastSkuHistoryRule(Base):
     exclude_weeks = Column(JSON, nullable=True)                 # ["2024-01-02", ...]
     override_model_code = Column(String(64), nullable=True)
     merged_into_sku = Column(String(64), nullable=True)          # old_code → new_code merge
-    active = Column(Boolean, nullable=False, server_default="true")
+    active = Column(Boolean, nullable=False, server_default=text("1"))
     created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
     updated_at = Column(
         DateTime(timezone=True),
@@ -347,7 +347,7 @@ class ForecastRunModel(Base):
     sku = Column(String(64), nullable=False)
     warehouse_code = Column(String(32), nullable=False)
     model_code = Column(String(64), nullable=False)
-    selected = Column(Boolean, nullable=False, server_default="false")
+    selected = Column(Boolean, nullable=False, server_default=text("0"))
     train_weeks = Column(Integer, nullable=True)
     wape = Column(Numeric(10, 6), nullable=True)
     bias = Column(Numeric(10, 6), nullable=True)
@@ -394,7 +394,7 @@ class ForecastResultWeekly(Base):
     lower_bound = Column(Numeric(18, 4), nullable=True)          # prediction interval
     upper_bound = Column(Numeric(18, 4), nullable=True)
     horizon_week_index = Column(Integer, nullable=False)         # 1 = first forecast week
-    is_published = Column(Boolean, nullable=False, server_default="false")
+    is_published = Column(Boolean, nullable=False, server_default=text("0"))
     result_meta = Column(JSON, nullable=True)                   # actual_units, interpolated_units, outlier_flag, etc.
     created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
 
@@ -434,9 +434,9 @@ class ForecastTrainingSeriesWeekly(Base):
     stock_adjusted_qty = Column(Numeric(18, 4), nullable=True)   # stock-aware imputed demand
     soh_units = Column(Numeric(18, 4), nullable=True)            # SOH at this week
     week_classification = Column(String(32), nullable=True)      # normal / zero_stockout / etc.
-    is_outlier_flagged = Column(Boolean, nullable=False, server_default="false")
-    is_stock_constrained = Column(Boolean, nullable=False, server_default="false")
-    is_excluded = Column(Boolean, nullable=False, server_default="false")
+    is_outlier_flagged = Column(Boolean, nullable=False, server_default=text("0"))
+    is_stock_constrained = Column(Boolean, nullable=False, server_default=text("0"))
+    is_excluded = Column(Boolean, nullable=False, server_default=text("0"))
     exclusion_reason = Column(String(128), nullable=True)
 
 

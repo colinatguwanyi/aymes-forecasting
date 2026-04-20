@@ -18,6 +18,7 @@ from sqlalchemy import (
     UniqueConstraint,
     Uuid,
     func,
+    text,
 )
 from sqlalchemy.orm import relationship
 
@@ -80,14 +81,14 @@ class Product(Base):
     name = Column(String(256), nullable=True)
     description = Column(Text, nullable=True)
     uom = Column(String(32), nullable=False, server_default="units")
-    active = Column(Boolean, nullable=False, server_default="true")
+    active = Column(Boolean, nullable=False, server_default=text("1"))
     aah_code = Column(Text, nullable=True)
     brand = Column(Text, nullable=True)
     product_family = Column(Text, nullable=True)
     selling_unit_text = Column(Text, nullable=True)
     single_unit_content = Column(Numeric(18, 4), nullable=True)
     content_uom = Column(String(16), nullable=True)
-    is_recipe = Column(Boolean, nullable=False, server_default="false")
+    is_recipe = Column(Boolean, nullable=False, server_default=text("0"))
 
 
 class Warehouse(Base):
@@ -96,7 +97,7 @@ class Warehouse(Base):
     code = Column(String(32), unique=True, nullable=False, index=True)
     name = Column(String(256), nullable=True)
     timezone = Column(String(64), nullable=False, server_default="Europe/London")
-    active = Column(Boolean, nullable=False, server_default="true")
+    active = Column(Boolean, nullable=False, server_default=text("1"))
 
 
 class Supplier(Base):
@@ -104,7 +105,7 @@ class Supplier(Base):
     id = Column(Integer, primary_key=True, index=True)
     code = Column(String(64), unique=True, nullable=False, index=True)
     name = Column(String(256), nullable=True)
-    active = Column(Boolean, nullable=False, server_default="true")
+    active = Column(Boolean, nullable=False, server_default=text("1"))
 
 
 class Lane(Base):
@@ -216,8 +217,8 @@ class PlanRunDemandInputWeekly(Base):
     source = Column(String(32), nullable=False)
     source_ref = Column(JSON, nullable=True)
     demand_breakdown_json = Column(JSON, nullable=True)  # per demand_type + included/excluded, or OVERRIDE/FORECAST_TOTAL
-    demand_includes_samples = Column(Boolean, nullable=False, server_default="true")
-    is_frozen = Column(Boolean, nullable=False, server_default="false")
+    demand_includes_samples = Column(Boolean, nullable=False, server_default=text("1"))
+    is_frozen = Column(Boolean, nullable=False, server_default=text("0"))
 
 
 class DemandOverrideWeekly(Base):
@@ -306,7 +307,7 @@ class PlannedOrder(Base):
     sku = Column(String(64), nullable=False, index=True)
     warehouse_code = Column(String(32), nullable=False, index=True)
     order_qty = Column(Numeric(18, 4), nullable=False)
-    is_frozen = Column(Boolean, nullable=False, server_default="false")
+    is_frozen = Column(Boolean, nullable=False, server_default=text("0"))
     plan_run = relationship("PlanRun", back_populates="planned_orders")
 
 
@@ -361,7 +362,7 @@ class SupplierProduct(Base):
     lead_time_weeks = Column(Integer, nullable=False, server_default="0")
     moq_units = Column(Integer, nullable=True)
     pack_size_units = Column(Integer, nullable=True)
-    active = Column(Boolean, nullable=False, server_default="true")
+    active = Column(Boolean, nullable=False, server_default=text("1"))
     supplier = relationship("Supplier", back_populates="supplier_products")
     product = relationship("Product", back_populates="supplier_products")
     __table_args__ = (UniqueConstraint("supplier_id", "product_id", name="uq_supplier_products_supplier_product"),)
@@ -409,7 +410,7 @@ class WarehouseProduct(Base):
     haulage_buffer_weeks = Column(Integer, nullable=False, server_default="0")
     stocking_buffer_weeks = Column(Integer, nullable=False, server_default="0")
     reorder_review_weeks = Column(Integer, nullable=False, server_default="1")
-    active = Column(Boolean, nullable=False, server_default="true")
+    active = Column(Boolean, nullable=False, server_default=text("1"))
     warehouse = relationship("Warehouse", back_populates="warehouse_products")
     product = relationship("Product", back_populates="warehouse_products")
     __table_args__ = (UniqueConstraint("warehouse_id", "product_id", name="uq_warehouse_products_wh_product"),)
@@ -543,7 +544,7 @@ class IngestionRun(Base):
     date_min = Column(Date, nullable=True)
     date_max = Column(Date, nullable=True)
     file_size_bytes = Column(Integer, nullable=True)
-    requires_confirm = Column(Boolean, nullable=False, server_default="false")
+    requires_confirm = Column(Boolean, nullable=False, server_default=text("0"))
     confirmed_at = Column(DateTime(timezone=True), nullable=True)
     confirmed_by = Column(String(256), nullable=True)
     progress_meta = Column(JSON, nullable=True)
@@ -613,8 +614,8 @@ class DemandFactsWeekly(Base):
     demand_type = Column(SQLEnum(DemandType), nullable=False)
     qty = Column(Numeric(18, 4), nullable=False)
     source_run_id = Column(Uuid(as_uuid=True), ForeignKey("ingestion_runs.id", ondelete="SET NULL"), nullable=True)
-    is_imputed = Column(Boolean, nullable=False, server_default="false")
-    is_outlier = Column(Boolean, nullable=False, server_default="false")
+    is_imputed = Column(Boolean, nullable=False, server_default=text("0"))
+    is_outlier = Column(Boolean, nullable=False, server_default=text("0"))
     outlier_method = Column(String(64), nullable=True)
 
 
@@ -683,7 +684,7 @@ class WarehouseProductCode(Base):
     sku = Column(String(64), ForeignKey("products.sku", ondelete="CASCADE"), nullable=False, index=True)
     external_name = Column(Text, nullable=True)
     hs_code = Column(String(64), nullable=True)
-    active = Column(Boolean, nullable=False, server_default="true")
+    active = Column(Boolean, nullable=False, server_default=text("1"))
     match_method = Column(String(32), nullable=True)
     match_confidence = Column(Integer, nullable=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
@@ -800,7 +801,7 @@ class User(Base):
     entra_oid = Column(String(256), unique=True, nullable=True, index=True)
     email = Column(String(256), nullable=False, index=True)
     display_name = Column(String(256), nullable=True)
-    is_active = Column(Boolean, nullable=False, server_default="true")
+    is_active = Column(Boolean, nullable=False, server_default=text("1"))
     created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
     last_login_at = Column(DateTime(timezone=True), nullable=True)
     roles = relationship("Role", secondary="user_roles", back_populates="users")
