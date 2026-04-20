@@ -19,6 +19,8 @@ class Settings(BaseSettings):
     )
     # Platform DB: MySQL 8 only (mysql+pymysql://...).
     database_url: str = "mysql+pymysql://aymes:@localhost:3306/supply_planning?charset=utf8mb4"
+    # PyMySQL: set true for many local / Docker installs; use false when the server requires TLS (e.g. Azure).
+    database_ssl_disabled: bool = False
     environment: str = "dev"  # dev, local, prod
     # Dev/sandbox only: seeds and planning demo-SKU bypass (see .env.example).
     allow_demo_data: bool = False

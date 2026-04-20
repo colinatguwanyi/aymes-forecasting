@@ -42,6 +42,8 @@ In `backend/.env` (see `.env.example`):
 
 ```env
 DATABASE_URL=mysql+pymysql://aymes:your_password@localhost:3306/supply_planning?charset=utf8mb4
+# If the API returns 503 / “Database unavailable” but `mysql` CLI works, try:
+# DATABASE_SSL_DISABLED=true
 ```
 
 ## 4. Migrations

@@ -7,8 +7,10 @@ from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
-from sqlalchemy.exc import OperationalError
+from sqlalchemy import text
+from sqlalchemy.exc import OperationalError, ProgrammingError
 
+from app.config import settings
 from app.database import Base, engine
 from app.routers import (
     admin_forecast_methods,
@@ -69,20 +71,44 @@ app = FastAPI(
 _DB_UNAVAILABLE = (
     "Database unavailable. Start MySQL 8, ensure DATABASE_URL in backend/.env is correct "
     "(mysql+pymysql://user:password@host:3306/supply_planning?charset=utf8mb4), then run "
-    "`alembic upgrade head` from the backend folder. See docs/MYSQL_SETUP.md."
+    "`alembic upgrade head` from the backend folder. See docs/MYSQL_SETUP.md. "
+    "If MySQL is up but you use a local Enterprise/installer build, try DATABASE_SSL_DISABLED=true in .env."
 )
 
 
-@app.exception_handler(OperationalError)
-async def sqlalchemy_operational_error_handler(
-    _request: Request, _exc: OperationalError
-) -> JSONResponse:
-    """Avoid opaque 500s when MySQL is down or refuses the connection."""
-    logger.warning("Database operational error (connection or server); returning 503")
-    return JSONResponse(
-        status_code=503,
-        content={"detail": _DB_UNAVAILABLE},
-    )
+def _sqlalchemy_db_error_response(exc: OperationalError | ProgrammingError) -> JSONResponse:
+    """503 for connection failures and common schema errors so the UI gets a clear message."""
+    orig = getattr(exc, "orig", None)
+    logger.warning("Database error (503): %s", exc, exc_info=True)
+    detail: str = _DB_UNAVAILABLE
+    if settings.environment.lower() in ("dev", "local", "development") and orig is not None:
+        detail = f"{_DB_UNAVAILABLE} Server said: {orig!s}"
+    return JSONResponse(status_code=503, content={"detail": detail})
+
+
+async def _sqlalchemy_operational_handler(_request: Request, exc: OperationalError) -> JSONResponse:
+    return _sqlalchemy_db_error_response(exc)
+
+
+async def _sqlalchemy_programming_handler(_request: Request, exc: ProgrammingError) -> JSONResponse:
+    return _sqlalchemy_db_error_response(exc)
+
+
+app.add_exception_handler(OperationalError, _sqlalchemy_operational_handler)  # pyright: ignore[reportArgumentType]
+app.add_exception_handler(ProgrammingError, _sqlalchemy_programming_handler)  # pyright: ignore[reportArgumentType]
+
+
+@app.on_event("startup")
+async def _log_database_connectivity() -> None:
+    try:
+        with engine.connect() as conn:
+            conn.execute(text("SELECT 1"))
+        host_part = settings.database_url.split("@")[-1] if "@" in settings.database_url else settings.database_url
+        logger.info("Database OK (ssl_disabled=%s, target=%s)", settings.database_ssl_disabled, host_part)
+    except Exception:
+        logger.exception(
+            "Database connection failed at startup. Fix MySQL / DATABASE_URL / DATABASE_SSL_DISABLED, then restart."
+        )
 
 
 app.add_middleware(
