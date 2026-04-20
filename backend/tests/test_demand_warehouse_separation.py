@@ -24,7 +24,7 @@ from app.services.demand_resolver import _actuals_by_week_with_breakdown, resolv
 def db_session():
     """Session for demand warehouse separation tests."""
     if "sqlite" in (engine.url.drivername or ""):
-        pytest.skip("Demand warehouse separation tests require PostgreSQL")
+        pytest.skip("Demand warehouse separation tests require a non-SQLite DB (e.g. MySQL)")
     Session = sessionmaker(bind=engine, autoflush=True)
     session = Session()
     try:

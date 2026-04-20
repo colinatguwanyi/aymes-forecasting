@@ -1,9 +1,6 @@
-# CI: frontend build + backend tests with Postgres + Alembic.
+# CI: frontend build + backend tests with MySQL 8 + Alembic.
 #
-# Note: Alembic revisions through 024 are largely PostgreSQL-specific (raw SQL,
-# JSONB, pg enums). CI uses Postgres so `alembic upgrade head` reflects what works
-# today. MySQL as the platform DB requires follow-up migration work; track that
-# in docs/STABILIZATION_CHECKLIST.md.
+# Platform DB is MySQL only. Alembic baseline: 001_mysql_baseline (ORM create_all).
 
 name: CI
 
@@ -39,22 +36,21 @@ jobs:
     name: Backend (migrations + pytest)
     runs-on: ubuntu-latest
     services:
-      postgres:
-        image: postgres:16
+      mysql:
+        image: mysql:8.0
         env:
-          POSTGRES_USER: postgres
-          POSTGRES_PASSWORD: postgres
-          POSTGRES_DB: supply_planning
+          MYSQL_ROOT_PASSWORD: root
+          MYSQL_DATABASE: supply_planning
         ports:
-          - 5432:5432
+          - 3306:3306
         options: >-
-          --health-cmd "pg_isready -U postgres -d supply_planning"
-          --health-interval 10s
-          --health-timeout 5s
-          --health-retries 10
+          --health-cmd="mysqladmin ping -h 127.0.0.1 -uroot -proot"
+          --health-interval=10s
+          --health-timeout=5s
+          --health-retries=30
 
     env:
-      DATABASE_URL: postgresql+psycopg2://postgres:postgres@localhost:5432/supply_planning
+      DATABASE_URL: mysql+pymysql://root:root@127.0.0.1:3306/supply_planning?charset=utf8mb4
       ALLOW_DEMO_DATA: "true"
 
     defaults:
@@ -73,7 +69,7 @@ jobs:
       - name: Install Python dependencies
         run: pip install -r requirements.txt
 
-      - name: Alembic upgrade (Postgres)
+      - name: Alembic upgrade (MySQL)
         run: alembic upgrade head
 
       - name: Pytest

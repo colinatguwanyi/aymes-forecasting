@@ -12,6 +12,9 @@ from app.config import settings
 from app.database import Base
 from app.models import *
 
+# Forecast subsystem tables share Base and must be on metadata for autogenerate / parity with migrations.
+import app.forecast_models  # noqa: E402, F401
+
 config = context.config
 # Escape % for ConfigParser (e.g. %40 in URL-encoded password becomes %%)
 url_for_config = settings.database_url.replace("%", "%%")

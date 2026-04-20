@@ -1,6 +1,6 @@
 # Weekly Supply Planning MVP
 
-MVP weekly supply planning system: Vue 3 (TypeScript) frontend, FastAPI backend, Postgres database.
+MVP weekly supply planning system: Vue 3 (TypeScript) frontend, FastAPI backend, MySQL 8 database.
 
 ## Standards
 
@@ -16,17 +16,16 @@ For each SKU and warehouse, project weekly inventory forward and recommend plann
 
 - Python 3.11+
 - Node 18+
-- PostgreSQL 14+
+- MySQL 8+
 
 ### 1. Database
 
-Create a database and run migrations:
+Create a MySQL database and run migrations (see [docs/MYSQL_SETUP.md](docs/MYSQL_SETUP.md)):
 
 ```bash
-createdb supply_planning
 cd backend
 pip install -r requirements.txt
-# Set DATABASE_URL if different from postgresql://postgres:postgres@localhost:5432/supply_planning
+# Set DATABASE_URL in .env — see .env.example (mysql+pymysql://...?charset=utf8mb4)
 alembic upgrade head
 python -m app.seed
 ```

@@ -29,7 +29,7 @@
 
 ## 3) Root Cause Statement
 
-**"Fake data comes from `backend/app/seed.py` and `backend/app/seed_backbone.py`. They write products, planning_policies, inventory_snapshots_weekly, demand_actuals (seed.py) and backbone tables (seed_backbone). They trigger when the user runs `python -m app.seed` or `python -m app.seed_backbone` (e.g. per README/POSTGRES_SETUP)."**
+**"Fake data comes from `backend/app/seed.py` and `backend/app/seed_backbone.py`. They write products, planning_policies, inventory_snapshots_weekly, demand_actuals (seed.py) and backbone tables (seed_backbone). They trigger when the user runs `python -m app.seed` or `python -m app.seed_backbone` (e.g. per README/MYSQL_SETUP)."**
 
 **SKU1/SKU2/SKU4** (without leading zeros) appear only in `test_warehouse_scope_planning.py`. If these show in production, they likely came from:
 - A test run against the same DB, or

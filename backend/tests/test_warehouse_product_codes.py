@@ -35,7 +35,7 @@ def _warehouse_product_codes_available() -> bool:
         return False
 
 
-@pytest.mark.skipif(not _warehouse_product_codes_available(), reason="Migration 020 not applied")
+@pytest.mark.skipif(not _warehouse_product_codes_available(), reason="warehouse_product_codes table missing (run alembic upgrade head)")
 def test_bulk_upload_upsert() -> None:
     """Bulk upload creates new mappings and updates existing ones (upsert on warehouse_code+external_code)."""
     db = SessionLocal()
@@ -104,7 +104,7 @@ def test_bulk_upload_upsert() -> None:
         db.close()
 
 
-@pytest.mark.skipif(not _warehouse_product_codes_available(), reason="Migration 020 not applied")
+@pytest.mark.skipif(not _warehouse_product_codes_available(), reason="warehouse_product_codes table missing (run alembic upgrade head)")
 def test_unmapped_aggregation() -> None:
     """Unmapped endpoint aggregates product_not_found rejections by external_code."""
     db = SessionLocal()

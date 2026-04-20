@@ -1,5 +1,5 @@
 """Tests: forecast output ingestion — unknown AAH rejected, multi-model ingested, selection published, planning uses published baseline.
-Requires PostgreSQL (SQLite does not support UUID columns used by ingestion_runs). Use pytest with postgres URL or run against real DB.
+Requires a non-SQLite DB (e.g. MySQL) with UUID-capable columns for ingestion_runs. CI uses MySQL.
 """
 # pyright: reportMissingImports=false
 from datetime import date
@@ -62,10 +62,10 @@ def test_parse_date_iso_and_slash() -> None:
 
 @pytest.fixture
 def db_session():
-    """Session for forecast output tests. Uses app.database engine (expects PostgreSQL)."""
+    """Session for forecast output tests. Uses app.database engine (expects MySQL, not SQLite)."""
     from app.database import engine
     if "sqlite" in (engine.url.drivername or ""):
-        pytest.skip("Forecast output tests require PostgreSQL (UUID columns)")
+        pytest.skip("Forecast output tests require MySQL (or non-SQLite DB)")
     Session = sessionmaker(bind=engine, autoflush=True)
     session = Session()
     try:

@@ -13,7 +13,7 @@ This document describes the AYMES forecasting / supply planning app as built: st
 | Frontend  | Vue 3 (Composition API), TypeScript, Vite 5, Pinia, Vue Router |
 | Styling   | Tailwind CSS 4, global layout CSS variables |
 | Backend   | FastAPI, Python 3.11+ |
-| Database  | PostgreSQL 14+ |
+| Database  | MySQL 8+ |
 | ORM       | SQLAlchemy 2.x |
 | Migrations| Alembic |
 
@@ -29,7 +29,7 @@ This document describes the AYMES forecasting / supply planning app as built: st
 - **Server:** uvicorn — `uvicorn app.main:app --reload --host 0.0.0.0 --port 8000`  
 - **API base:** `/api` (e.g. `/api/products`, `/api/plan/runs`, `/api/timeline`)  
 - **Docs:** http://127.0.0.1:8000/docs  
-- **Key deps:** fastapi, uvicorn, sqlalchemy, alembic, psycopg2-binary, pydantic, pandas  
+- **Key deps:** fastapi, uvicorn, sqlalchemy, alembic, pymysql, pydantic, pandas  
 
 ### Running the app
 
@@ -248,7 +248,7 @@ frontend/src/
 docs/
 ├── FORECASTING_PLATFORM_SPEC.md
 ├── INGESTION_CONTRACT.md        # Ingestion pipeline, W-TUE bucketing, CSV schemas, SKU mapping
-├── POSTGRES_SETUP.md
+├── MYSQL_SETUP.md
 ├── TYPING_STANDARDS.md
 └── CURRENT_BUILD_AND_SCHEMA.md  # this file
 ```

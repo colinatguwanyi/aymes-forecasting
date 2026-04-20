@@ -66,13 +66,13 @@ def test_demand_types_unknown() -> None:
     assert _demand_types_for_warehouse("XYZ") == [DemandType.CUSTOMER]
 
 
-# --- Integration tests (PostgreSQL) ---
+# --- Integration tests (real DB, not SQLite) ---
 
 
 @pytest.fixture
 def db_session():
     if "sqlite" in (engine.url.drivername or ""):
-        pytest.skip("Stock coverage tests require PostgreSQL")
+        pytest.skip("Stock coverage tests require a non-SQLite DB (e.g. MySQL)")
     Session = sessionmaker(bind=engine, autoflush=True)
     session = Session()
     try:
