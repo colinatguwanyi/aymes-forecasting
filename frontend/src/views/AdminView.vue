@@ -50,6 +50,9 @@ const tabs = [
   border-bottom: 1px solid var(--border);
   flex-shrink: 0;
   background: var(--main-bg);
+  overflow-x: auto;
+  flex-wrap: nowrap;
+  -webkit-overflow-scrolling: touch;
 }
 .admin-tab {
   padding: 0.6rem 1rem;

@@ -46,6 +46,8 @@
       </template>
 
       <template v-if="auth.canAdmin()">
+        <span class="nav-section">ADMIN</span>
+        <router-link to="/admin" class="nav-item" active-class="active">Admin console</router-link>
         <span class="nav-section">MASTER DATA</span>
         <router-link to="/admin/products" class="nav-item" active-class="active">Products</router-link>
         <router-link to="/admin/suppliers" class="nav-item" active-class="active">Suppliers</router-link>

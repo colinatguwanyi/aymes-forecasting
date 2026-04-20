@@ -51,12 +51,12 @@ class Identity:
 
 
 def get_auth_mode() -> str:
-    """Returns 'dev' when ENVIRONMENT is dev/local, else 'easy_auth'."""
+    """Returns 'dev' when ENVIRONMENT is dev/local/development, else 'easy_auth'."""
     return "dev" if _is_dev_mode() else "easy_auth"
 
 
 def _is_dev_mode() -> bool:
-    return settings.environment.lower() in ("dev", "local")
+    return settings.environment.lower() in ("dev", "local", "development")
 
 
 def _safe_b64decode(s: str) -> bytes | None:
@@ -261,8 +261,10 @@ def get_current_user(
     else:
         for r in user.roles:
             role_names.append(r.name)
+    # Local dev: users often have no role rows yet, and the built SPA may not send
+    # X-Dev-User (only Vite dev does). Default to Admin so master data / settings are reachable.
     if not role_names and auth_mode == "dev":
-        role_names = [ROLE_VIEWER]
+        role_names = [ROLE_ADMIN]
 
     return CurrentUserContext(user=user, roles=role_names, auth_mode=auth_mode)
 
