@@ -24,8 +24,12 @@ Create a MySQL database and run migrations (see [docs/MYSQL_SETUP.md](docs/MYSQL
 
 ```bash
 cd backend
+cp .env.example .env   # Windows: copy .env.example .env
+# Edit .env: DATABASE_URL, and for local UI auth + seeds add:
+#   ENVIRONMENT=dev
+#   DEV_DEFAULT_USER_EMAIL=dev@local
+#   ALLOW_DEMO_DATA=true
 pip install -r requirements.txt
-# Set DATABASE_URL in .env — see .env.example (mysql+pymysql://...?charset=utf8mb4)
 alembic upgrade head
 python -m app.seed
 ```
@@ -73,7 +77,7 @@ Or run the script (build only; you still start uvicorn yourself):
 - **Windows:** `.\scripts\build-and-deploy.ps1`
 - **Linux/macOS:** `./scripts/build-and-deploy.sh`
 
-Ensure Postgres is running and migrations are applied (see Quick start) before using the app.
+Ensure MySQL 8 is running and migrations are applied (see Quick start) before using the app.
 
 ## Folder structure
 

@@ -2,13 +2,13 @@
 Only runs when ALLOW_DEMO_DATA=true (default: false). Use for dev/sandbox only."""
 from __future__ import annotations
 import logging
-import os
 import sys
 from datetime import date, timedelta
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
+from app.config import settings
 from app.calendar_weeks import ensure_calendar_week, week_start_end
 from app.database import SessionLocal
 from app.models import (
@@ -38,8 +38,8 @@ def iso_year_week(d: date) -> tuple[int, int]:
 
 
 def seed_backbone() -> None:
-    if os.environ.get("ALLOW_DEMO_DATA", "false").strip().lower() not in ("1", "true", "yes"):
-        logger.warning("Backbone seed skipped: ALLOW_DEMO_DATA is not set to true. Set ALLOW_DEMO_DATA=true for dev.")
+    if not settings.allow_demo_data:
+        logger.warning("Backbone seed skipped: allow_demo_data is false. Set ALLOW_DEMO_DATA=true in .env for dev.")
         return
     db = SessionLocal()
     try:

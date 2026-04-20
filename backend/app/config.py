@@ -10,6 +10,8 @@ class Settings(BaseSettings):
     # Platform DB: MySQL 8 only (mysql+pymysql://...).
     database_url: str = "mysql+pymysql://aymes:@localhost:3306/supply_planning?charset=utf8mb4"
     environment: str = "dev"  # dev, local, prod
+    # Dev/sandbox only: seeds and planning demo-SKU bypass (see .env.example).
+    allow_demo_data: bool = False
     dev_default_user_email: str | None = None  # Fallback when X-Dev-User not provided (dev/local only)
     rbac_bootstrap_admin_emails: str | None = None  # Comma-separated emails for first-admin bootstrap (non-dev only)
 

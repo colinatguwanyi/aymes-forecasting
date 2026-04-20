@@ -2,7 +2,6 @@
 Only runs when ALLOW_DEMO_DATA=true (default: false). Use for dev/sandbox only."""
 from __future__ import annotations
 import logging
-import os
 import sys
 from datetime import date, timedelta
 from decimal import Decimal
@@ -11,6 +10,7 @@ from pathlib import Path
 # Ensure app is importable
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
+from app.config import settings
 from app.database import SessionLocal
 from app.models import (
     DemandActual,
@@ -34,8 +34,8 @@ def monday(d: date) -> date:
 
 
 def seed() -> None:
-    if os.environ.get("ALLOW_DEMO_DATA", "false").strip().lower() not in ("1", "true", "yes"):
-        print("Seed skipped: ALLOW_DEMO_DATA is not set to true. Set ALLOW_DEMO_DATA=true for dev.")
+    if not settings.allow_demo_data:
+        print("Seed skipped: allow_demo_data is false. Set ALLOW_DEMO_DATA=true in .env for dev.")
         return
     db = SessionLocal()
     try:
