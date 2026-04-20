@@ -256,8 +256,8 @@ def test_validate_rejects_missing_sku(db_session) -> None:
     assert rej.raw_payload == row
 
 
-def test_validate_rejects_missing_supplier(db_session) -> None:
-    """Rows with missing Supplier are rejected."""
+def test_validate_allows_missing_supplier_stages_row(db_session) -> None:
+    """Supplier is optional at validate time; import_from_stage uses code DEFAULT when blank."""
     run_id = uuid4()
     db_session.add(
         IngestionRun(
@@ -269,10 +269,10 @@ def test_validate_rejects_missing_supplier(db_session) -> None:
         )
     )
     db_session.commit()
-    row = {"Supplier": "", "SKU code": "SKU1", "Description": "A product"}
+    row = {"Supplier": "", "SKU code": "SKU-NOSUP", "Description": "A product"}
     staged, reason = validate_and_stage_row(db_session, run_id, row, row_number=3)
-    assert staged is False
-    assert "Supplier required" in reason
+    assert staged is True
+    assert reason == ""
 
 
 def test_validate_rejects_blank_description(db_session) -> None:

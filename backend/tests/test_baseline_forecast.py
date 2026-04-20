@@ -9,11 +9,11 @@ from app.services.forecasting.baseline import _compute_wape_bias, _forecast_one_
 
 def test_forecast_same_week_last_year() -> None:
     """When same week last year (52*7 days before target) exists in series, use it."""
-    # target 2025-02-18 - 364 days = 2024-02-19
+    # Implementation uses 52*7 = 364 calendar days, not calendar-year offset (365/366).
     target = date(2025, 2, 18)
-    prior_year_week = date(2024, 2, 19)
+    prior_year_week = target - timedelta(days=52 * 7)  # 2024-02-20
     series = [
-        (date(2024, 2, 19), Decimal("50")),
+        (prior_year_week, Decimal("50")),
         (date(2025, 2, 4), Decimal("200")),
     ]
     train_end = date(2025, 2, 4)

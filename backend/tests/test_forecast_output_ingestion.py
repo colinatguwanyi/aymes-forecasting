@@ -100,9 +100,11 @@ def test_unknown_aah_code_rejected(db_session) -> None:
 
 def test_multiple_models_ingested(db_session) -> None:
     """Multiple model rows for same SKU are staged and written to baseline_forecasts_weekly."""
-    # Product with aah_code
-    db_session.add(Product(sku="SKU-A", name="Product A", uom="units", active=True, aah_code="AAH-A"))
-    db_session.add(Warehouse(code="AAH", name="AAH", timezone="Europe/London", active=True))
+    u = uuid4().hex[:8]
+    wh_code, sku, aah = f"WHFO{u}", f"SKUFA{u}", f"AAHFA{u}"
+    # Product with aah_code (isolated keys: shared Postgres DB retains commits from other tests)
+    db_session.add(Product(sku=sku, name="Product A", uom="units", active=True, aah_code=aah))
+    db_session.add(Warehouse(code=wh_code, name="AAH", timezone="Europe/London", active=True))
     db_session.commit()
     run_id = uuid4()
     db_session.add(
@@ -118,7 +120,7 @@ def test_multiple_models_ingested(db_session) -> None:
     aah_to_sku = _aah_to_sku_map(db_session)
     for i, model in enumerate(["Prophet", "ARIMA"]):
         row = {
-            "AAH_Product_Code": "AAH-A",
+            "AAH_Product_Code": aah,
             "Inference_Date": "2025-01-07",
             "Forecast_Week": "2025-01-14",
             "Model": model,
@@ -133,8 +135,8 @@ def test_multiple_models_ingested(db_session) -> None:
     rows = (
         db_session.query(BaselineForecastWeekly)
         .filter(
-            BaselineForecastWeekly.sku == "SKU-A",
-            BaselineForecastWeekly.warehouse_code == "AAH",
+            BaselineForecastWeekly.sku == sku,
+            BaselineForecastWeekly.warehouse_code == wh_code,
             BaselineForecastWeekly.week_start == date(2025, 1, 14),
             BaselineForecastWeekly.train_end_week_start == date(2025, 1, 7),
         )
@@ -147,8 +149,10 @@ def test_multiple_models_ingested(db_session) -> None:
 
 def test_selected_model_series_published_deterministically(db_session) -> None:
     """When is_best_model is true for one model, that model's series is published."""
-    db_session.add(Product(sku="SKU-B", name="B", uom="units", active=True, aah_code="AAH-B"))
-    db_session.add(Warehouse(code="AAH", name="AAH", timezone="Europe/London", active=True))
+    u = uuid4().hex[:8]
+    wh_code, sku, aah = f"WHFB{u}", f"SKUFB{u}", f"AAHFB{u}"
+    db_session.add(Product(sku=sku, name="B", uom="units", active=True, aah_code=aah))
+    db_session.add(Warehouse(code=wh_code, name="AAH", timezone="Europe/London", active=True))
     db_session.commit()
     run_id = uuid4()
     db_session.add(
@@ -164,7 +168,7 @@ def test_selected_model_series_published_deterministically(db_session) -> None:
     aah_to_sku = _aah_to_sku_map(db_session)
     # Row 1: Prophet, not best
     row1 = {
-        "AAH_Product_Code": "AAH-B",
+        "AAH_Product_Code": aah,
         "Inference_Date": "2025-01-07",
         "Forecast_Week": "2025-01-14",
         "Model": "Prophet",
@@ -173,7 +177,7 @@ def test_selected_model_series_published_deterministically(db_session) -> None:
     }
     # Row 2: ARIMA, best
     row2 = {
-        "AAH_Product_Code": "AAH-B",
+        "AAH_Product_Code": aah,
         "Inference_Date": "2025-01-07",
         "Forecast_Week": "2025-01-14",
         "Model": "ARIMA",
@@ -191,7 +195,7 @@ def test_selected_model_series_published_deterministically(db_session) -> None:
     pub = (
         db_session.query(PublishedBaselineForecastWeekly)
         .filter(
-            PublishedBaselineForecastWeekly.sku == "SKU-B",
+            PublishedBaselineForecastWeekly.sku == sku,
             PublishedBaselineForecastWeekly.train_end_week_start == date(2025, 1, 7),
             PublishedBaselineForecastWeekly.week_start == date(2025, 1, 14),
         )
@@ -204,15 +208,17 @@ def test_selected_model_series_published_deterministically(db_session) -> None:
 
 def test_planning_demand_source_baseline_uses_published(db_session) -> None:
     """When plan_run.demand_source=baseline, resolve_demand pulls from published_baseline_forecasts_weekly."""
-    db_session.add(Product(sku="SKU-C", name="C", uom="units", active=True, aah_code="AAH-C"))
-    db_session.add(Warehouse(code="AAH", name="AAH", timezone="Europe/London", active=True))
+    u = uuid4().hex[:8]
+    wh_code, sku, aah = f"WHFC{u}", f"SKUFC{u}", f"AAHFC{u}"
+    db_session.add(Product(sku=sku, name="C", uom="units", active=True, aah_code=aah))
+    db_session.add(Warehouse(code=wh_code, name="AAH", timezone="Europe/London", active=True))
     db_session.commit()
     train_end = date(2025, 1, 7)
     # week_start in published = W-TUE (Tuesday); Monday 2025-01-13 falls in week starting 2025-01-07
     db_session.add(
         PublishedBaselineForecastWeekly(
-            sku="SKU-C",
-            warehouse_code="AAH",
+            sku=sku,
+            warehouse_code=wh_code,
             week_start=date(2025, 1, 7),  # W-TUE week containing Mon 2025-01-13
             forecast_qty=Decimal("100"),
             train_end_week_start=train_end,
@@ -242,8 +248,8 @@ def test_planning_demand_source_baseline_uses_published(db_session) -> None:
         db_session.query(PlanRunDemandInputWeekly)
         .filter(
             PlanRunDemandInputWeekly.plan_run_id == plan_run_id,
-            PlanRunDemandInputWeekly.sku == "SKU-C",
-            PlanRunDemandInputWeekly.warehouse_code == "AAH",
+            PlanRunDemandInputWeekly.sku == sku,
+            PlanRunDemandInputWeekly.warehouse_code == wh_code,
         )
         .first()
     )
@@ -253,16 +259,18 @@ def test_planning_demand_source_baseline_uses_published(db_session) -> None:
 
 def test_baseline_selects_max_train_end_when_multiple_runs(db_session) -> None:
     """When multiple published runs exist, resolver selects MAX(train_end_week_start) and persists to selected_train_end_week_start."""
-    db_session.add(Product(sku="SKU-D", name="D", uom="units", active=True, aah_code="AAH-D"))
-    db_session.add(Warehouse(code="AAH", name="AAH", timezone="Europe/London", active=True))
+    u = uuid4().hex[:8]
+    wh_code, sku, aah = f"WHFD{u}", f"SKUFD{u}", f"AAHFD{u}"
+    db_session.add(Product(sku=sku, name="D", uom="units", active=True, aah_code=aah))
+    db_session.add(Warehouse(code=wh_code, name="AAH", timezone="Europe/London", active=True))
     db_session.commit()
     older = date(2025, 1, 7)
     newer = date(2025, 2, 4)
     for train_end in (older, newer):
         db_session.add(
             PublishedBaselineForecastWeekly(
-                sku="SKU-D",
-                warehouse_code="AAH",
+                sku=sku,
+                warehouse_code=wh_code,
                 week_start=date(2025, 1, 7),
                 forecast_qty=Decimal("50"),
                 train_end_week_start=train_end,
@@ -292,14 +300,16 @@ def test_baseline_selects_max_train_end_when_multiple_runs(db_session) -> None:
 
 def test_baseline_reuses_persisted_selected_run(db_session) -> None:
     """After selection is persisted, re-running planning uses the same selected run even if a newer run is ingested."""
-    db_session.add(Product(sku="SKU-E", name="E", uom="units", active=True, aah_code="AAH-E"))
-    db_session.add(Warehouse(code="AAH", name="AAH", timezone="Europe/London", active=True))
+    u = uuid4().hex[:8]
+    wh_code, sku, aah = f"WHFE{u}", f"SKUFE{u}", f"AAHFE{u}"
+    db_session.add(Product(sku=sku, name="E", uom="units", active=True, aah_code=aah))
+    db_session.add(Warehouse(code=wh_code, name="AAH", timezone="Europe/London", active=True))
     db_session.commit()
     first_run = date(2025, 1, 7)
     db_session.add(
         PublishedBaselineForecastWeekly(
-            sku="SKU-E",
-            warehouse_code="AAH",
+            sku=sku,
+            warehouse_code=wh_code,
             week_start=date(2025, 1, 7),
             forecast_qty=Decimal("60"),
             train_end_week_start=first_run,
@@ -329,8 +339,8 @@ def test_baseline_reuses_persisted_selected_run(db_session) -> None:
     newer = date(2025, 2, 4)
     db_session.add(
         PublishedBaselineForecastWeekly(
-            sku="SKU-E",
-            warehouse_code="AAH",
+            sku=sku,
+            warehouse_code=wh_code,
             week_start=date(2025, 1, 7),
             forecast_qty=Decimal("99"),
             train_end_week_start=newer,
@@ -348,8 +358,8 @@ def test_baseline_reuses_persisted_selected_run(db_session) -> None:
         db_session.query(PlanRunDemandInputWeekly)
         .filter(
             PlanRunDemandInputWeekly.plan_run_id == plan_run_id,
-            PlanRunDemandInputWeekly.sku == "SKU-E",
-            PlanRunDemandInputWeekly.warehouse_code == "AAH",
+            PlanRunDemandInputWeekly.sku == sku,
+            PlanRunDemandInputWeekly.warehouse_code == wh_code,
         )
         .first()
     )
