@@ -1,6 +1,8 @@
 # Python
 venv/
 .venv/
+# Renamed / broken venv copies (e.g. after moving repo off another drive) — never commit
+venv.broken-*/
 __pycache__/
 *.py[cod]
 *$py.class
