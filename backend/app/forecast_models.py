@@ -93,7 +93,8 @@ class ForecastModelConfig(Base):
     code = Column(String(64), unique=True, nullable=False)       # e.g. "trailing_mean_8"
     display_name = Column(String(256), nullable=False)
     method_type = Column(String(64), nullable=False)             # "trailing_mean" | "seasonal_naive" | "ets"
-    hyperparams = Column(JSON, nullable=False, server_default=text("'{}'"))
+    # MySQL: JSON columns cannot have SERVER DEFAULT; use Python-side insert default.
+    hyperparams = Column(JSON, nullable=False, default=dict)
     active = Column(Boolean, nullable=False, server_default=text("1"))
     notes = Column(Text, nullable=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
@@ -121,7 +122,7 @@ class ForecastRuntimeConfig(Base):
         nullable=False,
         index=True,
     )
-    model_config_ids = Column(JSON, nullable=False, server_default=text("'[]'"))
+    model_config_ids = Column(JSON, nullable=False, default=list)
     warehouse_codes = Column(JSON, nullable=True)       # NULL = all warehouses
     sku_filter_sql = Column(Text, nullable=True)         # optional extra WHERE clause
     train_window_weeks = Column(Integer, nullable=False, server_default="104")
