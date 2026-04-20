@@ -51,7 +51,11 @@ npm install
 npm run dev
 ```
 
-Open http://localhost:5173 (Vite proxies `/api` to the backend).
+Open http://localhost:5173 (Vite proxies `/api` to **http://127.0.0.1:8000**).
+
+**Important:** keep the backend running while the frontend is open. If only `npm run dev` is running, the Vite log will show `http proxy error` / `ECONNREFUSED 127.0.0.1:8000` because nothing is listening on port 8000.
+
+**Windows:** from the repo root, `.\scripts\dev-local.ps1` starts the API in a second window and Vite in the current window.
 
 ## Local build and deploy
 
