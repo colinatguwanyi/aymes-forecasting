@@ -36,6 +36,14 @@ from app.services.import_forecast_output import (
     validate_and_stage_row,
 )
 
+AAH_WH = "AAH"
+
+
+def _ensure_aah_warehouse(db_session) -> None:
+    """AAH is required for forecast staging/publish defaults and demand_resolver baseline path."""
+    if db_session.query(Warehouse).filter(Warehouse.code == AAH_WH).first() is None:
+        db_session.add(Warehouse(code=AAH_WH, name="AAH", timezone="Europe/London", active=True))
+
 def test_get_cell_returns_first_non_empty() -> None:
     """_get_cell returns first key present and non-empty."""
     row = {"a": "", "b": "val", "c": "other"}
@@ -101,10 +109,9 @@ def test_unknown_aah_code_rejected(db_session) -> None:
 def test_multiple_models_ingested(db_session) -> None:
     """Multiple model rows for same SKU are staged and written to baseline_forecasts_weekly."""
     u = uuid4().hex[:8]
-    wh_code, sku, aah = f"WHFO{u}", f"SKUFA{u}", f"AAHFA{u}"
-    # Product with aah_code (isolated keys: shared Postgres DB retains commits from other tests)
+    sku, aah = f"SKUFA{u}", f"FOAHA{u}"
+    _ensure_aah_warehouse(db_session)
     db_session.add(Product(sku=sku, name="Product A", uom="units", active=True, aah_code=aah))
-    db_session.add(Warehouse(code=wh_code, name="AAH", timezone="Europe/London", active=True))
     db_session.commit()
     run_id = uuid4()
     db_session.add(
@@ -136,7 +143,7 @@ def test_multiple_models_ingested(db_session) -> None:
         db_session.query(BaselineForecastWeekly)
         .filter(
             BaselineForecastWeekly.sku == sku,
-            BaselineForecastWeekly.warehouse_code == wh_code,
+            BaselineForecastWeekly.warehouse_code == AAH_WH,
             BaselineForecastWeekly.week_start == date(2025, 1, 14),
             BaselineForecastWeekly.train_end_week_start == date(2025, 1, 7),
         )
@@ -150,9 +157,9 @@ def test_multiple_models_ingested(db_session) -> None:
 def test_selected_model_series_published_deterministically(db_session) -> None:
     """When is_best_model is true for one model, that model's series is published."""
     u = uuid4().hex[:8]
-    wh_code, sku, aah = f"WHFB{u}", f"SKUFB{u}", f"AAHFB{u}"
+    sku, aah = f"SKUFB{u}", f"FOAHB{u}"
+    _ensure_aah_warehouse(db_session)
     db_session.add(Product(sku=sku, name="B", uom="units", active=True, aah_code=aah))
-    db_session.add(Warehouse(code=wh_code, name="AAH", timezone="Europe/London", active=True))
     db_session.commit()
     run_id = uuid4()
     db_session.add(
@@ -209,16 +216,16 @@ def test_selected_model_series_published_deterministically(db_session) -> None:
 def test_planning_demand_source_baseline_uses_published(db_session) -> None:
     """When plan_run.demand_source=baseline, resolve_demand pulls from published_baseline_forecasts_weekly."""
     u = uuid4().hex[:8]
-    wh_code, sku, aah = f"WHFC{u}", f"SKUFC{u}", f"AAHFC{u}"
+    sku, aah = f"SKUFC{u}", f"FOAHC{u}"
+    _ensure_aah_warehouse(db_session)
     db_session.add(Product(sku=sku, name="C", uom="units", active=True, aah_code=aah))
-    db_session.add(Warehouse(code=wh_code, name="AAH", timezone="Europe/London", active=True))
     db_session.commit()
     train_end = date(2025, 1, 7)
     # week_start in published = W-TUE (Tuesday); Monday 2025-01-13 falls in week starting 2025-01-07
     db_session.add(
         PublishedBaselineForecastWeekly(
             sku=sku,
-            warehouse_code=wh_code,
+            warehouse_code=AAH_WH,
             week_start=date(2025, 1, 7),  # W-TUE week containing Mon 2025-01-13
             forecast_qty=Decimal("100"),
             train_end_week_start=train_end,
@@ -249,7 +256,7 @@ def test_planning_demand_source_baseline_uses_published(db_session) -> None:
         .filter(
             PlanRunDemandInputWeekly.plan_run_id == plan_run_id,
             PlanRunDemandInputWeekly.sku == sku,
-            PlanRunDemandInputWeekly.warehouse_code == wh_code,
+            PlanRunDemandInputWeekly.warehouse_code == AAH_WH,
         )
         .first()
     )
@@ -257,12 +264,14 @@ def test_planning_demand_source_baseline_uses_published(db_session) -> None:
     assert float(demand_row.demand_qty) == 100.0
 
 
-def test_baseline_selects_max_train_end_when_multiple_runs(db_session) -> None:
-    """When multiple published runs exist, resolver selects MAX(train_end_week_start) and persists to selected_train_end_week_start."""
+def test_baseline_selects_max_train_end_when_multiple_runs(
+    db_session, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Resolver persists train_end from get_latest_train_end_week_start when none selected (shared DB: patch latest)."""
     u = uuid4().hex[:8]
-    wh_code, sku, aah = f"WHFD{u}", f"SKUFD{u}", f"AAHFD{u}"
+    sku, aah = f"SKUFD{u}", f"FOAHD{u}"
+    _ensure_aah_warehouse(db_session)
     db_session.add(Product(sku=sku, name="D", uom="units", active=True, aah_code=aah))
-    db_session.add(Warehouse(code=wh_code, name="AAH", timezone="Europe/London", active=True))
     db_session.commit()
     older = date(2025, 1, 7)
     newer = date(2025, 2, 4)
@@ -270,7 +279,7 @@ def test_baseline_selects_max_train_end_when_multiple_runs(db_session) -> None:
         db_session.add(
             PublishedBaselineForecastWeekly(
                 sku=sku,
-                warehouse_code=wh_code,
+                warehouse_code=AAH_WH,
                 week_start=date(2025, 1, 7),
                 forecast_qty=Decimal("50"),
                 train_end_week_start=train_end,
@@ -292,6 +301,10 @@ def test_baseline_selects_max_train_end_when_multiple_runs(db_session) -> None:
     db_session.add(run)
     db_session.commit()
     plan_run_id = cast(int, run.id)
+    monkeypatch.setattr(
+        "app.services.demand_resolver.get_latest_train_end_week_start",
+        lambda _db, warehouse_code=AAH_WH: newer,
+    )
     resolve_demand_for_run(db_session, plan_run_id, date(2025, 1, 13), date(2025, 1, 20), recompute_non_frozen_only=False)
     db_session.commit()
     db_session.refresh(run)
@@ -301,15 +314,15 @@ def test_baseline_selects_max_train_end_when_multiple_runs(db_session) -> None:
 def test_baseline_reuses_persisted_selected_run(db_session) -> None:
     """After selection is persisted, re-running planning uses the same selected run even if a newer run is ingested."""
     u = uuid4().hex[:8]
-    wh_code, sku, aah = f"WHFE{u}", f"SKUFE{u}", f"AAHFE{u}"
+    sku, aah = f"SKUFE{u}", f"FOAHE{u}"
+    _ensure_aah_warehouse(db_session)
     db_session.add(Product(sku=sku, name="E", uom="units", active=True, aah_code=aah))
-    db_session.add(Warehouse(code=wh_code, name="AAH", timezone="Europe/London", active=True))
     db_session.commit()
     first_run = date(2025, 1, 7)
     db_session.add(
         PublishedBaselineForecastWeekly(
             sku=sku,
-            warehouse_code=wh_code,
+            warehouse_code=AAH_WH,
             week_start=date(2025, 1, 7),
             forecast_qty=Decimal("60"),
             train_end_week_start=first_run,
@@ -340,7 +353,7 @@ def test_baseline_reuses_persisted_selected_run(db_session) -> None:
     db_session.add(
         PublishedBaselineForecastWeekly(
             sku=sku,
-            warehouse_code=wh_code,
+            warehouse_code=AAH_WH,
             week_start=date(2025, 1, 7),
             forecast_qty=Decimal("99"),
             train_end_week_start=newer,
@@ -359,7 +372,7 @@ def test_baseline_reuses_persisted_selected_run(db_session) -> None:
         .filter(
             PlanRunDemandInputWeekly.plan_run_id == plan_run_id,
             PlanRunDemandInputWeekly.sku == sku,
-            PlanRunDemandInputWeekly.warehouse_code == wh_code,
+            PlanRunDemandInputWeekly.warehouse_code == AAH_WH,
         )
         .first()
     )
@@ -367,8 +380,16 @@ def test_baseline_reuses_persisted_selected_run(db_session) -> None:
     assert float(demand_row.demand_qty) == 60.0
 
 
-def test_baseline_no_runs_raises_clear_error(db_session) -> None:
+def test_baseline_no_runs_raises_clear_error(db_session, monkeypatch: pytest.MonkeyPatch) -> None:
     """When no published baseline runs exist, baseline planning raises NoBaselineRunsError with clear message."""
+
+    def _no_published_train_end(_db, warehouse_code: str = AAH_WH):
+        return None
+
+    monkeypatch.setattr(
+        "app.services.demand_resolver.get_latest_train_end_week_start",
+        _no_published_train_end,
+    )
     run = PlanRun(
         scenario_name="No runs",
         run_at=date(2025, 1, 10),

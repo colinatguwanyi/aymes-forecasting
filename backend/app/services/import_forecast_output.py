@@ -322,7 +322,7 @@ def aah_to_sku_from_stage(db: Session, aah_code: str) -> str | None:
 
 
 def _select_best_model_per_sku_wh(
-    db: Session, run_id: Any
+    db: Session, run_id: Any, warehouse_code: str = DEFAULT_WAREHOUSE
 ) -> dict[tuple[str, str, date], tuple[str, str]]:
     """
     For each (sku, warehouse_code, train_end_week_start) in stage, choose one (model_name, model_version).
@@ -354,7 +354,7 @@ def _select_best_model_per_sku_wh(
         sku = aah_to_sku.get(_aah_strip(r))
         if not sku:
             continue
-        wh = DEFAULT_WAREHOUSE
+        wh = warehouse_code
         inf_d = cast(date, r.inference_date)
         key = (sku, wh, inf_d)
         if key not in groups:
@@ -400,7 +400,7 @@ def publish_baseline_from_stage(db: Session, run_id: Any, warehouse_code: str = 
     Returns count of published rows written.
     """
     _ensure_warehouse(db, warehouse_code)
-    selection = _select_best_model_per_sku_wh(db, run_id)
+    selection = _select_best_model_per_sku_wh(db, run_id, warehouse_code=warehouse_code)
     if not selection:
         return 0
     # Get all staged rows for this run that have forecast

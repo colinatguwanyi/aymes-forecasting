@@ -106,7 +106,12 @@ def test_soh_grid_week_starts_length() -> None:
     tc = TestClient(app)
     r = tc.get(
         "/api/v1/reports/stock-on-hand/grid",
-        params={"warehouse_code": "AAH", "weeks": 8},
+        params={
+            "warehouse_code": "AAH",
+            "weeks": 8,
+            # Without snapshots, anchor would be None and week_starts empty; pin anchor for column shape.
+            "anchor_week_start": "2025-01-07",
+        },
         headers=headers,
     )
     assert r.status_code == 200
