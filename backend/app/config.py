@@ -1,12 +1,22 @@
 from __future__ import annotations
 import logging
+from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
-from pydantic_settings import BaseSettings
+from pydantic_settings import BaseSettings, SettingsConfigDict
+
+# Always load backend/.env regardless of process cwd (e.g. uvicorn started from repo root).
+_BACKEND_ROOT = Path(__file__).resolve().parent.parent
+_ENV_FILE = _BACKEND_ROOT / ".env"
 
 
 class Settings(BaseSettings):
+    model_config = SettingsConfigDict(
+        env_file=str(_ENV_FILE),
+        env_file_encoding="utf-8",
+        extra="ignore",
+    )
     # Platform DB: MySQL 8 only (mysql+pymysql://...).
     database_url: str = "mysql+pymysql://aymes:@localhost:3306/supply_planning?charset=utf8mb4"
     environment: str = "dev"  # dev, local, prod
@@ -74,9 +84,6 @@ class Settings(BaseSettings):
     # an error diagnostic is written.  False records a warning but does not
     # affect run status.
     legacy_parity_fail_on_mismatch: bool = False
-
-    class Config:
-        env_file = ".env"
 
 
 settings: Settings = Settings()
