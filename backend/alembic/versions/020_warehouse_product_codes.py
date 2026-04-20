@@ -26,9 +26,9 @@ def upgrade() -> None:
     op.create_table(
         "warehouse_product_codes",
         sa.Column("id", sa.Integer(), primary_key=True, autoincrement=True),
-        sa.Column("warehouse_code", sa.String(32), nullable=False, index=True),
-        sa.Column("external_code", sa.String(128), nullable=False, index=True),
-        sa.Column("sku", sa.String(64), sa.ForeignKey("products.sku", ondelete="CASCADE"), nullable=False, index=True),
+        sa.Column("warehouse_code", sa.String(32), nullable=False),
+        sa.Column("external_code", sa.String(128), nullable=False),
+        sa.Column("sku", sa.String(64), sa.ForeignKey("products.sku", ondelete="CASCADE"), nullable=False),
         sa.Column("external_name", sa.Text(), nullable=True),
         sa.Column("hs_code", sa.String(64), nullable=True),
         sa.Column("active", sa.Boolean(), nullable=False, server_default="true"),

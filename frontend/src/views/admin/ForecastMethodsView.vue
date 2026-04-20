@@ -34,12 +34,12 @@
           <span class="text-slate-400">{{ accordionOpen.overview ? '▼' : '▶' }}</span>
         </button>
         <div v-show="accordionOpen.overview" class="card-body border-t border-slate-200">
-          <p class="text-sm text-slate-600">{{ (doc.overview as { description?: string })?.description }}</p>
+          <p class="text-sm text-slate-600">{{ (doc.overview as any)?.description }}</p>
           <dl class="mt-3 text-sm grid grid-cols-[auto_1fr] gap-x-4 gap-y-1">
             <dt class="text-slate-500">Timezone</dt>
-            <dd>{{ (doc.overview as { timezone?: string })?.timezone }}</dd>
+            <dd>{{ (doc.overview as any)?.timezone }}</dd>
             <dt class="text-slate-500">Week anchor</dt>
-            <dd>{{ (doc.overview as { week_anchor?: string })?.week_anchor }}</dd>
+            <dd>{{ (doc.overview as any)?.week_anchor }}</dd>
           </dl>
         </div>
       </section>
@@ -55,10 +55,10 @@
           <span class="text-slate-400">{{ accordionOpen.inputs ? '▼' : '▶' }}</span>
         </button>
         <div v-show="accordionOpen.inputs" class="card-body border-t border-slate-200 space-y-4">
-          <div v-for="(v, k) in (doc.inputs as Record<string, unknown>)" :key="k" class="border-b border-slate-100 pb-3 last:border-0 last:pb-0">
+          <div v-for="([k, v]) in Object.entries((doc.inputs ?? {}) as any)" :key="k" class="border-b border-slate-100 pb-3 last:border-0 last:pb-0">
             <h4 class="font-medium text-slate-800 capitalize">{{ String(k).replace(/_/g, ' ') }}</h4>
-            <p class="text-sm text-slate-600 mt-0.5">{{ (v as { description?: string })?.description }}</p>
-            <p class="text-xs text-slate-500 mt-1">Maps to: {{ Array.isArray((v as { maps_to?: unknown })?.maps_to) ? (v as { maps_to: string[] }).maps_to.join(', ') : (v as { maps_to?: string })?.maps_to }}</p>
+            <p class="text-sm text-slate-600 mt-0.5">{{ (v as any)?.description }}</p>
+            <p class="text-xs text-slate-500 mt-1">Maps to: {{ formatMapsTo(v) }}</p>
           </div>
         </div>
       </section>
@@ -75,11 +75,11 @@
         </button>
         <div v-show="accordionOpen.timeSeriesPrep" class="card-body border-t border-slate-200">
           <dl class="text-sm space-y-2">
-            <div><dt class="text-slate-500 font-medium">Calendar</dt><dd>{{ (doc.time_series_prep as { calendar?: string })?.calendar }}</dd></div>
-            <div><dt class="text-slate-500 font-medium">Bucket rule</dt><dd>{{ (doc.time_series_prep as { bucket_rule?: string })?.bucket_rule }}</dd></div>
-            <div v-if="(doc.time_series_prep as { dedupe_rules?: string[] })?.dedupe_rules?.length">
+            <div><dt class="text-slate-500 font-medium">Calendar</dt><dd>{{ (doc.time_series_prep as any)?.calendar }}</dd></div>
+            <div><dt class="text-slate-500 font-medium">Bucket rule</dt><dd>{{ (doc.time_series_prep as any)?.bucket_rule }}</dd></div>
+            <div v-if="(doc.time_series_prep as any)?.dedupe_rules?.length">
               <dt class="text-slate-500 font-medium">Dedupe rules</dt>
-              <dd><ul class="list-disc pl-4 mt-1"><li v-for="(r, i) in (doc.time_series_prep as { dedupe_rules: string[] }).dedupe_rules" :key="i">{{ r }}</li></ul></dd>
+              <dd><ul class="list-disc pl-4 mt-1"><li v-for="(r, i) in (doc.time_series_prep as any).dedupe_rules" :key="i">{{ r }}</li></ul></dd>
             </div>
           </dl>
         </div>
@@ -96,9 +96,9 @@
           <span class="text-slate-400">{{ accordionOpen.forecasting ? '▼' : '▶' }}</span>
         </button>
         <div v-show="accordionOpen.forecasting" class="card-body border-t border-slate-200">
-          <p class="text-sm text-slate-600">Modes: {{ (doc.forecasting as { modes?: string[] })?.modes?.join(', ') }}</p>
-          <p class="text-sm text-slate-600 mt-2">Baseline selection: {{ (doc.forecasting as { baseline_selection?: string })?.baseline_selection }}</p>
-          <p class="text-sm text-slate-600 mt-1">Blending rule: {{ (doc.forecasting as { blending_rule?: string })?.blending_rule }}</p>
+          <p class="text-sm text-slate-600">Modes: {{ (doc.forecasting as any)?.modes?.join(', ') }}</p>
+          <p class="text-sm text-slate-600 mt-2">Baseline selection: {{ (doc.forecasting as any)?.baseline_selection }}</p>
+          <p class="text-sm text-slate-600 mt-1">Blending rule: {{ (doc.forecasting as any)?.blending_rule }}</p>
         </div>
       </section>
 
@@ -113,9 +113,9 @@
           <span class="text-slate-400">{{ accordionOpen.planningIntegration ? '▼' : '▶' }}</span>
         </button>
         <div v-show="accordionOpen.planningIntegration" class="card-body border-t border-slate-200">
-          <p class="text-sm text-slate-600">Freeze weeks: {{ (doc.planning_integration as { freeze_weeks?: string })?.freeze_weeks }}</p>
-          <p class="text-sm text-slate-600 mt-1">Order rounding: {{ Array.isArray((doc.planning_integration as { order_rounding?: string[] })?.order_rounding) ? (doc.planning_integration as { order_rounding: string[] }).order_rounding.join('; ') : '' }}</p>
-          <p class="text-sm text-slate-600 mt-1">Lead time sources: {{ Array.isArray((doc.planning_integration as { lead_time_sources?: string[] })?.lead_time_sources) ? (doc.planning_integration as { lead_time_sources: string[] }).lead_time_sources.join('; ') : '' }}</p>
+          <p class="text-sm text-slate-600">Freeze weeks: {{ (doc.planning_integration as any)?.freeze_weeks }}</p>
+          <p class="text-sm text-slate-600 mt-1">Order rounding: {{ formatStringList((doc.planning_integration as any)?.order_rounding, '; ') }}</p>
+          <p class="text-sm text-slate-600 mt-1">Lead time sources: {{ formatStringList((doc.planning_integration as any)?.lead_time_sources, '; ') }}</p>
         </div>
       </section>
 
@@ -131,7 +131,7 @@
         </button>
         <div v-show="accordionOpen.limitations" class="card-body border-t border-slate-200">
           <ul class="list-disc pl-4 text-sm text-slate-600 space-y-1">
-            <li v-for="(lim, i) in (doc.known_limitations as string[])" :key="i">{{ lim }}</li>
+            <li v-for="(lim, i) in (doc.known_limitations as any)" :key="i">{{ lim }}</li>
           </ul>
         </div>
       </section>
@@ -210,6 +210,19 @@ const accordionOpen = reactive({
   limitations: false,
   rawJson: false,
 })
+
+/** Avoid `Record<…>` / complex `as` in template — HTML parser treats `<` as tags. */
+function formatMapsTo(v: unknown): string {
+  const m = (v as { maps_to?: unknown })?.maps_to
+  if (Array.isArray(m)) return (m as string[]).join(', ')
+  if (m != null && typeof m === 'string') return m
+  return ''
+}
+
+function formatStringList(val: unknown, sep: string): string {
+  if (Array.isArray(val)) return (val as string[]).join(sep)
+  return ''
+}
 
 async function loadDoc() {
   const { data } = await api.get<ForecastMethodsDoc>('/admin/forecast-methods')

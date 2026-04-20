@@ -202,7 +202,7 @@ import { ref, computed, onMounted, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { usePlanningStore } from '@/stores/planning'
 import type { ProjectedInventory } from '@/api/client'
-import { formatPlanRunLabel, fetchPlanningReadiness, fetchWarehouseReadiness, type WarehouseReadinessItem } from '@/api/client'
+import { formatPlanRunLabel, fetchWarehouseReadiness, type WarehouseReadinessItem } from '@/api/client'
 import { useBannerStore } from '@/stores/banner'
 import api from '@/api/client'
 

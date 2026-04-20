@@ -653,8 +653,8 @@
                           </button>
                         </div>
                         <div v-if="actionResults['export-files']" class="action-result mt-2">
-                          <p class="text-sm text-slate-700">Output path: <code>{{ actionResults['export-files'].output_path }}</code></p>
-                          <p class="text-sm muted mt-1">Files generated: {{ (actionResults['export-files'].files_generated || []).join(', ') }}</p>
+                          <p class="text-sm text-slate-700">Output path: <code>{{ (actionResults['export-files'] as any).output_path }}</code></p>
+                          <p class="text-sm muted mt-1">Files generated: {{ ((actionResults['export-files'] as any).files_generated || []).join(', ') }}</p>
                         </div>
                         <div v-if="actionErrors['export-files']" class="error-msg mt-2">{{ actionErrors['export-files'] }}</div>
                       </div>

@@ -188,15 +188,19 @@
           {{ executing ? 'Executing…' : executeButtonLabel }}
         </button>
       </div>
-      <div v-if="sohUploadResult?.rejected_count > 0 && sohRejectionDetail" class="mt-3 rounded-lg text-sm border" :class="sohUploadResult.staged_count === 0 ? 'border-amber-300 bg-amber-50 text-amber-900' : 'border-slate-200 bg-slate-50'">
+      <div
+        v-if="sohUploadResult && (sohUploadResult.rejected_count ?? 0) > 0 && sohRejectionDetail"
+        class="mt-3 rounded-lg text-sm border"
+        :class="sohUploadResult.staged_count === 0 ? 'border-amber-300 bg-amber-50 text-amber-900' : 'border-slate-200 bg-slate-50'"
+      >
         <div class="px-3 py-2 flex items-center justify-between gap-2">
           <p class="font-semibold">
             {{ sohUploadResult.staged_count === 0
-              ? `All ${sohUploadResult.rejected_count} rows rejected.`
-              : `${sohUploadResult.rejected_count} rows rejected.` }}
+              ? `All ${sohUploadResult.rejected_count ?? 0} rows rejected.`
+              : `${sohUploadResult.rejected_count ?? 0} rows rejected.` }}
           </p>
-          <span v-if="sohRejectionDetail.rejections_sample.length < sohUploadResult.rejected_count" class="text-xs opacity-70">
-            Showing first {{ sohRejectionDetail.rejections_sample.length }} of {{ sohUploadResult.rejected_count }}
+          <span v-if="sohRejectionDetail.rejections_sample.length < (sohUploadResult.rejected_count ?? 0)" class="text-xs opacity-70">
+            Showing first {{ sohRejectionDetail.rejections_sample.length }} of {{ sohUploadResult.rejected_count ?? 0 }}
           </span>
         </div>
         <p v-if="sohRejectionDetail.error_summary" class="px-3 pb-2 text-xs opacity-80">{{ sohRejectionDetail.error_summary }}</p>
@@ -311,7 +315,6 @@ import {
   getStoredWarehouse,
   setStoredWarehouse,
   type WarehouseCode,
-  type ImportCardDef,
 } from '@/config/importCards'
 
 interface IngestionRunRow {

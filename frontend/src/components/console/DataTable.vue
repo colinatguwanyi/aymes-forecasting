@@ -145,7 +145,7 @@ export interface DataTableColumn {
   label: string
   sortable?: boolean
   align?: 'left' | 'right'
-  format?: 'text' | 'boolean' | 'number' | 'date'
+  format?: 'text' | 'boolean' | 'number' | 'date' | 'datetime'
 }
 
 export interface RowAction {
@@ -207,6 +207,8 @@ function formatCell(value: unknown, col: DataTableColumn): string {
   if (col.format === 'boolean') return value ? 'Yes' : 'No'
   if (col.format === 'number') return String(Number(value))
   if (col.format === 'date' && typeof value === 'string') return value.slice(0, 10)
+  if (col.format === 'datetime' && typeof value === 'string')
+    return value.includes('T') ? value.replace('T', ' ').slice(0, 19) : value.slice(0, 19)
   return String(value)
 }
 

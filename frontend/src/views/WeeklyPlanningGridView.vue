@@ -122,6 +122,7 @@ import NoDataWithReason from '@/components/console/NoDataWithReason.vue'
 const LOW_COVER_WEEKS = 2
 
 const route = useRoute()
+const router = useRouter()
 const store = usePlanningStore()
 const layout = useLayoutStore()
 const loading = ref(true)

@@ -247,7 +247,7 @@
             <tbody>
               <tr v-for="u in unmappedData.unmapped" :key="u.external_code">
                 <td class="font-mono">{{ u.external_code }}</td>
-                <td class="max-w-[200px] truncate" :title="u.description">{{ u.description || '—' }}</td>
+                <td class="max-w-[200px] truncate" :title="u.description ?? undefined">{{ u.description || '—' }}</td>
                 <td>{{ u.hs_code_guess || '—' }}</td>
                 <td class="text-right">{{ u.qty_sum }}</td>
                 <td class="text-right">{{ u.sample_rows }}</td>
