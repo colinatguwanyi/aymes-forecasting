@@ -11,6 +11,7 @@ __pycache__/
 *.egg
 
 # Backend
+backend/_alembic_smoke.db
 backend/.env
 .env
 .env.local
