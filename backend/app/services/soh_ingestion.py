@@ -10,9 +10,9 @@ from typing import Any, cast
 from uuid import UUID
 
 # SOH_INGESTION_VERSION: used to confirm hot-reload picked up this file
-SOH_INGESTION_VERSION = "v2-snapshot-date-fix"
+SOH_INGESTION_VERSION = "v3-overlap-natural-key"
 
-from sqlalchemy import func
+from sqlalchemy import func, tuple_
 from sqlalchemy.orm import Session
 
 from app.models import (
@@ -33,6 +33,7 @@ logger.warning("SOH_INGESTION_LOADED: %s", SOH_INGESTION_VERSION)
 
 SOH_SOURCE_TYPE = "soh"
 CHUNK_SIZE = 5000
+NATURAL_KEY_DELETE_CHUNK = 400
 HISTORICAL_BATCH_DAYS = 60
 DEFAULT_AAH_WAREHOUSE = "AAH"
 
@@ -370,11 +371,27 @@ def build_daily_from_stage(db: Session, run_id: UUID) -> tuple[int, int]:
         else:
             aggregated[key] = (on_hand, on_order)
 
-    # Idempotent: remove any existing daily rows for this run
+    # Idempotent: remove any existing daily rows for this run (re-execute same run).
     db.query(InventorySnapshotDaily).filter(
         InventorySnapshotDaily.source_type == SOH_SOURCE_TYPE,
         InventorySnapshotDaily.source_run_id == run_id,
     ).delete(synchronize_session=False)
+
+    # Overlapping historical files: uq_inv_daily is (warehouse, sku, as_of_date, source_type) — no run_id.
+    # Delete any prior SOH daily at the same calendar cells we are about to write so a later backfill replaces.
+    _daily_keys = list(aggregated.keys())
+    for i in range(0, len(_daily_keys), NATURAL_KEY_DELETE_CHUNK):
+        chunk = _daily_keys[i : i + NATURAL_KEY_DELETE_CHUNK]
+        if not chunk:
+            continue
+        db.query(InventorySnapshotDaily).filter(
+            InventorySnapshotDaily.source_type == SOH_SOURCE_TYPE,
+            tuple_(
+                InventorySnapshotDaily.warehouse_code,
+                InventorySnapshotDaily.sku,
+                InventorySnapshotDaily.as_of_date,
+            ).in_(chunk),
+        ).delete(synchronize_session=False)
 
     inserted = 0
     items = list(aggregated.items())
@@ -438,6 +455,7 @@ def build_weekly_from_daily(db: Session, run_id: UUID) -> int:
     if not run:
         raise ValueError(f"Ingestion run not found: {run_id}")
 
+    # Drop prior weekly rows produced by this run (cells no longer present after a re-upload).
     db.query(InventorySnapshotWeekly).filter(
         InventorySnapshotWeekly.source_type == SOH_SOURCE_TYPE,
         InventorySnapshotWeekly.source_run_id == run_id,
@@ -463,6 +481,21 @@ def build_weekly_from_daily(db: Session, run_id: UUID) -> int:
         key = (week_start, wh, sku)
         if key not in by_week or as_of > by_week[key][0]:
             by_week[key] = (as_of, qty)
+
+    # Same natural key as weekly table: (week_start, sku, warehouse_code, source_type). Replace overlaps.
+    _weekly_keys = list(by_week.keys())
+    for i in range(0, len(_weekly_keys), NATURAL_KEY_DELETE_CHUNK):
+        chunk = _weekly_keys[i : i + NATURAL_KEY_DELETE_CHUNK]
+        if not chunk:
+            continue
+        db.query(InventorySnapshotWeekly).filter(
+            InventorySnapshotWeekly.source_type == SOH_SOURCE_TYPE,
+            tuple_(
+                InventorySnapshotWeekly.week_start,
+                InventorySnapshotWeekly.warehouse_code,
+                InventorySnapshotWeekly.sku,
+            ).in_(chunk),
+        ).delete(synchronize_session=False)
 
     weeks_written = 0
     for (week_start, warehouse_code, sku), (_as_of, on_hand_qty) in by_week.items():

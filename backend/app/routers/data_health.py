@@ -104,7 +104,8 @@ def get_data_health(db: Session = Depends(get_db)) -> dict[str, Any]:
             IngestionRun.entity == IngestionEntity.STOCK_ON_HAND,
             IngestionRun.status == IngestionStatus.SUCCESS,
         )
-        .order_by(IngestionRun.finished_at.desc().nullslast())
+        # MySQL has no NULLS LAST; put non-null finished_at first, then newest first.
+        .order_by(IngestionRun.finished_at.is_(None).asc(), IngestionRun.finished_at.desc())
         .first()
     )
     pm = getattr(latest_soh, "progress_meta", None) if latest_soh else None

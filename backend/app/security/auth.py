@@ -261,10 +261,11 @@ def get_current_user(
     else:
         for r in user.roles:
             role_names.append(r.name)
-    # Local dev: users often have no role rows yet, and the built SPA may not send
-    # X-Dev-User (only Vite dev does). Default to Admin so master data / settings are reachable.
+    # Dev: no bootstrap (see get_current_user). Users with no DB roles and no X-Dev-User.roles
+    # get Viewer so allowlist emails do not implicitly become Admin. Use X-Dev-User JSON
+    # "roles": ["Admin"] or assign roles in DB for full admin locally.
     if not role_names and auth_mode == "dev":
-        role_names = [ROLE_ADMIN]
+        role_names = [ROLE_VIEWER]
 
     return CurrentUserContext(user=user, roles=role_names, auth_mode=auth_mode)
 

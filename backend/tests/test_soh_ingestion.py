@@ -294,6 +294,128 @@ def test_idempotency_re_run_no_duplicate_weekly() -> None:
 
 
 @pytest.mark.skipif(not _soh_schema_available(), reason="Migration 015 (SOH) not applied")
+def test_overlapping_backfill_second_run_replaces_natural_key() -> None:
+    """Two different SOH imports for the same (warehouse, sku, snapshot date): later run replaces; no duplicate dailies."""
+    db = SessionLocal()
+    run_id_a = uuid4()
+    run_id_b = uuid4()
+    wh_code = "SOH-OVERLAP-WH"
+    branch = "SOH-OVERLAP-BRANCH"
+    sku = "SKU-OVERLAP-DUP"
+    snap = date(2025, 2, 10)
+    try:
+        if not db.query(Warehouse).filter(Warehouse.code == wh_code).first():
+            db.add(Warehouse(code=wh_code, name="Overlap WH", timezone="Europe/London"))
+            db.commit()
+        if not db.query(WarehouseBranchMapping).filter(WarehouseBranchMapping.branch_name == branch).first():
+            db.add(WarehouseBranchMapping(branch_name=branch, warehouse_code=wh_code))
+            db.commit()
+
+        def _make_run() -> UUID:
+            r = IngestionRun(
+                source_type=IngestionSourceType.CSV,
+                entity=IngestionEntity.STOCK_ON_HAND,
+                file_name="overlap.csv",
+                file_sha256="x",
+                status=IngestionStatus.PENDING,
+                row_count=0,
+            )
+            db.add(r)
+            db.flush()
+            return cast(UUID, r.id)
+
+        run_id_a = _make_run()
+        ok_a, _ = validate_and_stage_soh_row(
+            db,
+            run_id_a,
+            {
+                "Branch Name": branch,
+                "AAH Code": sku,
+                "Stock at": snap.strftime("%d/%m/%Y"),
+                "STOCK": "10",
+                "ON ORDER": "0",
+            },
+            2,
+            {},
+            warehouse_code_override=wh_code,
+        )
+        assert ok_a is True
+        db.commit()
+        build_daily_from_stage(db, run_id_a)
+        db.commit()
+        build_weekly_from_daily(db, run_id_a)
+        db.commit()
+
+        run_id_b = _make_run()
+        ok_b, _ = validate_and_stage_soh_row(
+            db,
+            run_id_b,
+            {
+                "Branch Name": branch,
+                "AAH Code": sku,
+                "Stock at": snap.strftime("%d/%m/%Y"),
+                "STOCK": "99",
+                "ON ORDER": "0",
+            },
+            2,
+            {},
+            warehouse_code_override=wh_code,
+        )
+        assert ok_b is True
+        db.commit()
+        build_daily_from_stage(db, run_id_b)
+        db.commit()
+        build_weekly_from_daily(db, run_id_b)
+        db.commit()
+
+        dailies = (
+            db.query(InventorySnapshotDaily)
+            .filter(
+                InventorySnapshotDaily.source_type == "soh",
+                InventorySnapshotDaily.warehouse_code == wh_code,
+                InventorySnapshotDaily.sku == sku,
+                InventorySnapshotDaily.as_of_date == snap,
+            )
+            .all()
+        )
+        assert len(dailies) == 1
+        assert dailies[0].source_run_id == run_id_b
+        assert dailies[0].on_hand_units == Decimal("99")
+
+        wk = week_start_for_date(snap)
+        weeklies = (
+            db.query(InventorySnapshotWeekly)
+            .filter(
+                InventorySnapshotWeekly.source_type == "soh",
+                InventorySnapshotWeekly.warehouse_code == wh_code,
+                InventorySnapshotWeekly.sku == sku,
+                InventorySnapshotWeekly.week_start == wk,
+            )
+            .all()
+        )
+        assert len(weeklies) == 1
+        assert weeklies[0].source_run_id == run_id_b
+    finally:
+        for rid in (run_id_a, run_id_b):
+            db.query(InventorySnapshotDaily).filter(InventorySnapshotDaily.source_run_id == rid).delete(synchronize_session=False)
+            db.query(InventorySnapshotWeekly).filter(InventorySnapshotWeekly.source_run_id == rid).delete(synchronize_session=False)
+            db.query(StockOnHandStage).filter(StockOnHandStage.ingestion_run_id == rid).delete(synchronize_session=False)
+            db.query(IngestionRun).filter(IngestionRun.id == rid).delete(synchronize_session=False)
+        db.query(InventorySnapshotDaily).filter(
+            InventorySnapshotDaily.source_type == "soh",
+            InventorySnapshotDaily.warehouse_code == wh_code,
+            InventorySnapshotDaily.sku == sku,
+        ).delete(synchronize_session=False)
+        db.query(InventorySnapshotWeekly).filter(
+            InventorySnapshotWeekly.source_type == "soh",
+            InventorySnapshotWeekly.warehouse_code == wh_code,
+            InventorySnapshotWeekly.sku == sku,
+        ).delete(synchronize_session=False)
+        db.commit()
+        db.close()
+
+
+@pytest.mark.skipif(not _soh_schema_available(), reason="Migration 015 (SOH) not applied")
 def test_blp_stage_and_build_daily() -> None:
     """BLP format: stage_blp_soh -> build_daily_from_stage (product resolution, Code -> sku)."""
     db = SessionLocal()

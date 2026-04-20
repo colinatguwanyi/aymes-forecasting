@@ -2,24 +2,75 @@
   <div class="page-shell space-y-6">
     <header class="page-header">
       <h1>Imports</h1>
-      <p class="muted mt-1">Warehouse-first imports. Select warehouse and data type to upload.</p>
+      <p class="muted mt-1">
+        Master data and warehouse feeds in one place. Pick a <strong>card</strong> below, then upload. Product Master is shared catalog data; warehouse rows scope ingestion runs for history.
+      </p>
     </header>
 
-    <!-- Top-level selectors -->
+    <!-- Warehouse context -->
     <section class="card card-body">
       <div class="flex flex-wrap items-end gap-4">
         <div>
-          <label class="form-label">Warehouse</label>
+          <label class="form-label">Warehouse context</label>
           <select v-model="warehouse" class="select" @change="onWarehouseChange">
             <option v-for="opt in WAREHOUSE_OPTIONS" :key="opt.value" :value="opt.value">{{ opt.label }}</option>
           </select>
+          <p class="text-xs text-slate-500 mt-1">Used for Sales Out, SOH, and demand. Product Master applies platform-wide.</p>
         </div>
-        <div>
-          <label class="form-label">Data type</label>
-          <select v-model="selectedDataType" class="select">
-            <option v-for="c in visibleCards" :key="c.id" :value="c.dataType">{{ c.title }}</option>
-          </select>
-        </div>
+      </div>
+    </section>
+
+    <!-- Master data cards -->
+    <section v-if="masterDataCards.length" class="space-y-3">
+      <h2 class="import-section-title">Master data</h2>
+      <div class="import-card-grid">
+        <button
+          v-for="c in masterDataCards"
+          :key="c.id"
+          type="button"
+          class="import-type-card"
+          :class="{ 'import-type-card--active': selectedDataType === c.dataType }"
+          @click="selectImportCard(c)"
+        >
+          <span class="import-type-card__badge">Catalog</span>
+          <h3 class="import-type-card__title">{{ c.title }}</h3>
+          <p class="import-type-card__meta">{{ c.formatName }}</p>
+          <p v-if="c.requiredColumns.length" class="import-type-card__cols">Columns: {{ c.requiredColumns.slice(0, 3).join(', ') }}{{ c.requiredColumns.length > 3 ? '…' : '' }}</p>
+          <a
+            v-if="c.templateHref"
+            class="import-type-card__link"
+            :href="c.templateHref"
+            download
+            @click.stop
+          >Download template</a>
+        </button>
+      </div>
+    </section>
+
+    <!-- Warehouse operational cards -->
+    <section v-if="operationalCards.length" class="space-y-3">
+      <h2 class="import-section-title">Warehouse data · {{ warehouse }}</h2>
+      <div class="import-card-grid">
+        <button
+          v-for="c in operationalCards"
+          :key="c.id"
+          type="button"
+          class="import-type-card"
+          :class="{ 'import-type-card--active': selectedDataType === c.dataType }"
+          @click="selectImportCard(c)"
+        >
+          <span class="import-type-card__badge import-type-card__badge--ops">Feed</span>
+          <h3 class="import-type-card__title">{{ c.title }}</h3>
+          <p class="import-type-card__meta">{{ c.formatName }}</p>
+          <p v-if="c.requiredColumns.length" class="import-type-card__cols">Columns: {{ c.requiredColumns.slice(0, 3).join(', ') }}{{ c.requiredColumns.length > 3 ? '…' : '' }}</p>
+          <a
+            v-if="c.templateHref"
+            class="import-type-card__link"
+            :href="c.templateHref"
+            download
+            @click.stop
+          >Download template</a>
+        </button>
       </div>
     </section>
 
@@ -314,6 +365,7 @@ import {
   WAREHOUSE_OPTIONS,
   getStoredWarehouse,
   setStoredWarehouse,
+  type ImportCardDef,
   type WarehouseCode,
 } from '@/config/importCards'
 
@@ -369,13 +421,38 @@ const sohWarehouseCode = ref('')
 const visibleCards = computed(() => IMPORT_CARDS_BY_WAREHOUSE[warehouse.value] || [])
 const selectedCard = computed(() => visibleCards.value.find((c) => c.dataType === selectedDataType.value) || visibleCards.value[0])
 
+const masterDataCards = computed(() =>
+  visibleCards.value.filter(
+    (c) => c.dataType === 'product_master' || c.dataType === 'warehouse_product_codes',
+  ),
+)
+const operationalCards = computed(() =>
+  visibleCards.value.filter(
+    (c) => c.dataType !== 'product_master' && c.dataType !== 'warehouse_product_codes',
+  ),
+)
+
+function selectImportCard(c: ImportCardDef) {
+  selectedDataType.value = c.dataType
+}
+
 const isBlpSohHistoricalDisabled = computed(
   () => warehouse.value === 'BLP' && selectedDataType.value === 'stock_on_hand'
 )
 
 watch(visibleCards, (cards) => {
-  if (cards.length && !cards.some((c) => c.dataType === selectedDataType.value)) {
-    selectedDataType.value = cards[0].dataType
+  if (!cards.length) return
+  const stillValid = cards.some((c) => c.dataType === selectedDataType.value)
+  if (!stillValid) {
+    const ops = cards.filter(
+      (c) => c.dataType !== 'product_master' && c.dataType !== 'warehouse_product_codes',
+    )
+    const preferred =
+      ops.find((c) => c.dataType === 'sales_out') ||
+      ops.find((c) => c.dataType === 'sales_direct') ||
+      ops[0] ||
+      cards[0]
+    selectedDataType.value = preferred.dataType
   }
 }, { immediate: true })
 
@@ -866,5 +943,76 @@ function downloadRejectionsCsv() {
   font-size: 1rem;
   font-weight: 500;
   color: rgb(30 41 59);
+}
+.import-section-title {
+  font-size: 0.75rem;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: rgb(100 116 139);
+}
+.import-card-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(16rem, 1fr));
+  gap: 0.75rem;
+}
+.import-type-card {
+  display: block;
+  width: 100%;
+  text-align: left;
+  padding: 1rem;
+  border-radius: 0.5rem;
+  border: 1px solid rgb(226 232 240);
+  background: white;
+  cursor: pointer;
+  transition: border-color 0.15s, box-shadow 0.15s;
+}
+.import-type-card:hover {
+  border-color: rgb(147 197 253);
+  box-shadow: 0 1px 3px rgb(0 0 0 / 0.06);
+}
+.import-type-card--active {
+  border-color: rgb(37 99 235);
+  box-shadow: 0 0 0 1px rgb(37 99 235);
+  background: rgb(239 246 255);
+}
+.import-type-card__badge {
+  display: inline-block;
+  font-size: 0.625rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: rgb(29 78 216);
+  background: rgb(219 234 254);
+  padding: 0.125rem 0.375rem;
+  border-radius: 0.25rem;
+  margin-bottom: 0.5rem;
+}
+.import-type-card__badge--ops {
+  color: rgb(21 128 61);
+  background: rgb(220 252 231);
+}
+.import-type-card__title {
+  font-size: 1rem;
+  font-weight: 600;
+  color: rgb(30 41 59);
+  margin: 0 0 0.25rem;
+}
+.import-type-card__meta {
+  font-size: 0.8125rem;
+  color: rgb(71 85 105);
+  margin: 0 0 0.35rem;
+}
+.import-type-card__cols {
+  font-size: 0.6875rem;
+  color: rgb(100 116 139);
+  margin: 0 0 0.5rem;
+  line-height: 1.35;
+}
+.import-type-card__link {
+  font-size: 0.75rem;
+  font-weight: 500;
+  color: rgb(37 99 235);
+  text-decoration: underline;
 }
 </style>

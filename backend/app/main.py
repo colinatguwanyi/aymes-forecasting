@@ -47,6 +47,8 @@ from app.routers import (
 )
 
 logger = logging.getLogger(__name__)
+# Uvicorn configures this logger at INFO — use it for startup messages users should see in the console.
+_uvicorn_log = logging.getLogger("uvicorn.error")
 
 try:
     Base.metadata.create_all(bind=engine)
@@ -104,7 +106,11 @@ async def _log_database_connectivity() -> None:
         with engine.connect() as conn:
             conn.execute(text("SELECT 1"))
         host_part = settings.database_url.split("@")[-1] if "@" in settings.database_url else settings.database_url
-        logger.info("Database OK (ssl_disabled=%s, target=%s)", settings.database_ssl_disabled, host_part)
+        _uvicorn_log.info(
+            "Database OK (ssl_disabled=%s, target=%s)",
+            settings.database_ssl_disabled,
+            host_part,
+        )
     except Exception:
         logger.exception(
             "Database connection failed at startup. Fix MySQL / DATABASE_URL / DATABASE_SSL_DISABLED, then restart."

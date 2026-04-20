@@ -34,6 +34,17 @@ export interface ImportCardDef {
 export const IMPORT_CARDS_BY_WAREHOUSE: Record<WarehouseCode, ImportCardDef[]> = {
   AAH: [
     {
+      id: 'aah-product-master',
+      dataType: 'product_master',
+      title: 'Product Master',
+      formatName: 'Product Master',
+      requiredColumns: ['SKU code', 'Description'],
+      entity: 'product_master',
+      targetWarehouse: 'AAH',
+      supportsHistorical: false,
+      templateHref: '/api/templates/product-master',
+    },
+    {
       id: 'aah-sales-out',
       dataType: 'sales_out',
       title: 'Sales Out',
@@ -66,19 +77,19 @@ export const IMPORT_CARDS_BY_WAREHOUSE: Record<WarehouseCode, ImportCardDef[]> =
       supportsHistorical: true,
       templateHref: '/api/templates/demand-weekly',
     },
+  ],
+  BLP: [
     {
-      id: 'aah-product-master',
+      id: 'blp-product-master',
       dataType: 'product_master',
       title: 'Product Master',
       formatName: 'Product Master',
       requiredColumns: ['SKU code', 'Description'],
       entity: 'product_master',
-      targetWarehouse: 'AAH',
+      targetWarehouse: 'BLP',
       supportsHistorical: false,
       templateHref: '/api/templates/product-master',
     },
-  ],
-  BLP: [
     {
       id: 'blp-sales-direct',
       dataType: 'sales_direct',
@@ -112,17 +123,6 @@ export const IMPORT_CARDS_BY_WAREHOUSE: Record<WarehouseCode, ImportCardDef[]> =
       supportsHistorical: true,
       historicalDisabledMessage: 'BLP SOH history not loaded yet',
       templateHref: '/api/templates/stock-on-hand',
-    },
-    {
-      id: 'blp-product-master',
-      dataType: 'product_master',
-      title: 'Product Master',
-      formatName: 'Product Master',
-      requiredColumns: ['SKU code', 'Description'],
-      entity: 'product_master',
-      targetWarehouse: 'BLP',
-      supportsHistorical: false,
-      templateHref: '/api/templates/product-master',
     },
     {
       id: 'blp-warehouse-product-codes',
