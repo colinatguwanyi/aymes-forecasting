@@ -55,7 +55,9 @@ except Exception as e:
 
 # Path to built frontend (when running from backend/ or project root)
 _DIST = Path(__file__).resolve().parent.parent.parent / "frontend" / "dist"
-_SERVE_FRONTEND = _DIST.is_dir()
+_ASSETS_DIR = _DIST / "assets"
+# Require a full Vite build (index + assets). Partial dist/ (e.g. repo stub) must not mount — StaticFiles raises if missing.
+_SERVE_FRONTEND = _DIST.is_dir() and (_DIST / "index.html").is_file() and _ASSETS_DIR.is_dir()
 
 app = FastAPI(
     title="Weekly Supply Planning API",
@@ -105,7 +107,7 @@ app.include_router(diagnostics.router, prefix="/api/v1/diagnostics", tags=["diag
 
 # Serve built frontend (after: cd frontend && npm run build)
 if _SERVE_FRONTEND:
-    app.mount("/assets", StaticFiles(directory=_DIST / "assets"), name="assets")
+    app.mount("/assets", StaticFiles(directory=_ASSETS_DIR), name="assets")
 
     @app.get("/{full_path:path}")
     def serve_spa(full_path: str) -> FileResponse:
