@@ -5,8 +5,9 @@ from pathlib import Path
 
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
+from sqlalchemy.exc import OperationalError
 
 from app.database import Base, engine
 from app.routers import (
@@ -64,6 +65,25 @@ app = FastAPI(
     description="MVP weekly supply planning with SKU/warehouse projections and planned orders",
     version="1.0.0",
 )
+
+_DB_UNAVAILABLE = (
+    "Database unavailable. Start MySQL 8, ensure DATABASE_URL in backend/.env is correct "
+    "(mysql+pymysql://user:password@host:3306/supply_planning?charset=utf8mb4), then run "
+    "`alembic upgrade head` from the backend folder. See docs/MYSQL_SETUP.md."
+)
+
+
+@app.exception_handler(OperationalError)
+async def sqlalchemy_operational_error_handler(
+    _request: Request, _exc: OperationalError
+) -> JSONResponse:
+    """Avoid opaque 500s when MySQL is down or refuses the connection."""
+    logger.warning("Database operational error (connection or server); returning 503")
+    return JSONResponse(
+        status_code=503,
+        content={"detail": _DB_UNAVAILABLE},
+    )
+
 
 app.add_middleware(
     CORSMiddleware,
