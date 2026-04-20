@@ -10,11 +10,12 @@ from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
 
 from app.database import get_db
+from app.security.auth import require_any_auth
 from app.models import CalendarWeek, Product, ProjectionWeekly, Warehouse
 from app.services.projection_service import run_projection
 
 logger = logging.getLogger(__name__)
-router = APIRouter()
+router = APIRouter(dependencies=[Depends(require_any_auth)])
 
 
 @router.post("/run")

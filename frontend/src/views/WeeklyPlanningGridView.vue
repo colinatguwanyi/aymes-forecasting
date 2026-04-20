@@ -1,67 +1,85 @@
 <template>
-  <div class="page-content-inner">
-    <p class="muted">SKU × Week matrix. Red = stockout, amber = low cover, green = healthy. Click a cell to open the explanation panel.</p>
+  <div class="page-shell space-y-6">
+    <header class="page-header">
+      <h1>Weekly Planning Grid</h1>
+      <p class="muted mt-1">SKU × Week matrix. Red = stockout, amber = low cover, green = healthy. Click a cell to open the explanation panel.</p>
+    </header>
 
-    <section class="content-section controls">
-      <div class="form-row">
-        <label class="form-label">Scenario</label>
-        <select v-model="selectedRunId" class="app-select" style="max-width: 18rem;">
-          <option :value="null">Select scenario</option>
-          <option v-for="r in planRuns" :key="r.id" :value="r.id">{{ r.scenario_name }} ({{ r.created_at }})</option>
-        </select>
-      </div>
-      <div class="form-row">
-        <label class="form-label">Warehouse</label>
-        <input v-model="whFilter" class="app-input" placeholder="Filter warehouse" style="max-width: 10rem;" />
-      </div>
-      <div class="form-row">
-        <label class="form-label">SKU</label>
-        <input v-model="skuFilter" class="app-input" placeholder="Filter SKU" style="max-width: 10rem;" />
+    <section v-if="selectedRunSkippedWarehouses.length" class="mb-4 p-3 rounded-lg bg-amber-50 border border-amber-200 text-amber-800 text-sm">
+      Some warehouses were skipped: {{ selectedRunSkippedWarehouses.join(', ') }}.
+    </section>
+
+    <section class="card card-body">
+      <h3 class="section-title mb-3">Filters</h3>
+      <div class="grid grid-cols-1 md:grid-cols-4 gap-3">
+        <div>
+          <label class="form-label">Scenario</label>
+          <select v-model="selectedRunId" class="select w-full max-w-xs">
+            <option :value="null">Select scenario</option>
+            <option v-for="r in planRuns" :key="r.id" :value="r.id">{{ r.scenario_name }} ({{ r.created_at }})</option>
+          </select>
+        </div>
+        <div>
+          <label class="form-label">Warehouse</label>
+          <input v-model="whFilter" class="input w-full max-w-xs" placeholder="Filter warehouse" />
+        </div>
+        <div>
+          <label class="form-label">SKU</label>
+          <input v-model="skuFilter" class="input w-full max-w-xs" placeholder="Filter SKU" />
+        </div>
       </div>
     </section>
 
-    <section v-if="loading" class="content-section">Loading...</section>
-    <template v-else>
-      <section class="content-section grid-section">
-        <div v-if="rows.length && weekColumns.length" class="planning-grid-wrap">
-          <table class="planning-grid app-table">
-            <thead>
-              <tr>
-                <th class="sticky-col sticky-header">SKU / Warehouse</th>
-                <th
-                  v-for="week in weekColumns"
-                  :key="week"
-                  class="sticky-header week-header"
-                >{{ week }}</th>
-              </tr>
-            </thead>
-            <tbody>
-              <tr v-for="row in rows" :key="row.key">
-                <td class="sticky-col row-label">
-                  <router-link
-                    :to="{ path: '/sku-detail', query: selectedRunId ? { sku: row.sku, warehouse_code: row.warehouse_code, plan_run_id: String(selectedRunId) } : { sku: row.sku, warehouse_code: row.warehouse_code } }"
-                    class="row-label-link"
-                    @click.stop
-                  >{{ row.sku }} / {{ row.warehouse_code }}</router-link>
-                </td>
-                <td
-                  v-for="week in weekColumns"
-                  :key="week"
-                  :class="cellClass(row, week)"
-                  class="grid-cell"
-                  role="button"
-                  tabindex="0"
-                  @click="openExplanationForCell(row, week)"
-                  @keydown.enter="openExplanationForCell(row, week)"
-                  @keydown.space.prevent="openExplanationForCell(row, week)"
-                >{{ cellDisplay(row, week) }}</td>
-              </tr>
-            </tbody>
-          </table>
+    <section class="card card-body">
+      <h3 class="section-title mb-3">Planning grid</h3>
+      <div v-if="loading" class="py-8 text-sm text-slate-500">Loading…</div>
+      <template v-else>
+        <div v-if="rows.length && weekColumns.length" class="grid-section">
+          <div class="planning-grid-wrap">
+            <table class="planning-grid">
+              <thead>
+                <tr>
+                  <th class="sticky-col sticky-header week-header">SKU / Warehouse</th>
+                  <th
+                    v-for="week in weekColumns"
+                    :key="week"
+                    class="sticky-header week-header"
+                  >{{ week }}</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr v-for="row in rows" :key="row.key">
+                  <td class="sticky-col row-label">
+                    <router-link
+                      :to="{ path: '/sku-detail', query: selectedRunId ? { sku: row.sku, warehouse_code: row.warehouse_code, plan_run_id: String(selectedRunId) } : { sku: row.sku, warehouse_code: row.warehouse_code } }"
+                      class="row-label-link"
+                      @click.stop
+                    >{{ row.sku }} / {{ row.warehouse_code }}</router-link>
+                  </td>
+                  <td
+                    v-for="week in weekColumns"
+                    :key="week"
+                    :class="cellClass(row, week)"
+                    class="grid-cell"
+                    role="button"
+                    tabindex="0"
+                    @click="openExplanationForCell(row, week)"
+                    @keydown.enter="openExplanationForCell(row, week)"
+                    @keydown.space.prevent="openExplanationForCell(row, week)"
+                  >{{ cellDisplay(row, week) }}</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
         </div>
-        <p v-else class="muted">No data. Select a scenario and run a plan, or adjust filters.</p>
-      </section>
-    </template>
+        <NoDataWithReason
+          v-else
+          :title="noDataTitle"
+          :reasons="noDataReasons"
+          :actions="noDataActions"
+        />
+      </template>
+    </section>
 
     <Teleport to="#right-panel-body">
       <div v-if="explanation" class="explanation-panel">
@@ -94,10 +112,12 @@
 
 <script setup lang="ts">
 import { ref, computed, watch, onMounted } from 'vue'
-import { useRoute } from 'vue-router'
+import { useRoute, useRouter } from 'vue-router'
 import { useLayoutStore } from '@/stores/layout'
 import { usePlanningStore } from '@/stores/planning'
 import type { ProjectedInventory, SkuWeekExplanation } from '@/api/client'
+import { fetchPlanningReadiness } from '@/api/client'
+import NoDataWithReason from '@/components/console/NoDataWithReason.vue'
 
 const LOW_COVER_WEEKS = 2
 
@@ -114,6 +134,11 @@ const explanationLoading = ref(false)
 const explanationData = ref<SkuWeekExplanation | null>(null)
 
 const planRuns = computed(() => store.planRuns)
+const selectedRun = computed(() => selectedRunId.value ? planRuns.value.find((r) => r.id === selectedRunId.value) : null)
+const selectedRunSkippedWarehouses = computed(() => {
+  const meta = selectedRun.value?.progress_meta as { warehouses_skipped?: string[] } | undefined
+  return meta?.warehouses_skipped ?? []
+})
 
 const cellMap = computed(() => {
   const m = new Map<string, ProjectedInventory>()
@@ -139,6 +164,43 @@ const rows = computed(() => {
     sku,
     warehouse_code,
   }))
+})
+
+const diagnosticsData = ref<Awaited<ReturnType<typeof fetchPlanningReadiness>> | null>(null)
+const noDataTitle = computed(() => {
+  if (!selectedRunId.value && store.planRuns.length) return 'No plan run selected'
+  if (!selectedRunId.value) return 'No plan runs yet'
+  return 'No data for this plan run'
+})
+const noDataReasons = computed(() => {
+  const d = diagnosticsData.value
+  const meta = selectedRun.value?.progress_meta as { warehouses_planned_detail?: Array<{ overlap_pairs_count?: number }>; skipped_warehouses_detail?: Array<{ warehouse_code: string; blockers: string[] }> } | undefined
+  const reasons: string[] = d ? d.blockers.map((b) => b.message) : ['Loading diagnostics…']
+  if (meta?.skipped_warehouses_detail?.length) {
+    for (const s of meta.skipped_warehouses_detail) {
+      reasons.push(`${s.warehouse_code} skipped: ${s.blockers.join('; ')}`)
+    }
+  }
+  const planned = meta?.warehouses_planned_detail ?? []
+  if (planned.length && planned.every((p) => (p.overlap_pairs_count ?? 0) === 0)) {
+    reasons.push('No overlapping SKUs in SOH, demand, and policies for planned warehouses.')
+  }
+  return reasons
+})
+const noDataActions = computed(() => {
+  const actions: { label: string; href: string }[] = []
+  if (store.planRuns.length === 0) actions.push({ label: 'Run plan', href: '/' })
+  const d = diagnosticsData.value
+  if (d) {
+    const seen = new Set<string>()
+    for (const b of d.blockers) {
+      if (!seen.has(b.action_href)) {
+        seen.add(b.action_href)
+        actions.push({ label: b.action_label, href: b.action_href })
+      }
+    }
+  }
+  return actions
 })
 
 function cellClass(
@@ -207,6 +269,17 @@ async function load() {
 
 watch([selectedRunId, whFilter, skuFilter], load)
 watch(
+  () => ({ loading: loading.value, rowsLen: rows.value.length, runId: selectedRunId.value }),
+  async ({ loading: ld, rowsLen, runId }) => {
+    if (!ld && rowsLen === 0) {
+      diagnosticsData.value = await fetchPlanningReadiness(runId ?? undefined)
+    } else {
+      diagnosticsData.value = null
+    }
+  },
+  { immediate: true }
+)
+watch(
   () => layout.rightPanelOpen,
   (open) => {
     if (!open) {
@@ -222,7 +295,14 @@ onMounted(async () => {
     const id = parseInt(q, 10)
     if (!isNaN(id) && store.planRuns.some((r) => r.id === id)) selectedRunId.value = id
   }
-  if (selectedRunId.value == null && store.planRuns.length) selectedRunId.value = store.planRuns[0].id
+  if (selectedRunId.value == null && store.planRuns.length) {
+    selectedRunId.value = store.planRuns[0].id
+    router.replace({ path: route.path, query: { ...route.query, plan_run_id: String(store.planRuns[0].id) } })
+  }
+  const skuQ = route.query.sku
+  const whQ = route.query.warehouse_code
+  if (typeof skuQ === 'string' && skuQ) skuFilter.value = skuQ
+  if (typeof whQ === 'string' && whQ) whFilter.value = whQ
   loading.value = false
   await load()
 })
@@ -277,7 +357,12 @@ onMounted(async () => {
 .planning-grid .week-header {
   min-width: 96px;
   font-size: 0.75rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.025em;
+  color: var(--muted);
   white-space: nowrap;
+  padding: 0.375rem 0.5rem;
 }
 .planning-grid .row-label {
   font-size: 0.8125rem;

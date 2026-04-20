@@ -1,6 +1,8 @@
-"""Seed database with sample products, warehouses, policies, inventory, receipts, demand."""
+"""Seed database with sample products, warehouses, policies, inventory, receipts, demand.
+Only runs when ALLOW_DEMO_DATA=true (default: false). Use for dev/sandbox only."""
 from __future__ import annotations
 import logging
+import os
 import sys
 from datetime import date, timedelta
 from decimal import Decimal
@@ -32,6 +34,9 @@ def monday(d: date) -> date:
 
 
 def seed() -> None:
+    if os.environ.get("ALLOW_DEMO_DATA", "false").strip().lower() not in ("1", "true", "yes"):
+        print("Seed skipped: ALLOW_DEMO_DATA is not set to true. Set ALLOW_DEMO_DATA=true for dev.")
+        return
     db = SessionLocal()
     try:
         # Products

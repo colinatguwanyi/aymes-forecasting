@@ -224,8 +224,12 @@ class PlanRunBase(BaseModel):
     demand_source: str = "actuals"
     freeze_weeks: int = 4
     plan_start_week_start: Optional[date] = None
+    baseline_train_end_week_start: Optional[date] = None
+    selected_train_end_week_start: Optional[date] = None
     created_by: Optional[str] = None
     notes: Optional[str] = None
+    warehouses_scope: Optional[list[str]] = None
+    progress_meta: Optional[dict[str, Any]] = None
 
 
 class PlanRun(PlanRunBase):
@@ -306,6 +310,8 @@ class SkuWeekExplanation(BaseModel):
     policy: Optional[SkuWeekExplanationPolicy] = None
     projection: Optional[SkuWeekExplanationProjection] = None
     forecast_method: str = "trailing_mean"
+    demand_breakdown: Optional[dict] = None  # from plan_run_demand_inputs_weekly for this week
+    demand_includes_samples: Optional[bool] = None
 
 
 # Exceptions (Phase 3: derived from projected inventory)

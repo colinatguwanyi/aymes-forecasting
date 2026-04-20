@@ -2,6 +2,8 @@
 
 This document describes the ingestion pipeline, weekly time bucketing, CSV schemas, idempotency, SKU mapping, and completeness rules.
 
+**Related docs:** [INGESTION.md](INGESTION.md) — full ingestion pipeline guide; [IMPORT_FILE_FORMATS.md](IMPORT_FILE_FORMATS.md) — column requirements per format.
+
 ## Week bucketing rule
 
 - **Company timezone:** `Europe/London`

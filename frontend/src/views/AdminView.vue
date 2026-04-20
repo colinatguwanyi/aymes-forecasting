@@ -27,8 +27,13 @@ const tabs = [
   { name: 'AdminWarehouses', path: '/admin/warehouses', label: 'Warehouses' },
   { name: 'AdminSuppliers', path: '/admin/suppliers', label: 'Suppliers' },
   { name: 'AdminLanes', path: '/admin/lanes', label: 'Lanes (Supplier → Warehouse)' },
-  { name: 'AdminPolicies', path: '/admin/policies', label: 'Planning Policies' },
+  { name: 'AdminPolicies', path: '/admin/policies', label: 'Stock Rules' },
   { name: 'AdminTimelines', path: '/admin/timelines', label: 'Timelines' },
+  { name: 'AdminForecastMethods', path: '/admin/forecast-methods', label: 'Forecasting Methods' },
+  { name: 'AdminForecastEngine', path: '/admin/forecast-engine', label: 'Forecast Settings' },
+  { name: 'AdminSettings', path: '/admin/settings', label: 'Settings' },
+  { name: 'AdminImportFormats', path: '/admin/import-formats', label: 'Import Formats' },
+  { name: 'AdminWarehouseProductCodes', path: '/admin/warehouse-product-codes', label: 'Warehouse Product Codes' },
 ]
 </script>
 

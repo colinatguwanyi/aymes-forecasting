@@ -1,6 +1,8 @@
-"""Seed backbone schema: calendar_weeks, warehouses, products, suppliers, warehouse_products, supplier_products, demo stock/demand."""
+"""Seed backbone schema: calendar_weeks, warehouses, products, suppliers, warehouse_products, supplier_products, demo stock/demand.
+Only runs when ALLOW_DEMO_DATA=true (default: false). Use for dev/sandbox only."""
 from __future__ import annotations
 import logging
+import os
 import sys
 from datetime import date, timedelta
 from pathlib import Path
@@ -36,6 +38,9 @@ def iso_year_week(d: date) -> tuple[int, int]:
 
 
 def seed_backbone() -> None:
+    if os.environ.get("ALLOW_DEMO_DATA", "false").strip().lower() not in ("1", "true", "yes"):
+        logger.warning("Backbone seed skipped: ALLOW_DEMO_DATA is not set to true. Set ALLOW_DEMO_DATA=true for dev.")
+        return
     db = SessionLocal()
     try:
         # Calendar weeks: 2025-W01 through 2025-W52 + a bit of 2026

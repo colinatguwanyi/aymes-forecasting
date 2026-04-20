@@ -12,6 +12,7 @@ from datetime import date, timedelta
 from decimal import Decimal
 from typing import Any, cast
 
+from sqlalchemy import case
 from sqlalchemy.orm import Session
 
 from app.models import (
@@ -67,8 +68,18 @@ def _get_on_hand(
     sku: str,
     warehouse_code: str,
     as_of_week: date,
+    allowed_warehouses: list[str] | None = None,
 ) -> tuple[date | None, Decimal]:
-    """Latest on_hand_qty from inventory_snapshots_weekly where week_start <= as_of_week."""
+    """Latest on_hand_qty from inventory_snapshots_weekly where week_start <= as_of_week; prefer source_type='soh' over 'legacy'.
+    If allowed_warehouses is provided (from plan run scope), use those; else fall back to sample_sales_soh_warehouses config (default BLP)."""
+    if allowed_warehouses is not None:
+        if warehouse_code not in allowed_warehouses:
+            return (None, Decimal("0"))
+    else:
+        from app.services.app_settings import get_sample_sales_soh_warehouses
+
+        if warehouse_code not in get_sample_sales_soh_warehouses(db):
+            return (None, Decimal("0"))
     rows = (
         db.query(InventorySnapshotWeekly)
         .filter(
@@ -76,7 +87,10 @@ def _get_on_hand(
             InventorySnapshotWeekly.warehouse_code == warehouse_code,
             InventorySnapshotWeekly.week_start <= as_of_week,
         )
-        .order_by(InventorySnapshotWeekly.week_start.desc())
+        .order_by(
+            InventorySnapshotWeekly.week_start.desc(),
+            case((InventorySnapshotWeekly.source_type == "soh", 1), else_=0).desc(),
+        )
         .limit(1)
         .all()
     )
@@ -214,6 +228,8 @@ def get_stock_position_breakdown(
     keys = [(r.sku, r.warehouse_code) for r in q.all()]
     if not keys:
         return []
+    # Use warehouses from this plan run's projected_inventory (same scope as planning engine)
+    plan_run_warehouses = list({k[1] for k in keys})
 
     if product_family:
         rows = (
@@ -284,7 +300,9 @@ def get_stock_position_breakdown(
                 db, plan_run_id, sku_val, wh_code, from_week, 8
             )
 
-        snapshot_week, on_hand = _get_on_hand(db, sku_val, wh_code, current_week)
+        snapshot_week, on_hand = _get_on_hand(
+            db, sku_val, wh_code, current_week, allowed_warehouses=plan_run_warehouses
+        )
         supplier_lt, moq_units, pack_units = _get_supplier_lead_time_and_pack(db, sku_val, wh_code)
         haul_buf, stock_buf = _get_haulage_stocking_buffer_weeks(db, sku_val, wh_code)
         lt_haul = float(cast(Decimal, getattr(policy, "lead_time_haulage_weeks", None)) or 0)

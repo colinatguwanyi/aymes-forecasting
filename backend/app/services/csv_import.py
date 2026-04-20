@@ -26,6 +26,22 @@ def parse_date(s: str) -> tuple[bool, Any]:
         return False, "Invalid date (use YYYY-MM-DD, Monday)"
 
 
+def parse_date_ddmmyyyy(s: str) -> tuple[bool, Any]:
+    """Parse DD/MM/YYYY; return (ok, date or error message)."""
+    s = (s or "").strip()
+    if not s:
+        return False, "Empty date"
+    try:
+        d = datetime.strptime(s, "%d/%m/%Y").date()
+        return True, d
+    except ValueError:
+        try:
+            d = datetime.strptime(s, "%Y-%m-%d").date()
+            return True, d
+        except ValueError:
+            return False, "Invalid date (use DD/MM/YYYY or YYYY-MM-DD)"
+
+
 def parse_decimal(s: str) -> tuple[bool, Decimal | str]:
     s = (s or "0").strip()
     try:
@@ -250,6 +266,7 @@ def read_csv_or_xlsx(file_content: bytes, filename: str | None = None) -> list[d
         import pandas as pd  # noqa: PLC0415
 
         df = pd.read_excel(io.BytesIO(file_content), engine="openpyxl" if fn.endswith(".xlsx") else None)
+        # Normalize: strip column names, replace NaN with None
         df = df.rename(columns=lambda c: (c.strip() if isinstance(c, str) else str(c)))
         rows = df.to_dict("records")
         out: list[dict[str, Any]] = []

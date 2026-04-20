@@ -3,17 +3,18 @@ from __future__ import annotations
 import logging
 from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal
-from decimal import Decimal
 from typing import Any, cast
 
 from fastapi import APIRouter, Body, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
 
 from app.database import get_db
+from app.security.auth import require_admin_or_planner, require_any_auth
 from app.models import (
     DemandOverrideWeekly,
     PlanRun,
     PlanRunDemandInputWeekly,
+    PlanRunEvent,
     PlanRunFreezeEvent,
     PlannedOrder,
     PlannedOrderOverrideWeekly,
@@ -29,8 +30,8 @@ from app.schemas import (
     SkuWeekExplanationPolicy,
     SkuWeekExplanationProjection,
 )
-from app.services.demand_resolver import resolve_demand_for_run, _frozen_mondays_for_plan
-from app.services.planning import _monday_before, run_plan
+from app.services.demand_resolver import NoBaselineRunsError, published_run_exists, resolve_demand_for_run, _frozen_mondays_for_plan
+from app.services.planning import AllWarehousesSkippedError, _monday_before, run_plan
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -50,7 +51,7 @@ def _human_breakdown(breakdown: dict[str, Any] | None, source: str) -> str | Non
     return ", ".join(parts) if parts else None
 
 
-@router.post("/run", response_model=PlanRunSchema)
+@router.post("/run", response_model=PlanRunSchema, dependencies=[Depends(require_admin_or_planner)])
 def run_planning(
     scenario_name: str = Query(..., description="Scenario name for this run"),
     run_at: str | None = Query(None, description="Date to use as run date (YYYY-MM-DD)"),
@@ -58,27 +59,51 @@ def run_planning(
     freeze_weeks: int = Query(4, ge=0, le=52),
     created_by: str | None = Query(None),
     notes: str | None = Query(None),
+    warehouses_scope: str | None = Query(None, description="Comma-separated warehouse codes, e.g. AAH,BLP. Omit for legacy (all from policies)."),
     db: Session = Depends(get_db),
 ) -> PlanRun:
     run_date = date.fromisoformat(run_at) if run_at else date.today()
-    plan_run = run_plan(
-        db,
-        scenario_name=scenario_name,
-        run_at=run_date,
-        demand_source=demand_source,
-        freeze_weeks=freeze_weeks,
-        created_by=created_by,
-        notes=notes,
-    )
+    wh_list: list[str] | None = None
+    if warehouses_scope and warehouses_scope.strip():
+        wh_list = [w.strip() for w in warehouses_scope.split(",") if w.strip()]
+    try:
+        plan_run = run_plan(
+            db,
+            scenario_name=scenario_name,
+            run_at=run_date,
+            demand_source=demand_source,
+            freeze_weeks=freeze_weeks,
+            created_by=created_by,
+            notes=notes,
+            warehouses_scope=wh_list,
+        )
+    except NoBaselineRunsError as e:
+        db.rollback()
+        raise HTTPException(status_code=409, detail=str(e))
+    except AllWarehousesSkippedError as e:
+        db.rollback()
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "code": "all_warehouses_skipped",
+                "message": str(e),
+                "skipped_warehouses": e.skipped_warehouses,
+            },
+        )
+    except ValueError as e:
+        db.rollback()
+        msg = str(e)
+        code = "demo_data_detected" if "Demo data disabled" in msg or "demo" in msg.lower() else "planning_outputs_invalid"
+        raise HTTPException(status_code=400, detail={"code": code, "message": msg})
     return plan_run
 
 
-@router.get("/runs", response_model=list[PlanRunSchema])
+@router.get("/runs", response_model=list[PlanRunSchema], dependencies=[Depends(require_any_auth)])
 def list_plan_runs(db: Session = Depends(get_db)) -> list[PlanRun]:
     return db.query(PlanRun).order_by(PlanRun.created_at.desc()).all()
 
 
-@router.get("/runs/{plan_run_id}", response_model=PlanRunSchema)
+@router.get("/runs/{plan_run_id}", response_model=PlanRunSchema, dependencies=[Depends(require_any_auth)])
 def get_plan_run(plan_run_id: int, db: Session = Depends(get_db)) -> PlanRun:
     run = db.query(PlanRun).filter(PlanRun.id == plan_run_id).first()
     if not run:
@@ -86,10 +111,12 @@ def get_plan_run(plan_run_id: int, db: Session = Depends(get_db)) -> PlanRun:
     return run
 
 
-@router.patch("/runs/{plan_run_id}", response_model=PlanRunSchema)
+@router.patch("/runs/{plan_run_id}", response_model=PlanRunSchema, dependencies=[Depends(require_admin_or_planner)])
 def update_plan_run(
     plan_run_id: int,
     demand_source: str | None = Query(None),
+    baseline_train_end_week_start: date | None = Query(None, description="When demand_source=baseline, which published run to use (latest if null)"),
+    clear_baseline_train_end_week_start: bool = Query(False, description="If true, set baseline_train_end_week_start to null (use latest on next recalc)"),
     freeze_weeks: int | None = Query(None, ge=0, le=52),
     notes: str | None = Query(None),
     db: Session = Depends(get_db),
@@ -99,6 +126,15 @@ def update_plan_run(
         raise HTTPException(status_code=404, detail="Plan run not found")
     if demand_source is not None:
         run.demand_source = demand_source
+    if clear_baseline_train_end_week_start:
+        run.baseline_train_end_week_start = None
+    elif baseline_train_end_week_start is not None:
+        if not published_run_exists(db, baseline_train_end_week_start, warehouse_code="AAH"):
+            raise HTTPException(
+                status_code=409,
+                detail=f"Selected forecast run {baseline_train_end_week_start!s} not found. Choose another run or reset to latest.",
+            )
+        run.baseline_train_end_week_start = baseline_train_end_week_start
     if freeze_weeks is not None:
         run.freeze_weeks = freeze_weeks
     if notes is not None:
@@ -108,7 +144,40 @@ def update_plan_run(
     return run
 
 
-@router.get("/runs/{plan_run_id}/projected-inventory", response_model=list[ProjectedInventorySchema])
+@router.post("/runs/{plan_run_id}/reset-forecast-run", response_model=PlanRunSchema, dependencies=[Depends(require_admin_or_planner)])
+def reset_forecast_run(
+    plan_run_id: int,
+    reset_all: bool = Query(False, description="If true, also clear baseline_train_end_week_start (user override)"),
+    created_by: str | None = Query(None),
+    db: Session = Depends(get_db),
+) -> PlanRun:
+    """Clear pinned forecast run (selected_train_end_week_start). Next recalc will pick latest. Optionally clear user override (reset_all=true)."""
+    run = db.query(PlanRun).filter(PlanRun.id == plan_run_id).first()
+    if not run:
+        raise HTTPException(status_code=404, detail="Plan run not found")
+    prev_selected = getattr(run, "selected_train_end_week_start", None)
+    prev_baseline = getattr(run, "baseline_train_end_week_start", None)
+    run.selected_train_end_week_start = None
+    if reset_all:
+        run.baseline_train_end_week_start = None
+    db.add(
+        PlanRunEvent(
+            plan_run_id=plan_run_id,
+            event_type="RESET_FORECAST_RUN",
+            created_by=created_by,
+            details_json={
+                "previous_selected_train_end_week_start": prev_selected.isoformat() if prev_selected else None,
+                "previous_baseline_train_end_week_start": prev_baseline.isoformat() if prev_baseline else None,
+                "reset_all": reset_all,
+            },
+        )
+    )
+    db.commit()
+    db.refresh(run)
+    return run
+
+
+@router.get("/runs/{plan_run_id}/projected-inventory", response_model=list[ProjectedInventorySchema], dependencies=[Depends(require_any_auth)])
 def get_projected_inventory(
     plan_run_id: int,
     sku: str | None = None,
@@ -123,7 +192,7 @@ def get_projected_inventory(
     return q.order_by(ProjectedInventory.week_start, ProjectedInventory.sku).all()
 
 
-@router.get("/runs/{plan_run_id}/planned-orders", response_model=list[PlannedOrderSchema])
+@router.get("/runs/{plan_run_id}/planned-orders", response_model=list[PlannedOrderSchema], dependencies=[Depends(require_any_auth)])
 def get_planned_orders(
     plan_run_id: int,
     sku: str | None = None,
@@ -138,7 +207,7 @@ def get_planned_orders(
     return q.order_by(PlannedOrder.week_start, PlannedOrder.sku).all()
 
 
-@router.get("/runs/{plan_run_id}/exceptions", response_model=list[PlanningException])
+@router.get("/runs/{plan_run_id}/exceptions", response_model=list[PlanningException], dependencies=[Depends(require_any_auth)])
 def get_plan_exceptions(
     plan_run_id: int,
     within_weeks: int = Query(12, ge=1, le=52, description="Only weeks within this many weeks from today"),
@@ -204,7 +273,7 @@ def get_plan_exceptions(
     return out
 
 
-@router.get("/runs/{plan_run_id}/demand-inputs")
+@router.get("/runs/{plan_run_id}/demand-inputs", dependencies=[Depends(require_any_auth)])
 def get_demand_inputs(
     plan_run_id: int,
     from_week: str | None = Query(None),
@@ -228,13 +297,15 @@ def get_demand_inputs(
             "demand_qty": float(cast(Decimal, r.demand_qty)),
             "source": r.source,
             "source_ref": r.source_ref,
+            "demand_breakdown_json": getattr(r, "demand_breakdown_json", None),
+            "demand_includes_samples": bool(getattr(r, "demand_includes_samples", True)),
             "is_frozen": bool(r.is_frozen),
         }
         for r in rows
     ]
 
 
-@router.post("/runs/{plan_run_id}/demand-overrides")
+@router.post("/runs/{plan_run_id}/demand-overrides", dependencies=[Depends(require_admin_or_planner)])
 def upsert_demand_overrides(
     plan_run_id: int,
     body: list[dict[str, Any]] = Body(..., description="List of {week_start, sku, warehouse_code, override_qty, reason_code, notes?, created_by?}"),
@@ -284,7 +355,7 @@ def upsert_demand_overrides(
     return {"updated": len(body)}
 
 
-@router.delete("/runs/{plan_run_id}/demand-overrides")
+@router.delete("/runs/{plan_run_id}/demand-overrides", dependencies=[Depends(require_admin_or_planner)])
 def delete_demand_overrides(
     plan_run_id: int,
     body: list[dict[str, Any]] = Body(..., description="List of {week_start, sku, warehouse_code}"),
@@ -313,7 +384,7 @@ def delete_demand_overrides(
     return {"deleted": deleted}
 
 
-@router.get("/runs/{plan_run_id}/order-overrides")
+@router.get("/runs/{plan_run_id}/order-overrides", dependencies=[Depends(require_any_auth)])
 def get_order_overrides(
     plan_run_id: int,
     db: Session = Depends(get_db),
@@ -343,7 +414,7 @@ def get_order_overrides(
     return out_list
 
 
-@router.post("/runs/{plan_run_id}/order-overrides")
+@router.post("/runs/{plan_run_id}/order-overrides", dependencies=[Depends(require_admin_or_planner)])
 def upsert_order_overrides(
     plan_run_id: int,
     body: list[dict[str, Any]] = Body(..., description="List of {week_start, sku, warehouse_code, override_order_qty, reason_code, notes?, created_by?}"),
@@ -393,7 +464,7 @@ def upsert_order_overrides(
     return {"updated": len(body)}
 
 
-@router.delete("/runs/{plan_run_id}/order-overrides")
+@router.delete("/runs/{plan_run_id}/order-overrides", dependencies=[Depends(require_admin_or_planner)])
 def delete_order_overrides(
     plan_run_id: int,
     body: list[dict[str, Any]] = Body(..., description="List of {week_start, sku, warehouse_code}"),
@@ -422,7 +493,7 @@ def delete_order_overrides(
     return {"deleted": deleted}
 
 
-@router.post("/runs/{plan_run_id}/freeze")
+@router.post("/runs/{plan_run_id}/freeze", dependencies=[Depends(require_admin_or_planner)])
 def freeze_plan_run(
     plan_run_id: int,
     body: dict[str, Any] = Body(..., description="{ scope: 'demand'|'orders'|'both', freeze_weeks?: int, notes?: str, frozen_by?: str }"),
@@ -462,7 +533,7 @@ def freeze_plan_run(
     return {"scope": scope, "freeze_weeks": freeze_weeks}
 
 
-@router.post("/runs/{plan_run_id}/unfreeze")
+@router.post("/runs/{plan_run_id}/unfreeze", dependencies=[Depends(require_admin_or_planner)])
 def unfreeze_plan_run(
     plan_run_id: int,
     body: dict[str, Any] = Body(..., description="{ scope: 'demand'|'orders'|'both', from_week?: str, to_week?: str }"),
@@ -492,7 +563,7 @@ def unfreeze_plan_run(
     return {"scope": scope}
 
 
-@router.post("/runs/{plan_run_id}/recalculate-demand")
+@router.post("/runs/{plan_run_id}/recalculate-demand", dependencies=[Depends(require_admin_or_planner)])
 def recalculate_demand_inputs(
     plan_run_id: int,
     db: Session = Depends(get_db),
@@ -504,12 +575,15 @@ def recalculate_demand_inputs(
     run_at = cast(date, run.run_at)
     run_week = _monday_before(run_at)
     to_week = run_week + timedelta(days=53 * 7)
-    resolve_demand_for_run(db, plan_run_id, run_week, to_week, recompute_non_frozen_only=True)
+    try:
+        resolve_demand_for_run(db, plan_run_id, run_week, to_week, recompute_non_frozen_only=True)
+    except NoBaselineRunsError as e:
+        raise HTTPException(status_code=409, detail=str(e))
     db.commit()
     return {"plan_run_id": plan_run_id, "status": "ok"}
 
 
-@router.get("/runs/{plan_run_id}/explain")
+@router.get("/runs/{plan_run_id}/explain", dependencies=[Depends(require_any_auth)])
 def explain_plan_run_cell(
     plan_run_id: int,
     sku: str = Query(...),
@@ -630,7 +704,7 @@ def explain_plan_run_cell(
     }
 
 
-@router.get("/runs/{plan_run_id}/explanation", response_model=SkuWeekExplanation)
+@router.get("/runs/{plan_run_id}/explanation", response_model=SkuWeekExplanation, dependencies=[Depends(require_any_auth)])
 def get_sku_week_explanation(
     plan_run_id: int,
     sku: str = Query(..., description="SKU"),
@@ -689,6 +763,18 @@ def get_sku_week_explanation(
             weeks_of_cover=_r.weeks_of_cover,
             stockout=bool(_r.stockout),
         )
+    demand_input = (
+        db.query(PlanRunDemandInputWeekly)
+        .filter(
+            PlanRunDemandInputWeekly.plan_run_id == plan_run_id,
+            PlanRunDemandInputWeekly.sku == sku,
+            PlanRunDemandInputWeekly.warehouse_code == warehouse_code,
+            PlanRunDemandInputWeekly.week_start == week,
+        )
+        .first()
+    )
+    demand_breakdown = getattr(demand_input, "demand_breakdown_json", None) if demand_input else None
+    demand_includes_samples = bool(getattr(demand_input, "demand_includes_samples", True)) if demand_input else None
     return SkuWeekExplanation(
         sku=sku,
         warehouse_code=warehouse_code,
@@ -696,4 +782,6 @@ def get_sku_week_explanation(
         policy=policy,
         projection=projection,
         forecast_method="trailing_mean",
+        demand_breakdown=demand_breakdown,
+        demand_includes_samples=demand_includes_samples,
     )

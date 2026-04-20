@@ -1,0 +1,9 @@
+Code,Description,Balance,Location,Expiry Date
+AC1.5-CH,Product A,71,LOC-A,01/02/2026
+AC1.5-CH,Product A,312,LOC-B,01/03/2026
+AC1.5-CH,Product A,1416,LOC-C,EXPIRING
+SKU-X,Product X,10,,15/06/2025
+SKU-X,Product X,5,LOC-X,
+SKU-BAD,Product Bad,not-a-number,LOC-Y,01/01/2025
+,Empty Code,0,LOC-Z,01/01/2025
+SKU-INVALID-DATE,Product Y,20,,99/99/9999

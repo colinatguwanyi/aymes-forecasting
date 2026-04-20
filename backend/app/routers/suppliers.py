@@ -5,11 +5,12 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 
 from app.database import get_db
+from app.security.auth import require_any_auth
 from app.models import Supplier as SupplierModel
 from app.schemas import Supplier, SupplierCreate
 
 logger = logging.getLogger(__name__)
-router = APIRouter()
+router = APIRouter(dependencies=[Depends(require_any_auth)])
 
 
 @router.get("", response_model=list[Supplier])

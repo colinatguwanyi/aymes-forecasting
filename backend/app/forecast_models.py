@@ -2,7 +2,7 @@
 Forecasting subsystem ORM models.
 
 All tables use W-TUE week_start alignment (same as the rest of the platform).
-MySQL remains the source-of-truth for raw sales; Postgres stores all outputs.
+MySQL holds raw sales (aymes_reports) and forecast subsystem tables (see MYSQL_FORECAST_DATABASE).
 
 Table dependency order (for FK clarity):
   standalone → forecast_source_configs, forecast_model_configs,
@@ -21,6 +21,7 @@ import logging
 logger = logging.getLogger(__name__)
 
 from sqlalchemy import (
+    JSON,
     Boolean,
     Column,
     Date,
@@ -33,8 +34,8 @@ from sqlalchemy import (
     Text,
     UniqueConstraint,
     func,
+    text,
 )
-from sqlalchemy.dialects.postgresql import JSONB
 
 from app.database import Base
 
@@ -80,7 +81,7 @@ class ForecastSourceConfig(Base):
 
 class ForecastModelConfig(Base):
     """
-    A named forecasting algorithm with its hyperparameters stored as JSONB.
+    A named forecasting algorithm with its hyperparameters stored as JSON.
     Multiple model configs can be tried in a single runtime config (ensemble / selection).
     """
     __tablename__ = "forecast_model_configs"
@@ -92,7 +93,7 @@ class ForecastModelConfig(Base):
     code = Column(String(64), unique=True, nullable=False)       # e.g. "trailing_mean_8"
     display_name = Column(String(256), nullable=False)
     method_type = Column(String(64), nullable=False)             # "trailing_mean" | "seasonal_naive" | "ets"
-    hyperparams = Column(JSONB, nullable=False, server_default="{}")
+    hyperparams = Column(JSON, nullable=False, server_default=text("'{}'"))
     active = Column(Boolean, nullable=False, server_default="true")
     notes = Column(Text, nullable=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
@@ -105,7 +106,7 @@ class ForecastModelConfig(Base):
 class ForecastRuntimeConfig(Base):
     """
     Ties a source config to one or more model configs plus run-level settings.
-    model_config_ids is a JSONB array of ForecastModelConfig.id values to try.
+    model_config_ids is a JSON array of ForecastModelConfig.id values to try.
     """
     __tablename__ = "forecast_runtime_configs"
     __table_args__ = (
@@ -120,15 +121,15 @@ class ForecastRuntimeConfig(Base):
         nullable=False,
         index=True,
     )
-    model_config_ids = Column(JSONB, nullable=False, server_default="[]")
-    warehouse_codes = Column(JSONB, nullable=True)       # NULL = all warehouses
+    model_config_ids = Column(JSON, nullable=False, server_default=text("'[]'"))
+    warehouse_codes = Column(JSON, nullable=True)       # NULL = all warehouses
     sku_filter_sql = Column(Text, nullable=True)         # optional extra WHERE clause
     train_window_weeks = Column(Integer, nullable=False, server_default="104")
     horizon_weeks = Column(Integer, nullable=False, server_default="52")
     wtue_alignment = Column(Boolean, nullable=False, server_default="true")
     active = Column(Boolean, nullable=False, server_default="true")
     notes = Column(Text, nullable=True)
-    stock_params = Column(JSONB, nullable=True)                  # stock-aware preprocessing thresholds
+    stock_params = Column(JSON, nullable=True)                  # stock-aware preprocessing thresholds
     created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
     updated_at = Column(
         DateTime(timezone=True),
@@ -163,7 +164,7 @@ class ForecastSkuHistoryRule(Base):
     min_history_weeks = Column(Integer, nullable=True)
     max_history_weeks = Column(Integer, nullable=True)
     outlier_threshold_sigma = Column(Numeric(6, 3), nullable=True)
-    exclude_weeks = Column(JSONB, nullable=True)                 # ["2024-01-02", ...]
+    exclude_weeks = Column(JSON, nullable=True)                 # ["2024-01-02", ...]
     override_model_code = Column(String(64), nullable=True)
     merged_into_sku = Column(String(64), nullable=True)          # old_code → new_code merge
     active = Column(Boolean, nullable=False, server_default="true")
@@ -311,7 +312,7 @@ class ForecastRun(Base):
     rows_trained = Column(Integer, nullable=True)
     rows_forecast = Column(Integer, nullable=True)
     error_message = Column(Text, nullable=True)
-    run_meta = Column(JSONB, nullable=True)
+    run_meta = Column(JSON, nullable=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
     completed_at = Column(DateTime(timezone=True), nullable=True)
 
@@ -352,7 +353,7 @@ class ForecastRunModel(Base):
     bias = Column(Numeric(10, 6), nullable=True)
     mape = Column(Numeric(10, 6), nullable=True)
     mae = Column(Numeric(18, 4), nullable=True)
-    fit_meta = Column(JSONB, nullable=True)
+    fit_meta = Column(JSON, nullable=True)
     strategy = Column(String(64), nullable=True)                 # mature_history/sparse_history/launch/exclude
     created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
 
@@ -394,7 +395,7 @@ class ForecastResultWeekly(Base):
     upper_bound = Column(Numeric(18, 4), nullable=True)
     horizon_week_index = Column(Integer, nullable=False)         # 1 = first forecast week
     is_published = Column(Boolean, nullable=False, server_default="false")
-    result_meta = Column(JSONB, nullable=True)                   # actual_units, interpolated_units, outlier_flag, etc.
+    result_meta = Column(JSON, nullable=True)                   # actual_units, interpolated_units, outlier_flag, etc.
     created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
 
 
@@ -466,5 +467,5 @@ class ForecastRunDiagnostic(Base):
     level = Column(String(16), nullable=False, server_default="info")  # info|warning|error
     category = Column(String(64), nullable=True)   # e.g. "insufficient_history"
     message = Column(Text, nullable=False)
-    detail = Column(JSONB, nullable=True)
+    detail = Column(JSON, nullable=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)

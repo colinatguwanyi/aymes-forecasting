@@ -6,6 +6,10 @@
       </template>
     </PageHeader>
 
+    <section v-if="selectedRunSkippedWarehouses.length" class="mb-4 p-3 rounded-lg bg-amber-50 border border-amber-200 text-amber-800 text-sm">
+      Some warehouses were skipped: {{ selectedRunSkippedWarehouses.join(', ') }}.
+    </section>
+
     <FilterBar v-model="search" search-placeholder="Search SKU or warehouse…" :has-active-filters="!!selectedRunId || !!skuFilter || !!whFilter" @clear="selectedRunId = null; skuFilter = ''; whFilter = ''; search = ''">
       <template #filters>
         <select v-model="selectedRunId" class="border border-neutral-300 rounded-md px-3 py-2 text-sm bg-white min-w-48">
@@ -44,19 +48,29 @@
           </tbody>
         </table>
       </div>
-      <p v-else class="px-4 py-8 text-sm text-neutral-500">No planned orders. Select a scenario or run a plan.</p>
+      <NoDataWithReason
+        v-else
+        :title="noDataTitle"
+        :reasons="noDataReasons"
+        :actions="noDataActions"
+      />
     </div>
   </div>
 </template>
 
 <script setup lang="ts">
 import { ref, computed, watch, onMounted } from 'vue'
+import { useRoute, useRouter } from 'vue-router'
 import { usePlanningStore } from '@/stores/planning'
 import { useAdminStore } from '@/stores/admin'
 import type { PlannedOrder } from '@/api/client'
+import { fetchPlanningReadiness } from '@/api/client'
 import PageHeader from '@/components/console/PageHeader.vue'
 import FilterBar from '@/components/console/FilterBar.vue'
+import NoDataWithReason from '@/components/console/NoDataWithReason.vue'
 
+const route = useRoute()
+const router = useRouter()
 const store = usePlanningStore()
 const adminStore = useAdminStore()
 const selectedRunId = ref<number | null>(null)
@@ -66,6 +80,11 @@ const skuFilter = ref('')
 const whFilter = ref('')
 
 const planRuns = computed(() => store.planRuns)
+const selectedRun = computed(() => selectedRunId.value ? planRuns.value.find((r) => r.id === selectedRunId.value) : null)
+const selectedRunSkippedWarehouses = computed(() => {
+  const meta = selectedRun.value?.progress_meta as { warehouses_skipped?: string[] } | undefined
+  return meta?.warehouses_skipped ?? []
+})
 const products = computed(() => adminStore.products)
 const warehouses = computed(() => adminStore.warehouses)
 
@@ -82,6 +101,43 @@ const exportUrl = computed(() =>
   selectedRunId.value ? `/api/exports/planned-orders?plan_run_id=${selectedRunId.value}` : '#'
 )
 
+const diagnosticsData = ref<Awaited<ReturnType<typeof fetchPlanningReadiness>> | null>(null)
+const noDataTitle = computed(() => {
+  if (!selectedRunId.value && store.planRuns.length) return 'No plan run selected'
+  if (!selectedRunId.value) return 'No plan runs yet'
+  return 'No planned orders for this plan run'
+})
+const noDataReasons = computed(() => {
+  const d = diagnosticsData.value
+  const meta = selectedRun.value?.progress_meta as { warehouses_planned_detail?: Array<{ overlap_pairs_count?: number }>; skipped_warehouses_detail?: Array<{ warehouse_code: string; blockers: string[] }> } | undefined
+  const reasons: string[] = d ? d.blockers.map((b) => b.message) : ['Loading diagnostics…']
+  if (meta?.skipped_warehouses_detail?.length) {
+    for (const s of meta.skipped_warehouses_detail) {
+      reasons.push(`${s.warehouse_code} skipped: ${s.blockers.join('; ')}`)
+    }
+  }
+  const planned = meta?.warehouses_planned_detail ?? []
+  if (planned.length && planned.every((p) => (p.overlap_pairs_count ?? 0) === 0)) {
+    reasons.push('No overlapping SKUs in SOH, demand, and policies for planned warehouses.')
+  }
+  return reasons
+})
+const noDataActions = computed(() => {
+  const actions: { label: string; href: string }[] = []
+  if (store.planRuns.length === 0) actions.push({ label: 'Run plan', href: '/' })
+  const d = diagnosticsData.value
+  if (d) {
+    const seen = new Set<string>()
+    for (const b of d.blockers) {
+      if (!seen.has(b.action_href)) {
+        seen.add(b.action_href)
+        actions.push({ label: b.action_label, href: b.action_href })
+      }
+    }
+  }
+  return actions
+})
+
 watch(selectedRunId, async (id) => {
   if (id) {
     orders.value = await store.fetchPlannedOrders(id)
@@ -90,9 +146,28 @@ watch(selectedRunId, async (id) => {
   }
 }, { immediate: true })
 
-onMounted(() => {
-  store.fetchPlanRuns()
-  adminStore.fetchProducts()
-  adminStore.fetchWarehouses()
+watch(
+  () => ({ ordersLen: displayOrders.value.length, runId: selectedRunId.value }),
+  async ({ ordersLen, runId }) => {
+    if (ordersLen === 0) {
+      diagnosticsData.value = await fetchPlanningReadiness(runId ?? undefined)
+    } else {
+      diagnosticsData.value = null
+    }
+  },
+  { immediate: true }
+)
+
+onMounted(async () => {
+  await Promise.all([store.fetchPlanRuns(), adminStore.fetchProducts(), adminStore.fetchWarehouses()])
+  const q = route.query.plan_run_id
+  if (typeof q === 'string' && q) {
+    const id = parseInt(q, 10)
+    if (!isNaN(id) && store.planRuns.some((r) => r.id === id)) selectedRunId.value = id
+  }
+  if (selectedRunId.value == null && store.planRuns.length) {
+    selectedRunId.value = store.planRuns[0].id
+    router.replace({ path: route.path, query: { ...route.query, plan_run_id: String(store.planRuns[0].id) } })
+  }
 })
 </script>

@@ -2,29 +2,41 @@
   <div class="space-y-4">
     <PageHeader title="Inventory Projection" :breadcrumbs="[{ label: 'Planning', path: '/' }]">
       <template #actions>
-        <button type="button" class="px-4 py-2 text-sm font-medium text-neutral-700 bg-white border border-neutral-300 rounded-lg hover:bg-neutral-50" @click="exportCsv">Export CSV</button>
+        <button type="button" class="px-4 py-2 text-sm font-medium text-neutral-700 bg-white border border-neutral-300 rounded-lg hover:bg-neutral-50" @click="exportCsv" title="Export Scenario 1 data to CSV">Export CSV</button>
       </template>
     </PageHeader>
 
+    <section v-if="!loading && !planRuns.length" class="rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-amber-800">
+      <strong>No plan runs yet.</strong> Go to the <router-link to="/" class="font-medium underline hover:no-underline">Dashboard</router-link>, run a plan (Scenario + Demand source + Run plan), then return here to select it and view projections.
+    </section>
+
+    <section v-else-if="!loading && planRuns.length && !runId1" class="rounded-lg border border-blue-200 bg-blue-50 px-4 py-3 text-blue-800">
+      <strong>Select a plan run</strong> from the dropdown above. Plan runs are created on the <router-link to="/" class="font-medium underline hover:no-underline">Dashboard</router-link>.
+    </section>
+
+    <section v-if="selectedRunSkippedWarehouses.length" class="mb-4 p-3 rounded-lg bg-amber-50 border border-amber-200 text-amber-800 text-sm">
+      Some warehouses were skipped: {{ selectedRunSkippedWarehouses.join(', ') }}.
+    </section>
+
     <FilterBar v-model="search" search-placeholder="Search SKU or warehouse…" :has-active-filters="hasActiveFilters" @clear="runId1 = null; runId2 = null; skuFilter = ''; whFilter = ''; stockoutOnly = false; search = ''">
       <template #filters>
-        <select v-model="runId1" class="border border-neutral-300 rounded-md px-3 py-2 text-sm bg-white min-w-48">
-          <option :value="null">Plan run 1</option>
-          <option v-for="r in planRuns" :key="r.id" :value="r.id">{{ r.scenario_name }}</option>
+        <select v-model="runId1" class="border border-neutral-300 rounded-md px-3 py-2 text-sm bg-white min-w-48" title="Select a plan run to view its projected inventory. Created on the Dashboard.">
+          <option :value="null">Plan run 1 — select</option>
+          <option v-for="r in planRuns" :key="r.id" :value="r.id">{{ formatPlanRunLabel(r) }}</option>
         </select>
-        <select v-model="runId2" class="border border-neutral-300 rounded-md px-3 py-2 text-sm bg-white min-w-48">
-          <option :value="null">Plan run 2</option>
-          <option v-for="r in planRuns" :key="'2-' + r.id" :value="r.id">{{ r.scenario_name }}</option>
+        <select v-model="runId2" class="border border-neutral-300 rounded-md px-3 py-2 text-sm bg-white min-w-48" title="Optional: select a second run to compare side by side.">
+          <option :value="null">Plan run 2 — optional</option>
+          <option v-for="r in planRuns" :key="'2-' + r.id" :value="r.id">{{ formatPlanRunLabel(r) }}</option>
         </select>
-        <select v-model="skuFilter" class="border border-neutral-300 rounded-md px-3 py-2 text-sm bg-white min-w-40">
+        <select v-model="skuFilter" class="border border-neutral-300 rounded-md px-3 py-2 text-sm bg-white min-w-40" title="Filter to a specific SKU.">
           <option value="">All SKUs</option>
           <option v-for="p in products" :key="p.id" :value="p.sku">{{ p.sku }}</option>
         </select>
-        <select v-model="whFilter" class="border border-neutral-300 rounded-md px-3 py-2 text-sm bg-white min-w-40">
+        <select v-model="whFilter" class="border border-neutral-300 rounded-md px-3 py-2 text-sm bg-white min-w-40" title="Filter to a specific warehouse.">
           <option value="">All warehouses</option>
           <option v-for="w in warehouses" :key="w.id" :value="w.code">{{ w.code }}</option>
         </select>
-        <label class="flex items-center gap-2 text-sm text-neutral-700">
+        <label class="flex items-center gap-2 text-sm text-neutral-700" title="Show only rows where projected qty ≤ 0 (stockout).">
           <input v-model="stockoutOnly" type="checkbox" class="rounded border-neutral-300" />
           Stockout only
         </label>
@@ -65,7 +77,12 @@
             </tbody>
           </table>
         </div>
-        <p v-else class="px-4 py-8 text-sm text-neutral-500">No data. Select a scenario and run a plan if needed.</p>
+        <NoDataWithReason
+          v-else
+          :title="noDataTitle1"
+          :reasons="noDataReasons1"
+          :actions="noDataActions1"
+        />
       </section>
 
       <section class="border border-neutral-200 rounded-lg bg-white overflow-hidden">
@@ -100,7 +117,12 @@
             </tbody>
           </table>
         </div>
-        <p v-else class="px-4 py-8 text-sm text-neutral-500">No data.</p>
+        <NoDataWithReason
+          v-else
+          :title="noDataTitle2"
+          :reasons="noDataReasons2"
+          :actions="noDataActions2"
+        />
       </section>
 
       <section class="border border-neutral-200 rounded-lg bg-white overflow-hidden p-4">
@@ -142,16 +164,21 @@
 
 <script setup lang="ts">
 import { ref, computed, onMounted, watch } from 'vue'
+import { useRoute, useRouter } from 'vue-router'
 import { useLayoutStore } from '@/stores/layout'
 import { usePlanningStore } from '@/stores/planning'
 import { useAdminStore } from '@/stores/admin'
 import type { ProjectedInventory, SkuWeekExplanation } from '@/api/client'
+import { formatPlanRunLabel, fetchPlanningReadiness } from '@/api/client'
 import { Chart, registerables } from 'chart.js'
 import PageHeader from '@/components/console/PageHeader.vue'
 import FilterBar from '@/components/console/FilterBar.vue'
+import NoDataWithReason from '@/components/console/NoDataWithReason.vue'
 
 Chart.register(...registerables)
 
+const route = useRoute()
+const router = useRouter()
 const store = usePlanningStore()
 const adminStore = useAdminStore()
 const layout = useLayoutStore()
@@ -182,6 +209,62 @@ function filterBySearchAndStockout(list: ProjectedInventory[], q: string): Proje
 const displayData1 = computed(() => filterBySearchAndStockout(data1.value, search.value))
 const displayData2 = computed(() => filterBySearchAndStockout(data2.value, search.value))
 
+const diagnostics1 = ref<Awaited<ReturnType<typeof fetchPlanningReadiness>> | null>(null)
+const diagnostics2 = ref<Awaited<ReturnType<typeof fetchPlanningReadiness>> | null>(null)
+const noDataTitle1 = computed(() => {
+  if (!runId1.value && store.planRuns.length) return 'No plan run selected'
+  if (!runId1.value) return 'No plan runs yet'
+  return 'No projection rows for this run'
+})
+const noDataReasons1 = computed(() => {
+  const d = diagnostics1.value
+  const run1 = runId1.value ? planRuns.value.find((r) => r.id === runId1.value) : null
+  const meta = run1?.progress_meta as { warehouses_planned_detail?: Array<{ overlap_pairs_count?: number }>; skipped_warehouses_detail?: Array<{ warehouse_code: string; blockers: string[] }> } | undefined
+  const reasons: string[] = d ? d.blockers.map((b) => b.message) : ['Loading diagnostics…']
+  if (meta?.skipped_warehouses_detail?.length) {
+    for (const s of meta.skipped_warehouses_detail) {
+      reasons.push(`${s.warehouse_code} skipped: ${s.blockers.join('; ')}`)
+    }
+  }
+  const planned = meta?.warehouses_planned_detail ?? []
+  if (planned.length && planned.every((p) => (p.overlap_pairs_count ?? 0) === 0)) {
+    reasons.push('No overlapping SKUs in SOH, demand, and policies for planned warehouses.')
+  }
+  return reasons
+})
+const noDataActions1 = computed(() => {
+  const actions: { label: string; href: string }[] = []
+  if (store.planRuns.length === 0) actions.push({ label: 'Run plan', href: '/' })
+  const d = diagnostics1.value
+  if (d) {
+    const seen = new Set<string>()
+    for (const b of d.blockers) {
+      if (!seen.has(b.action_href)) {
+        seen.add(b.action_href)
+        actions.push({ label: b.action_label, href: b.action_href })
+      }
+    }
+  }
+  return actions
+})
+const noDataTitle2 = computed(() => {
+  if (!runId2.value) return 'Optional: select Plan run 2 to compare'
+  return 'No projection rows for this run and filters'
+})
+const noDataReasons2 = computed(() => {
+  const d = diagnostics2.value
+  if (!d) return []
+  return d.blockers.map((b) => b.message)
+})
+const noDataActions2 = computed(() => {
+  const d = diagnostics2.value
+  if (!d) return []
+  const seen = new Set<string>()
+  return d.blockers
+    .filter((b) => !seen.has(b.action_href) && seen.add(b.action_href))
+    .map((b) => ({ label: b.action_label, href: b.action_href }))
+})
+
 function exportCsv() {
   const rows = [...displayData1.value]
   const headers = ['week_start', 'sku', 'warehouse_code', 'projected_qty', 'weeks_of_cover', 'stockout']
@@ -201,6 +284,11 @@ const explanationData = ref<SkuWeekExplanation | null>(null)
 let chartInstance: Chart | null = null
 
 const planRuns = computed(() => store.planRuns)
+const selectedRun = computed(() => runId1.value ? planRuns.value.find((r) => r.id === runId1.value) : null)
+const selectedRunSkippedWarehouses = computed(() => {
+  const meta = selectedRun.value?.progress_meta as { warehouses_skipped?: string[] } | undefined
+  return meta?.warehouses_skipped ?? []
+})
 
 async function openExplanation(planRunId: number, row: ProjectedInventory) {
   explanation.value = true
@@ -274,6 +362,28 @@ function updateChart() {
 
 watch([runId1, runId2, skuFilter, whFilter], load)
 watch(
+  () => ({ len1: displayData1.value.length, run1: runId1.value }),
+  async ({ len1, run1 }) => {
+    if (len1 === 0) {
+      diagnostics1.value = await fetchPlanningReadiness(run1 ?? undefined)
+    } else {
+      diagnostics1.value = null
+    }
+  },
+  { immediate: true }
+)
+watch(
+  () => ({ len2: displayData2.value.length, run2: runId2.value }),
+  async ({ len2, run2 }) => {
+    if (len2 === 0 && run2) {
+      diagnostics2.value = await fetchPlanningReadiness(run2)
+    } else {
+      diagnostics2.value = null
+    }
+  },
+  { immediate: true }
+)
+watch(
   () => layout.rightPanelOpen,
   (open) => {
     if (!open) {
@@ -284,7 +394,15 @@ watch(
 )
 onMounted(async () => {
   await Promise.all([store.fetchPlanRuns(), adminStore.fetchProducts(), adminStore.fetchWarehouses()])
-  if (store.planRuns.length) runId1.value = store.planRuns[0].id
+  const q = route.query.plan_run_id
+  if (typeof q === 'string' && q) {
+    const id = parseInt(q, 10)
+    if (!isNaN(id) && store.planRuns.some((r) => r.id === id)) runId1.value = id
+  }
+  if (runId1.value == null && store.planRuns.length) {
+    runId1.value = store.planRuns[0].id
+    router.replace({ path: route.path, query: { ...route.query, plan_run_id: String(store.planRuns[0].id) } })
+  }
   loading.value = false
   await load()
 })

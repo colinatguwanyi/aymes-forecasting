@@ -4,6 +4,7 @@ import logging
 import uuid
 
 from sqlalchemy import (
+    JSON,
     Boolean,
     Column,
     Date,
@@ -15,9 +16,9 @@ from sqlalchemy import (
     String,
     Text,
     UniqueConstraint,
+    Uuid,
     func,
 )
-from sqlalchemy.dialects.postgresql import ENUM as PGEnum, JSONB, UUID
 from sqlalchemy.orm import relationship
 
 from app.database import Base
@@ -148,7 +149,7 @@ class InventorySnapshotWeekly(Base):
     warehouse_code = Column(String(32), nullable=False, index=True)
     on_hand_qty = Column(Numeric(18, 4), default=0)
     source_type = Column(String(32), nullable=False, server_default="legacy")
-    source_run_id = Column(UUID(as_uuid=True), ForeignKey("ingestion_runs.id", ondelete="SET NULL"), nullable=True)
+    source_run_id = Column(Uuid(as_uuid=True), ForeignKey("ingestion_runs.id", ondelete="SET NULL"), nullable=True)
     __table_args__ = (UniqueConstraint("week_start", "sku", "warehouse_code", "source_type", name="uq_inv_week_sku_wh_source"),)
 
 
@@ -193,8 +194,8 @@ class PlanRun(Base):
     notes = Column(Text, nullable=True)
     baseline_train_end_week_start = Column(Date, nullable=True)
     selected_train_end_week_start = Column(Date, nullable=True)
-    warehouses_scope = Column(JSONB, nullable=True)  # e.g. ["AAH"], ["BLP"], ["AAH","BLP"]; NULL = legacy all
-    progress_meta = Column(JSONB, nullable=True)  # warehouses_planned, warehouses_skipped, row counts, etc.
+    warehouses_scope = Column(JSON, nullable=True)  # e.g. ["AAH"], ["BLP"], ["AAH","BLP"]; NULL = legacy all
+    progress_meta = Column(JSON, nullable=True)  # warehouses_planned, warehouses_skipped, row counts, etc.
 
 
 class PlanRunDemandInputWeekly(Base):
@@ -213,8 +214,8 @@ class PlanRunDemandInputWeekly(Base):
     warehouse_code = Column(String(32), nullable=False, index=True)
     demand_qty = Column(Numeric(18, 4), nullable=False)
     source = Column(String(32), nullable=False)
-    source_ref = Column(JSONB, nullable=True)
-    demand_breakdown_json = Column(JSONB, nullable=True)  # per demand_type + included/excluded, or OVERRIDE/FORECAST_TOTAL
+    source_ref = Column(JSON, nullable=True)
+    demand_breakdown_json = Column(JSON, nullable=True)  # per demand_type + included/excluded, or OVERRIDE/FORECAST_TOTAL
     demand_includes_samples = Column(Boolean, nullable=False, server_default="true")
     is_frozen = Column(Boolean, nullable=False, server_default="false")
 
@@ -277,7 +278,7 @@ class PlanRunEvent(Base):
     event_type = Column(String(64), nullable=False)
     created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
     created_by = Column(String(256), nullable=True)
-    details_json = Column(JSONB, nullable=True)
+    details_json = Column(JSON, nullable=True)
 
 
 class ProjectedInventory(Base):
@@ -388,9 +389,9 @@ class ProductMasterStage(Base):
     """Staging rows for product_master ingestion (payload = raw CSV row)."""
     __tablename__ = "product_master_stage"
     id = Column(Integer, primary_key=True, index=True)
-    ingestion_run_id = Column(UUID(as_uuid=True), ForeignKey("ingestion_runs.id", ondelete="CASCADE"), nullable=False)
+    ingestion_run_id = Column(Uuid(as_uuid=True), ForeignKey("ingestion_runs.id", ondelete="CASCADE"), nullable=False)
     row_number = Column(Integer, nullable=False)
-    payload = Column(JSONB, nullable=False)
+    payload = Column(JSON, nullable=False)
 
 
 class WarehouseProduct(Base):
@@ -509,7 +510,7 @@ def _enum_values(enum_cls: type[enum.Enum]) -> list[str]:
 
 class IngestionRun(Base):
     __tablename__ = "ingestion_runs"
-    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    id = Column(Uuid(as_uuid=True), primary_key=True, default=uuid.uuid4)
     source_type = Column(
         SQLEnum(IngestionSourceType, values_callable=_enum_values),
         nullable=False,
@@ -535,7 +536,7 @@ class IngestionRun(Base):
     created_by = Column(String(256), nullable=True)
     # Weekly vs historical ingestion mode
     mode = Column(
-        PGEnum(IngestionMode, name="ingestion_mode_enum", create_type=False, values_callable=_enum_values),
+        SQLEnum(IngestionMode, values_callable=_enum_values, native_enum=False, length=32),
         nullable=True,
         server_default="weekly",
     )
@@ -545,7 +546,7 @@ class IngestionRun(Base):
     requires_confirm = Column(Boolean, nullable=False, server_default="false")
     confirmed_at = Column(DateTime(timezone=True), nullable=True)
     confirmed_by = Column(String(256), nullable=True)
-    progress_meta = Column(JSONB, nullable=True)
+    progress_meta = Column(JSON, nullable=True)
     rejections = relationship("IngestionRejection", back_populates="ingestion_run", cascade="all, delete-orphan")
     demand_stage_rows = relationship("DemandStageWeekly", back_populates="ingestion_run", cascade="all, delete-orphan")
     forecast_output_stage_rows = relationship(
@@ -562,9 +563,9 @@ class IngestionRun(Base):
 class IngestionRejection(Base):
     __tablename__ = "ingestion_rejections"
     id = Column(Integer, primary_key=True, index=True)
-    ingestion_run_id = Column(UUID(as_uuid=True), ForeignKey("ingestion_runs.id", ondelete="CASCADE"), nullable=False)
+    ingestion_run_id = Column(Uuid(as_uuid=True), ForeignKey("ingestion_runs.id", ondelete="CASCADE"), nullable=False)
     row_number = Column(Integer, nullable=False)
-    raw_payload = Column(JSONB, nullable=True)
+    raw_payload = Column(JSON, nullable=True)
     reason = Column(Text, nullable=False)
     ingestion_run = relationship("IngestionRun", back_populates="rejections")
 
@@ -585,7 +586,7 @@ class SkuCodeMap(Base):
 class DemandStageWeekly(Base):
     __tablename__ = "demand_stage_weekly"
     id = Column(Integer, primary_key=True, index=True)
-    ingestion_run_id = Column(UUID(as_uuid=True), ForeignKey("ingestion_runs.id", ondelete="CASCADE"), nullable=False)
+    ingestion_run_id = Column(Uuid(as_uuid=True), ForeignKey("ingestion_runs.id", ondelete="CASCADE"), nullable=False)
     week_start = Column(Date, nullable=False, index=True)
     sku_raw = Column(String(64), nullable=False)
     sku = Column(String(64), nullable=False)
@@ -611,7 +612,7 @@ class DemandFactsWeekly(Base):
     warehouse_code = Column(String(32), nullable=False, index=True)
     demand_type = Column(SQLEnum(DemandType), nullable=False)
     qty = Column(Numeric(18, 4), nullable=False)
-    source_run_id = Column(UUID(as_uuid=True), ForeignKey("ingestion_runs.id", ondelete="SET NULL"), nullable=True)
+    source_run_id = Column(Uuid(as_uuid=True), ForeignKey("ingestion_runs.id", ondelete="SET NULL"), nullable=True)
     is_imputed = Column(Boolean, nullable=False, server_default="false")
     is_outlier = Column(Boolean, nullable=False, server_default="false")
     outlier_method = Column(String(64), nullable=True)
@@ -637,14 +638,14 @@ class BaselineForecastWeekly(Base):
     train_window_start = Column(Date, nullable=False)
     train_window_end = Column(Date, nullable=False)
     train_end_week_start = Column(Date, nullable=False, index=True)  # inference_date / run date
-    metrics_json = Column(JSONB, nullable=True)
+    metrics_json = Column(JSON, nullable=True)
 
 
 class SalesOutStage(Base):
     """Staging rows for Sales Out ingestion (CSV/XLSX)."""
     __tablename__ = "sales_out_stage"
     id = Column(Integer, primary_key=True, index=True)
-    ingestion_run_id = Column(UUID(as_uuid=True), ForeignKey("ingestion_runs.id", ondelete="CASCADE"), nullable=False)
+    ingestion_run_id = Column(Uuid(as_uuid=True), ForeignKey("ingestion_runs.id", ondelete="CASCADE"), nullable=False)
     aah_product_code = Column(Text, nullable=False)
     account_code = Column(Text, nullable=True)
     customer_name = Column(Text, nullable=True)
@@ -660,7 +661,7 @@ class SalesOutStage(Base):
     processed_year = Column(Integer, nullable=True)
     print_branch = Column(Text, nullable=True)
     branch = Column(Text, nullable=True)
-    raw_json = Column(JSONB, nullable=True)
+    raw_json = Column(JSON, nullable=True)
     ingestion_run = relationship("IngestionRun", back_populates="sales_out_stage_rows")
 
 
@@ -693,7 +694,7 @@ class StockOnHandStage(Base):
     """Staging rows for SOH ingestion (CSV/XLSX)."""
     __tablename__ = "stock_on_hand_stage"
     id = Column(Integer, primary_key=True, index=True)
-    ingestion_run_id = Column(UUID(as_uuid=True), ForeignKey("ingestion_runs.id", ondelete="CASCADE"), nullable=False)
+    ingestion_run_id = Column(Uuid(as_uuid=True), ForeignKey("ingestion_runs.id", ondelete="CASCADE"), nullable=False)
     stock_at_raw = Column(Text, nullable=True)
     branch_name_raw = Column(Text, nullable=True)
     aah_code_raw = Column(Text, nullable=True)
@@ -718,7 +719,7 @@ class InventorySnapshotDaily(Base):
     on_hand_units = Column(Numeric(18, 4), nullable=False, server_default="0")
     on_order_units = Column(Numeric(18, 4), nullable=False, server_default="0")
     source_type = Column(String(32), nullable=False)
-    source_run_id = Column(UUID(as_uuid=True), ForeignKey("ingestion_runs.id", ondelete="SET NULL"), nullable=True)
+    source_run_id = Column(Uuid(as_uuid=True), ForeignKey("ingestion_runs.id", ondelete="SET NULL"), nullable=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
 
 
@@ -726,7 +727,7 @@ class ForecastRunOutputStage(Base):
     """Staging rows for forecast output ingestion (Excel/CSV)."""
     __tablename__ = "forecast_run_output_stage"
     id = Column(Integer, primary_key=True, index=True)
-    ingestion_run_id = Column(UUID(as_uuid=True), ForeignKey("ingestion_runs.id", ondelete="CASCADE"), nullable=False)
+    ingestion_run_id = Column(Uuid(as_uuid=True), ForeignKey("ingestion_runs.id", ondelete="CASCADE"), nullable=False)
     aah_product_code = Column(Text, nullable=False)
     product_name = Column(Text, nullable=True)
     inference_date = Column(Date, nullable=False)
@@ -741,7 +742,7 @@ class ForecastRunOutputStage(Base):
     is_best_model = Column(Boolean, nullable=True)
     outlier = Column(Integer, nullable=True)
     predicted_best_model_bool = Column(Boolean, nullable=True)
-    raw_json = Column(JSONB, nullable=True)
+    raw_json = Column(JSON, nullable=True)
     ingestion_run = relationship("IngestionRun", back_populates="forecast_output_stage_rows")
 
 
@@ -795,7 +796,7 @@ class Role(Base):
 
 class User(Base):
     __tablename__ = "users"
-    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    id = Column(Uuid(as_uuid=True), primary_key=True, default=uuid.uuid4)
     entra_oid = Column(String(256), unique=True, nullable=True, index=True)
     email = Column(String(256), nullable=False, index=True)
     display_name = Column(String(256), nullable=True)
@@ -808,7 +809,7 @@ class User(Base):
 class UserRole(Base):
     __tablename__ = "user_roles"
     __table_args__ = (UniqueConstraint("user_id", "role_id", name="uq_user_roles_user_role"),)
-    user_id = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), primary_key=True)
+    user_id = Column(Uuid(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), primary_key=True)
     role_id = Column(Integer, ForeignKey("roles.id", ondelete="CASCADE"), primary_key=True)
 
 
@@ -816,7 +817,7 @@ class AppSettings(Base):
     """Key-value app config (e.g. sample_sales_soh_warehouses)."""
     __tablename__ = "app_settings"
     key = Column(String(128), primary_key=True)
-    value = Column(JSONB, nullable=False)
+    value = Column(JSON, nullable=False)
 
 
 # Back-populate relationships on Product, Warehouse, Supplier

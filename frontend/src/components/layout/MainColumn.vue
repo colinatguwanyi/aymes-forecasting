@@ -1,6 +1,7 @@
 <template>
   <div class="main-column">
     <TopBar />
+    <BannerBar />
     <div class="page-content">
       <router-view v-slot="{ Component }">
         <component :is="Component" />
@@ -11,6 +12,7 @@
 
 <script setup lang="ts">
 import TopBar from './TopBar.vue'
+import BannerBar from './BannerBar.vue'
 </script>
 
 <style scoped>
@@ -25,7 +27,9 @@ import TopBar from './TopBar.vue'
 .page-content {
   flex: 1;
   overflow: auto;
-  background: var(--main-bg);
-  padding: 1rem;
+  background: rgb(248 250 252);
+  max-width: 80rem;
+  margin: 0 auto;
+  padding: 1.5rem;
 }
 </style>

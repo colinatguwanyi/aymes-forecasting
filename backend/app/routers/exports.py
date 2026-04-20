@@ -10,10 +10,11 @@ from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
 
 from app.database import get_db
+from app.security.auth import require_any_auth
 from app.models import PlanRun, PlannedOrder, PlanningPolicy, ProjectedInventory
 
 logger = logging.getLogger(__name__)
-router = APIRouter()
+router = APIRouter(dependencies=[Depends(require_any_auth)])
 
 
 def _stream_csv(rows: list[dict[str, Any]], columns: list[str]) -> StringIO:

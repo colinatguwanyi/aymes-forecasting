@@ -1,12 +1,14 @@
 import { defineStore } from 'pinia'
 import { ref, computed } from 'vue'
 import api, {
+  type ForecastRunOption,
   type PlanRun,
   type PlannedOrder,
   type PlanningException,
   type ProjectedInventory,
   type Receipt,
   type DemandActual,
+  type DemandInputRow,
   type InventorySnapshot,
   type SkuWeekExplanation,
   type StockPositionBreakdown,
@@ -28,7 +30,8 @@ export const usePlanningStore = defineStore('planning', () => {
     runAt?: string,
     demandSource: string = 'actuals',
     freezeWeeks: number = 4,
-    notes?: string
+    notes?: string,
+    warehousesScope?: string[] | null
   ) {
     const params = new URLSearchParams({
       scenario_name: scenarioName,
@@ -37,6 +40,7 @@ export const usePlanningStore = defineStore('planning', () => {
     })
     if (runAt) params.set('run_at', runAt)
     if (notes) params.set('notes', notes)
+    if (warehousesScope && warehousesScope.length) params.set('warehouses_scope', warehousesScope.join(','))
     const { data } = await api.post<PlanRun>(`/plan/run?${params}`)
     planRuns.value = [data, ...planRuns.value]
     return data
@@ -52,6 +56,30 @@ export const usePlanningStore = defineStore('planning', () => {
 
   async function recalculateDemand(planRunId: number) {
     await api.post(`/plan/runs/${planRunId}/recalculate-demand`)
+  }
+
+  async function getForecastRuns(warehouseCode: string = 'AAH') {
+    const { data } = await api.get<ForecastRunOption[]>(`/forecast/runs?warehouse_code=${encodeURIComponent(warehouseCode)}`)
+    return data
+  }
+
+  async function resetForecastRun(planRunId: number, resetAll: boolean = false, createdBy?: string) {
+    const params = new URLSearchParams()
+    if (resetAll) params.set('reset_all', 'true')
+    if (createdBy) params.set('created_by', createdBy)
+    const { data } = await api.post<PlanRun>(`/plan/runs/${planRunId}/reset-forecast-run${params.toString() ? `?${params}` : ''}`)
+    return data
+  }
+
+  async function updatePlanRunBaseline(planRunId: number, baselineTrainEndWeekStart: string | null) {
+    const params = new URLSearchParams()
+    if (baselineTrainEndWeekStart != null && baselineTrainEndWeekStart !== '') {
+      params.set('baseline_train_end_week_start', baselineTrainEndWeekStart)
+    } else {
+      params.set('clear_baseline_train_end_week_start', 'true')
+    }
+    const { data } = await api.patch<PlanRun>(`/plan/runs/${planRunId}?${params}`)
+    return data
   }
 
   async function fetchExplain(planRunId: number, sku: string, warehouseCode: string, weekStart: string) {
@@ -152,6 +180,20 @@ export const usePlanningStore = defineStore('planning', () => {
     return data
   }
 
+  async function fetchDemandInputs(
+    planRunId: number,
+    fromWeek?: string,
+    toWeek?: string
+  ) {
+    const params = new URLSearchParams()
+    if (fromWeek) params.set('from_week', fromWeek)
+    if (toWeek) params.set('to_week', toWeek)
+    const { data } = await api.get<DemandInputRow[]>(
+      `/plan/runs/${planRunId}/demand-inputs${params.toString() ? `?${params}` : ''}`
+    )
+    return data
+  }
+
   const selectedRuns = computed(() =>
     planRuns.value.filter((r) => selectedRunIds.value.includes(r.id))
   )
@@ -164,6 +206,9 @@ export const usePlanningStore = defineStore('planning', () => {
     runPlan,
     freezePlanRun,
     recalculateDemand,
+    getForecastRuns,
+    resetForecastRun,
+    updatePlanRunBaseline,
     fetchExplain,
     fetchProjectedInventory,
     fetchPlannedOrders,
@@ -174,5 +219,6 @@ export const usePlanningStore = defineStore('planning', () => {
     fetchInventorySnapshots,
     fetchStockPositionBreakdown,
     fetchStockPositionRolling,
+    fetchDemandInputs,
   }
 })

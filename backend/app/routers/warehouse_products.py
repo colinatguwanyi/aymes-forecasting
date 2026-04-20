@@ -7,11 +7,12 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
 
 from app.database import get_db
+from app.security.auth import require_any_auth
 from app.models import WarehouseProduct as WarehouseProductModel, Warehouse, Product
 from app.schemas import WarehouseProduct, WarehouseProductCreate, WarehouseProductUpdate
 
 logger = logging.getLogger(__name__)
-router = APIRouter()
+router = APIRouter(dependencies=[Depends(require_any_auth)])
 
 
 @router.get("", response_model=list[WarehouseProduct])

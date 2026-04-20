@@ -1,37 +1,104 @@
 <template>
   <div class="page-content-inner">
-    <p class="muted">Stockout risk next 8 / 13 weeks and top SKUs by risk.</p>
+    <p class="muted">Decision-focused summary: run a plan, view stockout risk for the next 8–13 weeks, and top SKUs at risk. For freeze, recalculate, compare scenarios, and forecast health, go to <router-link to="/planning/scenario-manager" class="text-blue-600 hover:underline">Advanced Planning</router-link>.</p>
+
+    <section v-if="dataHealth && !dataHealthLoading" class="data-readiness-strip">
+      <span>Demand: {{ dataHealth.demand?.latest_week ?? '—' }}</span>
+      <span>SOH: {{ dataHealth.soh?.latest_week ?? '—' }}</span>
+      <span>Policies: {{ dataHealth.planning_policies?.count ?? 0 }} ok</span>
+      <router-link v-if="!dataHealth.ready_to_plan" to="/setup" class="text-amber-600 hover:underline font-medium">Complete setup →</router-link>
+    </section>
+
+    <section v-if="runPlanError" class="content-section run-plan-error-banner">
+      <strong>Plan run failed:</strong> {{ runPlanError.code === 'demo_data_detected' ? 'Demo data disabled; please load real data.' : runPlanError.message }}
+      <ul v-if="runPlanError.skipped_warehouses?.length" class="mt-2 list-disc list-inside">
+        <li v-for="s in runPlanError.skipped_warehouses" :key="s.warehouse_code">{{ s.warehouse_code }}: {{ s.blockers.join('; ') }}</li>
+      </ul>
+      <div class="mt-2 flex gap-2">
+        <router-link to="/imports" class="text-sm font-medium underline">Imports</router-link>
+        <router-link to="/admin/policies" class="text-sm font-medium underline">Policies</router-link>
+        <router-link v-if="runPlanError.code === 'demo_data_detected'" to="/reports/data-health" class="text-sm font-medium underline">View diagnostics</router-link>
+      </div>
+    </section>
+
+    <section v-if="planCreatedSuccess" class="content-section plan-created-banner">
+      <strong>Plan created successfully.</strong> {{ planCreatedSuccess }}
+      <router-link to="/reports/data-health" class="text-blue-600 hover:underline font-medium ml-1">View diagnostics</router-link>
+      — Select it below to see stockout risk, or <router-link to="/inventory-projection" class="text-blue-600 hover:underline font-medium">view projections in Inventory Projection</router-link>.
+    </section>
+
+    <section v-if="planRuns.length && !selectedRunId" class="content-section info-banner">
+      You have {{ planRuns.length }} plan run{{ planRuns.length === 1 ? '' : 's' }}. Select one below to see stockout risk, or <router-link to="/inventory-projection" class="text-blue-600 hover:underline">go to Inventory Projection</router-link> to view week-by-week data.
+    </section>
 
     <section v-if="loading" class="content-section">Loading...</section>
     <template v-else>
       <section class="content-section">
         <h2>Run a scenario</h2>
-        <form @submit.prevent="runScenario" class="form-inline plan-run-form">
-          <input v-model="scenarioName" class="app-input" placeholder="Scenario name" required style="max-width: 12rem;" />
-          <label class="form-label">Demand source</label>
-          <select v-model="demandSource" class="app-select" style="max-width: 10rem;">
-            <option value="actuals">Actuals</option>
-            <option value="baseline">Baseline forecast</option>
-            <option value="blended">Blended</option>
-          </select>
-          <label class="form-label">Freeze weeks</label>
-          <input v-model.number="freezeWeeks" type="number" min="0" max="52" class="app-input" style="max-width: 4rem;" />
-          <button type="submit" class="app-btn app-btn-primary">Run plan</button>
-        </form>
-      </section>
-
-      <section v-if="selectedRunId" class="content-section">
-        <h2>Plan run actions</h2>
-        <p class="muted">Selected: {{ selectedRunName }}</p>
-        <div class="actions-row">
-          <button type="button" @click="doFreeze" class="app-btn app-btn-secondary">Freeze now</button>
-          <select v-model="freezeScope" class="app-select" style="max-width: 8rem;">
-            <option value="both">Demand &amp; orders</option>
-            <option value="demand">Demand only</option>
-            <option value="orders">Orders only</option>
-          </select>
-          <button type="button" @click="doRecalculateDemand" class="app-btn app-btn-secondary">Recalculate (non-frozen demand)</button>
+        <p class="text-sm text-slate-600 mb-3">Create a new plan run. Check <router-link to="/reports/data-health" class="text-blue-600 hover:underline">Data Health</router-link> if the run fails.</p>
+        <div class="mb-3">
+          <label class="form-label block mb-1">Warehouse scope</label>
+          <div class="flex flex-wrap gap-4 items-center">
+            <label class="flex items-center gap-2 cursor-pointer">
+              <input v-model="warehouseScope" type="radio" value="AAH" />
+              <span>AAH</span>
+              <span v-if="warehouseReadiness" class="text-xs" :class="readinessFor('AAH')?.ready ? 'text-green-600' : 'text-amber-600'">
+                {{ readinessFor('AAH')?.ready ? '✅ Ready' : readinessFor('AAH') ? `❌ ${(readinessFor('AAH')?.blockers ?? []).join(', ')}` : '' }}
+              </span>
+            </label>
+            <label class="flex items-center gap-2 cursor-pointer">
+              <input v-model="warehouseScope" type="radio" value="BLP" />
+              <span>BLP</span>
+              <span v-if="warehouseReadiness" class="text-xs" :class="readinessFor('BLP')?.ready ? 'text-green-600' : 'text-amber-600'">
+                {{ readinessFor('BLP')?.ready ? '✅ Ready' : readinessFor('BLP') ? `❌ ${(readinessFor('BLP')?.blockers ?? []).slice(0, 2).join(', ')}` : '' }}
+              </span>
+            </label>
+            <label class="flex items-center gap-2 cursor-pointer">
+              <input v-model="warehouseScope" type="radio" value="all_ready" />
+              <span>All ready warehouses</span>
+              <span v-if="warehouseReadiness" class="text-xs text-slate-500">
+                ({{ warehouseReadiness.filter(r => r.ready).length }} ready)
+              </span>
+            </label>
+          </div>
         </div>
+        <form @submit.prevent="runScenario" class="form-inline plan-run-form">
+          <div>
+            <button
+              type="submit"
+              class="app-btn app-btn-primary"
+              :disabled="runPlanLoading || !readyToPlan"
+              :title="readyToPlan ? 'Create a new plan run.' : 'Complete setup first.'"
+            >
+              {{ runPlanLoading ? 'Running…' : runPlanButtonLabel }}
+            </button>
+            <p class="text-xs text-slate-500 mt-1">Uses Sales Out (demand_actuals) and latest SOH.</p>
+          </div>
+          <details class="ml-3">
+            <summary class="text-sm text-slate-600 cursor-pointer hover:text-slate-800">Advanced run options</summary>
+            <div class="form-inline plan-run-form mt-2">
+              <label class="form-label">Run name</label>
+              <input v-model="runName" type="text" class="app-input" placeholder="e.g. Q1 baseline" style="max-width: 14rem;" title="Optional. If blank, uses scenario + date (e.g. baseline 2025-02-24)." />
+              <label class="form-label">Scenario</label>
+              <select v-model="scenarioName" class="app-select" required style="max-width: 12rem;">
+                <option value="baseline">Baseline</option>
+                <option value="blended">Blended</option>
+                <option value="actuals">Actuals</option>
+                <option value="Conservative">Conservative</option>
+                <option value="Aggressive">Aggressive</option>
+                <option value="Promo uplift">Promo uplift</option>
+              </select>
+              <label class="form-label">Demand source</label>
+              <select v-model="demandSource" class="app-select" style="max-width: 14rem;">
+                <option value="actuals">Actuals (Sales Out)</option>
+                <option value="baseline">Baseline forecast</option>
+                <option value="blended">Blended</option>
+              </select>
+              <label class="form-label">Freeze weeks</label>
+              <input v-model.number="freezeWeeks" type="number" min="0" max="52" class="app-input" style="max-width: 4rem;" />
+            </div>
+          </details>
+        </form>
       </section>
 
       <section class="content-section">
@@ -54,9 +121,9 @@
 
       <section class="content-section">
         <h2>Top SKUs by risk</h2>
-        <select v-model="selectedRunId" class="app-select" style="max-width: 20rem; margin-bottom: 0.5rem;">
+        <select v-model="selectedRunId" class="app-select" style="max-width: 20rem; margin-bottom: 0.5rem;" title="Choose a plan run to see its stockout risk.">
           <option :value="null">Select scenario</option>
-          <option v-for="r in planRuns" :key="r.id" :value="r.id">{{ r.scenario_name }} ({{ r.created_at }})</option>
+          <option v-for="r in planRuns" :key="r.id" :value="r.id">{{ formatPlanRunLabel(r) }}</option>
         </select>
         <div v-if="selectedRunId && topRisks.length" class="app-table-wrap">
           <table class="app-table">
@@ -66,14 +133,28 @@
                 <th>Warehouse</th>
                 <th>Weeks at risk</th>
                 <th>Min weeks of cover</th>
+                <th></th>
               </tr>
             </thead>
             <tbody>
-              <tr v-for="(row, i) in topRisks" :key="i">
+              <tr
+                v-for="(row, i) in topRisks"
+                :key="i"
+                class="top-risk-row"
+                @click="goToPlanningGrid(row)"
+              >
                 <td>{{ row.sku }}</td>
                 <td>{{ row.warehouse_code }}</td>
                 <td>{{ row.stockoutWeeks }}</td>
                 <td>{{ row.minWoc }}</td>
+                <td>
+                  <router-link
+                    :to="planningGridLink(row)"
+                    class="view-icon"
+                    title="View in Weekly Planning Grid"
+                    @click.stop
+                  >View</router-link>
+                </td>
               </tr>
             </tbody>
           </table>
@@ -82,43 +163,8 @@
       </section>
 
       <section class="content-section">
-        <h2>Compare scenarios</h2>
-        <p class="muted">Compare exception counts between two runs (within 26 weeks).</p>
-        <div class="compare-controls">
-          <div class="form-row">
-            <label class="form-label">Scenario A</label>
-            <select v-model="compareRunA" class="app-select" style="max-width: 18rem;">
-              <option :value="null">Select</option>
-              <option v-for="r in planRuns" :key="r.id" :value="r.id">{{ r.scenario_name }} ({{ r.created_at }})</option>
-            </select>
-          </div>
-          <div class="form-row">
-            <label class="form-label">Scenario B</label>
-            <select v-model="compareRunB" class="app-select" style="max-width: 18rem;">
-              <option :value="null">Select</option>
-              <option v-for="r in planRuns" :key="r.id" :value="r.id">{{ r.scenario_name }} ({{ r.created_at }})</option>
-            </select>
-          </div>
-        </div>
-        <div v-if="compareRunA && compareRunB" class="compare-summary">
-          <div class="compare-card">
-            <h3>{{ runAName }}</h3>
-            <p>Stockouts: {{ exceptionsA.filter(e => e.type === 'stockout').length }}</p>
-            <p>Low cover: {{ exceptionsA.filter(e => e.type === 'low_cover').length }}</p>
-            <router-link :to="{ path: '/planning-grid', query: { plan_run_id: String(compareRunA) } }" class="app-btn">View in Planning Grid</router-link>
-          </div>
-          <div class="compare-card">
-            <h3>{{ runBName }}</h3>
-            <p>Stockouts: {{ exceptionsB.filter(e => e.type === 'stockout').length }}</p>
-            <p>Low cover: {{ exceptionsB.filter(e => e.type === 'low_cover').length }}</p>
-            <router-link :to="{ path: '/planning-grid', query: { plan_run_id: String(compareRunB) } }" class="app-btn">View in Planning Grid</router-link>
-          </div>
-        </div>
-        <p v-else class="muted">Select two scenarios to compare.</p>
-      </section>
-
-      <section class="content-section">
         <h2>Plan runs</h2>
+        <p class="text-sm text-slate-600 mb-2">Click a row to select it. Selected run drives stockout risk above. For advanced actions, go to <router-link to="/planning/scenario-manager" class="text-blue-600 hover:underline">Advanced Planning</router-link>.</p>
         <div class="app-table-wrap">
           <table class="app-table">
             <thead>
@@ -137,7 +183,7 @@
                 :class="{ 'row-selected': selectedRunId === r.id }"
                 @click="selectedRunId = r.id"
               >
-                <td>{{ r.scenario_name }}</td>
+                <td>{{ formatPlanRunLabel(r) }}</td>
                 <td>{{ r.demand_source ?? 'actuals' }}</td>
                 <td>{{ r.freeze_weeks ?? 4 }}</td>
                 <td>{{ r.run_at }}</td>
@@ -147,73 +193,78 @@
           </table>
         </div>
       </section>
-
-      <section class="content-section">
-        <h2>Forecast health (baseline)</h2>
-        <p class="muted">WAPE and Bias from last 12 weeks backtest. Run a baseline forecast to populate.</p>
-        <div v-if="forecastMetricsLoading" class="muted">Loading metrics…</div>
-        <div v-else-if="forecastMetrics.length" class="app-table-wrap">
-          <table class="app-table">
-            <thead>
-              <tr>
-                <th>Model</th>
-                <th>Train end week</th>
-                <th>SKU</th>
-                <th>Warehouse</th>
-                <th>WAPE</th>
-                <th>Bias</th>
-              </tr>
-            </thead>
-            <tbody>
-              <tr v-for="(m, i) in forecastMetrics" :key="i">
-                <td>{{ m.model_name }} {{ m.model_version }}</td>
-                <td>{{ m.train_end_week_start }}</td>
-                <td>{{ m.sku }}</td>
-                <td>{{ m.warehouse_code }}</td>
-                <td>{{ m.wape != null ? (m.wape * 100).toFixed(2) + '%' : '—' }}</td>
-                <td>{{ m.bias != null ? m.bias.toFixed(2) : '—' }}</td>
-              </tr>
-            </tbody>
-          </table>
-        </div>
-        <p v-else class="muted">No forecast metrics yet.</p>
-      </section>
     </template>
   </div>
 </template>
 
 <script setup lang="ts">
 import { ref, computed, onMounted, watch } from 'vue'
-import api from '@/api/client'
+import { useRouter } from 'vue-router'
 import { usePlanningStore } from '@/stores/planning'
-import type { ProjectedInventory, PlanningException } from '@/api/client'
+import type { ProjectedInventory } from '@/api/client'
+import { formatPlanRunLabel, fetchPlanningReadiness, fetchWarehouseReadiness, type WarehouseReadinessItem } from '@/api/client'
+import { useBannerStore } from '@/stores/banner'
+import api from '@/api/client'
 
-export interface ForecastMetric {
-  model_name: string
-  model_version: string
-  train_end_week_start: string
-  sku: string
-  warehouse_code: string
-  wape: number | null
-  bias: number | null
+interface DataHealth {
+  demand: { latest_week: string | null }
+  soh: { latest_week: string | null }
+  planning_policies: { count: number }
+  ready_to_plan: boolean
 }
 
+const router = useRouter()
 const store = usePlanningStore()
-const forecastMetrics = ref<ForecastMetric[]>([])
-const forecastMetricsLoading = ref(false)
+const bannerStore = useBannerStore()
 const loading = ref(true)
+const runPlanLoading = ref(false)
+const planCreatedSuccess = ref('')
+const runName = ref('')
 const scenarioName = ref('baseline')
 const demandSource = ref<'actuals' | 'baseline' | 'blended'>('actuals')
 const freezeWeeks = ref(4)
-const freezeScope = ref<'demand' | 'orders' | 'both'>('both')
 const selectedRunId = ref<number | null>(null)
-const compareRunA = ref<number | null>(null)
-const compareRunB = ref<number | null>(null)
-const exceptionsA = ref<PlanningException[]>([])
-const exceptionsB = ref<PlanningException[]>([])
+const dataHealth = ref<DataHealth | null>(null)
+const dataHealthLoading = ref(true)
+const warehouseScope = ref<'AAH' | 'BLP' | 'all_ready'>('AAH')
+const warehouseReadiness = ref<WarehouseReadinessItem[]>([])
+const runPlanError = ref<{ code?: string; message?: string; skipped_warehouses?: Array<{ warehouse_code: string; blockers: string[] }> } | null>(null)
 
 const planRuns = computed(() => store.planRuns)
+const readyToPlan = computed(() => !!dataHealth.value?.ready_to_plan)
+const runPlanButtonLabel = computed(() => {
+  const scenario = scenarioName.value.charAt(0).toUpperCase() + scenarioName.value.slice(1)
+  const demand = demandSource.value === 'actuals' ? 'Actuals' : demandSource.value === 'baseline' ? 'Baseline' : 'Blended'
+  return `Run plan (${scenario} • ${demand} • Freeze ${freezeWeeks.value}w)`
+})
 
+function planningGridLink(row: { sku: string; warehouse_code: string }) {
+  return {
+    path: '/planning-grid',
+    query: {
+      plan_run_id: String(selectedRunId.value),
+      sku: row.sku,
+      warehouse_code: row.warehouse_code,
+    },
+  }
+}
+
+function goToPlanningGrid(row: { sku: string; warehouse_code: string }) {
+  router.push(planningGridLink(row))
+}
+
+function readinessFor(wh: string): WarehouseReadinessItem | undefined {
+  return warehouseReadiness.value.find((r) => r.warehouse_code === wh)
+}
+
+/** Condense blockers into "missing SOH/demand/policies" format */
+function condenseBlockers(blockers: string[]): string {
+  const parts: string[] = []
+  if (blockers.some((b) => /SOH|Stock On Hand/i.test(b))) parts.push('SOH')
+  if (blockers.some((b) => /demand|sales|Direct sales/i.test(b))) parts.push('demand')
+  if (blockers.some((b) => /polic/i.test(b))) parts.push('policies')
+  return parts.length ? `missing ${parts.join('/')}` : 'not ready'
+}
 const projected = ref<ProjectedInventory[]>([])
 const weeks8 = 8
 const weeks13 = 13
@@ -264,30 +315,86 @@ const topRisks = computed(() => {
     .slice(0, 20)
 })
 
-const runAName = computed(() => planRuns.value.find((r) => r.id === compareRunA.value)?.scenario_name ?? '—')
-const runBName = computed(() => planRuns.value.find((r) => r.id === compareRunB.value)?.scenario_name ?? '—')
-const selectedRunName = computed(() => planRuns.value.find((r) => r.id === selectedRunId.value)?.scenario_name ?? '—')
-
-async function runScenario() {
-  await store.runPlan(scenarioName.value, undefined, demandSource.value, freezeWeeks.value)
-  await store.fetchPlanRuns()
-  if (store.planRuns.length) selectedRunId.value = store.planRuns[0].id
+function resolveWarehousesScope(): string[] | null {
+  if (warehouseScope.value === 'AAH') return ['AAH']
+  if (warehouseScope.value === 'BLP') return ['BLP']
+  if (warehouseScope.value === 'all_ready') {
+    const ready = warehouseReadiness.value.filter((r) => r.ready).map((r) => r.warehouse_code)
+    return ready.length ? ready : null
+  }
+  return null
 }
 
-async function loadForecastMetrics() {
-  forecastMetricsLoading.value = true
+async function runScenario() {
+  runPlanLoading.value = true
+  planCreatedSuccess.value = ''
+  runPlanError.value = null
+  const notes = runName.value.trim() || `${scenarioName.value} ${new Date().toISOString().slice(0, 10)}`
+  const whScope = resolveWarehousesScope()
   try {
-    const { data } = await api.get<ForecastMetric[]>('/forecast/metrics', { params: { limit: 100 } })
-    forecastMetrics.value = data
+    const run = await store.runPlan(scenarioName.value, undefined, demandSource.value, freezeWeeks.value, notes, whScope)
+    await store.fetchPlanRuns()
+    if (store.planRuns.length) selectedRunId.value = store.planRuns[0].id
+    const meta = run.progress_meta as {
+      warehouses_planned?: string[]
+      warehouses_planned_detail?: Array<{ warehouse_code: string; latest_soh_week_start?: string; latest_demand_week_start?: string; skus_planned?: number }>
+      warehouses_skipped?: string[]
+      skipped_warehouses_detail?: Array<{ warehouse_code: string; blockers: string[] }>
+    } | undefined
+    const plannedDetail = meta?.warehouses_planned_detail ?? []
+    const skippedDetail = meta?.skipped_warehouses_detail ?? []
+    const plannedParts = plannedDetail.length
+      ? plannedDetail.map((d) => `${d.warehouse_code} (SOH week: ${d.latest_soh_week_start ?? '—'}, Demand week: ${d.latest_demand_week_start ?? '—'}, SKUs planned: ${d.skus_planned ?? 0})`)
+      : (meta?.warehouses_planned ?? []).map((wh) => wh)
+    const plannedMsg = plannedParts.length ? `Planned: ${plannedDetail.length ? plannedParts.join('. ') : plannedParts.join(', ')}.` : ''
+    const skippedMsg = skippedDetail.map((s) => {
+      const missing = condenseBlockers(s.blockers)
+      return `${s.warehouse_code} (${missing})`
+    }).join(', ')
+    const planMsg = plannedMsg
+    const skipMsg = skippedMsg ? `Skipped: ${skippedMsg}.` : ''
+    planCreatedSuccess.value = [planMsg, skipMsg].filter(Boolean).join(' ') || `"${run.scenario_name}" created.`
+    runPlanError.value = null
+    const msg = [planMsg, skipMsg].filter(Boolean).join(' ') || `"${run.scenario_name}" created.`
+    bannerStore.add({
+      type: 'success',
+      title: 'Plan run created',
+      message: msg,
+      actionLink: { to: '/reports/data-health', label: 'View diagnostics' },
+    })
+    setTimeout(() => { planCreatedSuccess.value = '' }, 8000)
+  } catch (err: unknown) {
+    const res = err && typeof err === 'object' && 'response' in err ? (err as { response?: { status?: number; data?: unknown } }).response : null
+    if (res?.status === 400 && res?.data && typeof res.data === 'object' && 'detail' in res.data) {
+      const detail = res.data.detail as { code?: string; message?: string; skipped_warehouses?: Array<{ warehouse_code: string; blockers: string[] }> }
+      runPlanError.value = detail
+    } else {
+      throw err
+    }
   } finally {
-    forecastMetricsLoading.value = false
+    runPlanLoading.value = false
   }
 }
 
+async function loadDataHealth() {
+  dataHealthLoading.value = true
+  try {
+    const { data } = await api.get<DataHealth>('/v1/reports/data-health')
+    dataHealth.value = data
+  } finally {
+    dataHealthLoading.value = false
+  }
+}
+
+async function loadWarehouseReadiness() {
+  warehouseReadiness.value = await fetchWarehouseReadiness(demandSource.value)
+}
+
+watch([demandSource], loadWarehouseReadiness)
+
 onMounted(async () => {
-  await store.fetchPlanRuns()
-  if (store.planRuns.length) selectedRunId.value = store.planRuns[0].id
-  loadForecastMetrics()
+  await Promise.all([store.fetchPlanRuns(), loadDataHealth(), loadWarehouseReadiness()])
+  if (store.planRuns.length && selectedRunId.value == null) selectedRunId.value = store.planRuns[0].id
   loading.value = false
 })
 
@@ -298,46 +405,61 @@ watch(selectedRunId, async (id) => {
     projected.value = []
   }
 }, { immediate: true })
-
-watch(compareRunA, async (id) => {
-  if (id) exceptionsA.value = await store.fetchExceptions(id, 26, true)
-  else exceptionsA.value = []
-})
-watch(compareRunB, async (id) => {
-  if (id) exceptionsB.value = await store.fetchExceptions(id, 26, true)
-  else exceptionsB.value = []
-})
-
-async function doFreeze() {
-  if (!selectedRunId.value) return
-  await store.freezePlanRun(selectedRunId.value, freezeScope.value)
-  await store.fetchPlanRuns()
-}
-
-async function doRecalculateDemand() {
-  if (!selectedRunId.value) return
-  await store.recalculateDemand(selectedRunId.value)
-  if (selectedRunId.value) projected.value = await store.fetchProjectedInventory(selectedRunId.value)
-}
 </script>
 
 <style scoped>
 .form-inline { display: flex; gap: 0.5rem; align-items: center; flex-wrap: wrap; }
 .risk-summary p { margin: 0.25rem 0; font-size: 0.875rem; }
-.compare-controls { display: flex; flex-wrap: wrap; gap: 1rem 1.5rem; margin-bottom: 0.75rem; }
-.compare-summary { display: flex; gap: 1.5rem; flex-wrap: wrap; }
-.compare-card {
-  min-width: 200px;
-  padding: 1rem;
-  border: 1px solid var(--border);
-  background: var(--main-bg);
-}
-.compare-card h3 { font-size: 0.9375rem; margin-bottom: 0.5rem; }
-.compare-card p { margin: 0.25rem 0; font-size: 0.875rem; }
-.compare-card .app-btn { margin-top: 0.5rem; text-decoration: none; display: inline-block; }
 .plan-run-form .form-label { margin-left: 0.5rem; margin-right: 0.25rem; }
-.actions-row { display: flex; gap: 0.5rem; align-items: center; flex-wrap: wrap; }
 .form-label { font-size: 0.875rem; }
 .app-table tbody tr { cursor: pointer; }
 .app-table tbody tr.row-selected { background: var(--border); }
+.run-plan-error-banner {
+  background: rgb(254 226 226);
+  border: 1px solid rgb(252 165 165);
+  border-radius: 0.5rem;
+  padding: 0.75rem 1rem;
+  color: rgb(127 29 29);
+}
+.plan-created-banner {
+  background: rgb(220 252 231);
+  border: 1px solid rgb(134 239 172);
+  border-radius: 0.5rem;
+  padding: 0.75rem 1rem;
+  color: rgb(22 101 52);
+}
+.info-banner {
+  background: rgb(239 246 255);
+  border: 1px solid rgb(191 219 254);
+  border-radius: 0.5rem;
+  padding: 0.75rem 1rem;
+  color: rgb(30 64 175);
+}
+.data-readiness-strip {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 1rem 1.5rem;
+  align-items: center;
+  padding: 0.5rem 0.75rem;
+  background: rgb(248 250 252);
+  border: 1px solid rgb(226 232 240);
+  border-radius: 0.375rem;
+  font-size: 0.8125rem;
+  color: rgb(71 85 105);
+  margin-bottom: 1rem;
+}
+.top-risk-row {
+  cursor: pointer;
+}
+.top-risk-row:hover {
+  background: rgb(248 250 252);
+}
+.view-icon {
+  font-size: 0.75rem;
+  color: rgb(59 130 246);
+  text-decoration: none;
+}
+.view-icon:hover {
+  text-decoration: underline;
+}
 </style>

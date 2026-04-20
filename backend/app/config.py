@@ -7,7 +7,8 @@ from pydantic_settings import BaseSettings
 
 
 class Settings(BaseSettings):
-    database_url: str = "postgresql://postgres:postgres@localhost:5432/supply_planning"
+    # Platform DB: use mysql+pymysql://... for MySQL 8 (primary). postgresql+psycopg2:// still supported.
+    database_url: str = "mysql+pymysql://aymes:@localhost:3306/supply_planning"
     environment: str = "dev"  # dev, local, prod
     dev_default_user_email: str | None = None  # Fallback when X-Dev-User not provided (dev/local only)
     rbac_bootstrap_admin_emails: str | None = None  # Comma-separated emails for first-admin bootstrap (non-dev only)

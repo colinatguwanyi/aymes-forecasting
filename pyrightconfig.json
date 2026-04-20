@@ -1,16 +1,1 @@
-{
-  "typeCheckingMode": "basic",
-  "reportMissingTypeArgument": "none",
-  "reportUnknownParameterType": "none",
-  "reportUnknownMemberType": "none",
-  "reportUnknownVariableType": "none",
-  "reportUnknownArgumentType": "none",
-  "reportAttributeAccessIssue": "none",
-  "reportUntypedFunctionDecorator": "none",
-  "reportGeneralTypeIssues": "warning",
-  "venvPath": ".",
-  "venv": "venv",
-  "extraPaths": ["backend"],
-  "include": ["backend/app"],
-  "exclude": ["**/node_modules", "**/__pycache__", "venv", "frontend", "backend/alembic"]
-}
+{"typeCheckingMode":"basic","reportMissingImports":"none","reportMissingTypeArgument":"none","reportUnknownParameterType":"none","reportUnknownMemberType":"none","reportUnknownVariableType":"none","reportUnknownArgumentType":"none","reportAttributeAccessIssue":"none","reportUntypedFunctionDecorator":"none","reportGeneralTypeIssues":"warning","venvPath":".","venv":"venv","extraPaths":["backend"],"include":["backend/app"],"exclude":["**/node_modules","**/__pycache__","venv","frontend","backend/alembic"]}

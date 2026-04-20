@@ -49,7 +49,7 @@ try:
     Base.metadata.create_all(bind=engine)
 except Exception as e:
     logger.warning(
-        "Database not available at startup (%s). App will run but API will fail until Postgres is running.",
+        "Database not available at startup (%s). App will run but API will fail until the database is reachable.",
         e,
     )
 

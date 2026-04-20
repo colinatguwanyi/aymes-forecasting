@@ -1,7 +1,14 @@
 <template>
   <div class="space-y-4">
-    <PageHeader title="Planning Policies (SKU × Warehouse)" :breadcrumbs="[{ label: 'Admin', path: '/admin/policies' }]">
+    <PageHeader title="Stock Rules (SKU × Warehouse)" :breadcrumbs="[{ label: 'Settings', path: '/admin/policies' }]">
       <template #actions>
+        <select v-model="generateWarehouse" class="px-3 py-2 text-sm border border-emerald-200 rounded-lg bg-white mr-2">
+          <option v-for="w in activeWarehouses" :key="w.id" :value="w.code">{{ w.code }}</option>
+        </select>
+        <button type="button" class="px-4 py-2 text-sm font-medium text-emerald-700 bg-emerald-50 border border-emerald-200 rounded-lg hover:bg-emerald-100" :disabled="generateLoading" @click="generateDefaults">
+          Generate Defaults for {{ generateWarehouse }}
+          <span v-if="generateWarehousePolicyCount > 0" class="ml-1 text-emerald-500 font-normal">({{ generateWarehousePolicyCount }} exist)</span>
+        </button>
         <button type="button" class="px-4 py-2 text-sm font-medium text-white bg-neutral-700 rounded-lg hover:bg-neutral-800" @click="openDrawer('add')">Add policy</button>
         <button type="button" class="px-4 py-2 text-sm font-medium text-neutral-700 bg-white border border-neutral-300 rounded-lg hover:bg-neutral-50" @click="exportCsv">Export CSV</button>
       </template>
@@ -21,7 +28,7 @@
       @update:pageSize="pagination.pageSize = $event; pagination.page = 1"
       :on-row-click="(row) => $router.push({ name: 'AdminPolicyDetail', params: { id: String(row.id) } })"
     >
-      <template #empty>No planning policies. Add one to define SKU × warehouse settings.</template>
+      <template #empty>No stock rules yet. Add one to define inventory settings per product × warehouse.</template>
     </DataTable>
     <DrawerForm v-model="drawerOpen" :title="drawerMode === 'add' ? 'Add policy' : 'Edit policy'">
       <form class="space-y-4" @submit.prevent="submitDrawer">
@@ -74,11 +81,11 @@
         <div class="flex items-center justify-between">
           <div>
             <label class="block text-sm font-medium text-neutral-700 mb-1">Forecast window (weeks)</label>
-            <input v-model.number="drawerForm.forecast_window_weeks" type="number" min="1" class="w-full border border-neutral-300 rounded-md px-3 py-2 text-sm max-w-[8rem]" />
+            <input v-model.number="drawerForm.forecast_window_weeks" type="number" min="1" class="w-full border border-neutral-300 rounded-md px-3 py-2 text-sm max-w-32" />
           </div>
           <label class="flex items-center gap-2">
             <input v-model="drawerForm.include_samples" type="checkbox" class="rounded border-neutral-300" />
-            <span class="text-sm text-neutral-700">Include samples</span>
+            <span class="text-sm text-neutral-700">Include samples (BLP only)</span>
           </label>
         </div>
       </form>
@@ -94,6 +101,7 @@
 import { ref, computed, reactive, onMounted, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { useAdminStore } from '@/stores/admin'
+import api from '@/api/client'
 import type { PlanningPolicy } from '@/api/client'
 import PageHeader from '@/components/console/PageHeader.vue'
 import FilterBar from '@/components/console/FilterBar.vue'
@@ -105,6 +113,7 @@ import { useDebounce } from '@/composables/useDebounce'
 const router = useRouter()
 const store = useAdminStore()
 const search = ref('')
+const generateLoading = ref(false)
 const debouncedSearch = useDebounce(search, 300)
 const loading = ref(false)
 
@@ -141,7 +150,7 @@ const columns: DataTableColumn[] = [
   { key: 'target_weeks', label: 'Target weeks' },
   { key: 'safety_display', label: 'Safety (weeks / service)' },
   { key: 'forecast_window_weeks', label: 'Forecast window' },
-  { key: 'include_samples', label: 'Include samples', format: 'boolean' },
+  { key: 'include_samples', label: 'Include samples (BLP only)', format: 'boolean' },
 ]
 
 const sortField = ref<string>('sku')
@@ -231,8 +240,36 @@ async function submitDrawer() {
   drawerOpen.value = false
 }
 
+const generateWarehouse = ref('AAH')
+const activeWarehouses = computed(() =>
+  store.warehouses.filter((w) => w.active)
+)
+const generateWarehousePolicyCount = computed(() =>
+  store.planningPolicies.filter((p) => p.warehouse_code === generateWarehouse.value).length
+)
+
+async function generateDefaults() {
+  generateLoading.value = true
+  try {
+    const { data } = await api.post<{ created: number }>('/planning-policies/generate-defaults', null, {
+      params: { warehouse_code: generateWarehouse.value, default_target_weeks: 4, default_safety_stock_weeks: 1, default_lead_time_weeks: 2 },
+    })
+    await store.fetchPlanningPolicies()
+    if (data.created === 0) {
+      alert(`All stock rules for ${generateWarehouse.value} already exist — nothing new to add.`)
+    } else {
+      alert(`Created ${data.created} new stock rules for ${generateWarehouse.value}.`)
+    }
+  } catch (e: unknown) {
+    const msg = e && typeof e === 'object' && 'response' in e && (e as { response?: { data?: { detail?: string } } }).response?.data?.detail
+    alert(msg || 'Failed to generate stock rules.')
+  } finally {
+    generateLoading.value = false
+  }
+}
+
 function exportCsv() {
-  const headers = ['SKU', 'Warehouse', 'Mode', 'Target weeks', 'Safety', 'Forecast window', 'Include samples']
+  const headers = ['SKU', 'Warehouse', 'Mode', 'Target weeks', 'Safety', 'Forecast window', 'Include samples (BLP only)']
   const rows = filteredRows.value.map((r) => [r.sku, r.warehouse_code, r.mode, r.target_weeks, r.safety_display, r.forecast_window_weeks, r.include_samples ? 'Yes' : 'No'])
   const csv = [headers.join(','), ...rows.map((r) => r.map((c) => `"${String(c).replace(/"/g, '""')}"`).join(','))].join('\n')
   const a = document.createElement('a')

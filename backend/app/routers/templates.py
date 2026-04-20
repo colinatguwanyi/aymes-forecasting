@@ -4,11 +4,13 @@ import csv
 import logging
 from io import StringIO
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Depends
 from fastapi.responses import StreamingResponse
 
+from app.security.auth import require_any_auth
+
 logger = logging.getLogger(__name__)
-router = APIRouter()
+router = APIRouter(dependencies=[Depends(require_any_auth)])
 
 
 def _csv_response(headers: list[str], rows: list[list[str]], filename: str) -> StreamingResponse:
@@ -106,6 +108,14 @@ def template_demand_daily() -> StreamingResponse:
         ["2025-02-05", "SKU001", "WH1", "CUSTOMER", "20", "CSV"],
     ]
     return _csv_response(headers, rows, "template_demand_daily.csv")
+
+
+@router.get("/stock-on-hand")
+def template_stock_on_hand() -> StreamingResponse:
+    """SOH extract: Stock at (date), Branch Name, AAH Code, STOCK, ON ORDER. Header only; Branch Name must map to warehouse_code via warehouse_branch_mapping."""
+    headers = ["Stock at", "Branch Name", "AAH Code", "STOCK", "ON ORDER", "Description"]
+    rows: list[list[str]] = []
+    return _csv_response(headers, rows, "template_stock_on_hand.csv")
 
 
 @router.get("/product-master")

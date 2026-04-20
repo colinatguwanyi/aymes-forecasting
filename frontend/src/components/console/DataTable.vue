@@ -1,16 +1,17 @@
 <template>
-  <div class="border border-neutral-200 rounded-lg bg-white overflow-hidden">
+  <div class="data-table-wrapper" :class="[densityClass]">
     <div class="overflow-x-auto">
-      <table class="w-full text-sm border-collapse">
-        <thead class="sticky top-0 z-10 bg-neutral-50 border-b border-neutral-200">
+      <table class="w-full border-collapse data-table">
+        <thead class="data-table-head">
           <tr>
             <th
               v-for="col in columns"
               :key="col.key"
               :class="[
-                'px-3 py-2.5 text-left font-medium text-neutral-600 whitespace-nowrap',
+                densityThClass,
+                'text-left font-medium text-slate-500 whitespace-nowrap',
                 col.align === 'right' && 'text-right',
-                col.sortable && 'cursor-pointer select-none hover:text-neutral-900',
+                col.sortable && 'cursor-pointer select-none hover:text-slate-700',
               ]"
               @click="col.sortable && emit('sort', col.key)"
             >
@@ -22,17 +23,17 @@
                 </template>
               </span>
             </th>
-            <th v-if="rowActions.length" class="w-12 px-3 py-2.5 text-right font-medium text-neutral-600"></th>
+            <th v-if="rowActions.length" :class="['w-12 text-right font-medium text-slate-500', densityThClass]"></th>
           </tr>
         </thead>
         <tbody>
           <tr v-if="loading">
-            <td :colspan="columns.length + (rowActions.length ? 1 : 0)" class="px-3 py-8 text-center text-neutral-500">
+            <td :colspan="columns.length + (rowActions.length ? 1 : 0)" class="px-3 py-8 text-center text-slate-500 text-sm">
               Loading…
             </td>
           </tr>
           <tr v-else-if="!rows.length">
-            <td :colspan="columns.length + (rowActions.length ? 1 : 0)" class="px-3 py-12 text-center text-neutral-500">
+            <td :colspan="columns.length + (rowActions.length ? 1 : 0)" class="px-3 py-12 text-center text-slate-500 text-sm">
               <slot name="empty">
                 No data
               </slot>
@@ -43,9 +44,11 @@
             v-for="(row, idx) in rows"
             :key="rowKey ? (row[rowKey] as string | number) : idx"
             :class="[
-              'border-b border-neutral-100 hover:bg-neutral-50 transition-colors',
+              densityRowClass,
+              'border-b border-slate-200 hover:bg-slate-50 transition-colors',
+              (idx % 2 === 1 && density === 'compact') && 'bg-slate-50/50',
               onRowClick && 'cursor-pointer',
-              selectable && selectedRows?.includes(row[rowKey as string] as string | number) && 'bg-neutral-100',
+              selectable && selectedRows?.includes(row[rowKey as string] as string | number) && 'bg-slate-100',
             ]"
             @click="onRowClick ? onRowClick(row) : undefined"
           >
@@ -53,7 +56,8 @@
               v-for="col in columns"
               :key="col.key"
               :class="[
-                'px-3 py-2 text-neutral-800',
+                densityTdClass,
+                'text-slate-700',
                 col.align === 'right' && 'text-right',
               ]"
             >
@@ -61,7 +65,7 @@
                 {{ formatCell(row[col.key], col) }}
               </slot>
             </td>
-            <td v-if="rowActions.length" class="px-3 py-2 text-right" @click.stop>
+            <td v-if="rowActions.length" :class="['text-right', densityTdClass]" @click.stop>
               <div class="relative inline-block" :ref="(el) => setMenuEl(idx, el as HTMLElement)">
                 <button
                   type="button"
@@ -163,6 +167,7 @@ const props = withDefaults(
     selectedRows?: (string | number)[]
     rowActions?: RowAction[]
     onRowClick?: (row: Record<string, unknown>) => void
+    density?: 'compact' | 'comfortable'
   }>(),
   {
     rowKey: 'id',
@@ -172,8 +177,18 @@ const props = withDefaults(
     selectable: false,
     selectedRows: () => [],
     rowActions: () => [],
+    density: 'compact',
   }
 )
+
+const densityClass = computed(() => `density-${props.density}`)
+const densityThClass = computed(() =>
+  props.density === 'compact' ? 'px-3 py-1.5 text-xs font-semibold uppercase tracking-wide' : 'px-3 py-2.5 text-sm'
+)
+const densityTdClass = computed(() =>
+  props.density === 'compact' ? 'px-3 py-1.5 text-sm' : 'px-3 py-2 text-sm'
+)
+const densityRowClass = computed(() => '')
 
 const emit = defineEmits<{
   sort: [field: string]
@@ -221,3 +236,20 @@ function onClickOutside(e: MouseEvent) {
 onMounted(() => document.addEventListener('click', onClickOutside))
 onUnmounted(() => document.removeEventListener('click', onClickOutside))
 </script>
+
+<style scoped>
+.data-table-wrapper {
+  border: 1px solid rgb(226 232 240);
+  border-radius: 0.75rem;
+  background: white;
+  overflow: hidden;
+  box-shadow: 0 1px 2px 0 rgba(0, 0, 0, 0.05);
+}
+.data-table-head {
+  position: sticky;
+  top: 0;
+  z-index: 10;
+  background: rgb(248 250 252);
+  border-bottom: 1px solid rgb(226 232 240);
+}
+</style>
