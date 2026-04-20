@@ -311,7 +311,7 @@ def test_baseline_selects_max_train_end_when_multiple_runs(
     assert getattr(run, "selected_train_end_week_start", None) == newer
 
 
-def test_baseline_reuses_persisted_selected_run(db_session) -> None:
+def test_baseline_reuses_persisted_selected_run(db_session, monkeypatch: pytest.MonkeyPatch) -> None:
     """After selection is persisted, re-running planning uses the same selected run even if a newer run is ingested."""
     u = uuid4().hex[:8]
     sku, aah = f"SKUFE{u}", f"FOAHE{u}"
@@ -319,6 +319,11 @@ def test_baseline_reuses_persisted_selected_run(db_session) -> None:
     db_session.add(Product(sku=sku, name="E", uom="units", active=True, aah_code=aah))
     db_session.commit()
     first_run = date(2025, 1, 7)
+    # get_latest_train_end_week_start is global MAX for AAH; other tests leave rows with train_end 2025-02-04+.
+    monkeypatch.setattr(
+        "app.services.demand_resolver.get_latest_train_end_week_start",
+        lambda _db, warehouse_code=AAH_WH: first_run,
+    )
     db_session.add(
         PublishedBaselineForecastWeekly(
             sku=sku,
