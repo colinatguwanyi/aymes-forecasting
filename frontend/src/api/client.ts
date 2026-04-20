@@ -3,7 +3,41 @@ import axios from 'axios'
 const api = axios.create({
   baseURL: '/api',
   headers: { 'Content-Type': 'application/json' },
+  withCredentials: true,
 })
+
+// Add X-Dev-User so backend can authenticate without Entra (dev/local only on server).
+// - Vite dev server (npm run dev): always sends (MODE !== production).
+// - Built SPA: set VITE_SEND_DEV_AUTH_HEADER=true at build time for local “all on :8000” only.
+const devUser =
+  import.meta.env.VITE_DEV_USER ??
+  JSON.stringify({ email: 'dev@local', name: 'Dev User', roles: ['Admin'] })
+
+const sendDevAuthHeader =
+  import.meta.env.MODE !== 'production' ||
+  import.meta.env.VITE_SEND_DEV_AUTH_HEADER === 'true'
+
+api.interceptors.request.use((config) => {
+  if (sendDevAuthHeader) {
+    config.headers['X-Dev-User'] = devUser
+  }
+  if (config.data instanceof FormData) {
+    delete config.headers['Content-Type']
+  }
+  return config
+})
+
+// Log 4xx/5xx detail so users see the server message in console (and we can show in UI)
+api.interceptors.response.use(
+  (r) => r,
+  (err) => {
+    const detail = err.response?.data?.detail
+    if (detail != null) {
+      console.error('API error:', err.response?.status, typeof detail === 'string' ? detail : JSON.stringify(detail))
+    }
+    return Promise.reject(err)
+  }
+)
 
 export default api
 
@@ -12,6 +46,45 @@ export interface PlanRun {
   scenario_name: string
   run_at: string
   created_at: string
+  demand_source?: string
+  freeze_weeks?: number
+  baseline_train_end_week_start?: string | null
+  selected_train_end_week_start?: string | null
+  notes?: string | null
+  warehouses_scope?: string[] | null
+  progress_meta?: {
+    demand_source?: string
+    plan_start_week_start?: string | null
+    warehouses_planned?: string[]
+    warehouses_planned_detail?: Array<{
+      warehouse_code: string
+      latest_soh_week_start?: string | null
+      latest_demand_week_start?: string | null
+      policy_pairs_count?: number
+      starting_inv_pairs_count?: number
+      overlap_pairs_count?: number
+      skus_planned?: number
+    }>
+    warehouses_skipped?: string[]
+    projected_inventory_rows_written?: number
+    planned_orders_rows_written?: number
+    skipped_warehouses_detail?: Array<{ warehouse_code: string; blockers: string[] }>
+  } | null
+}
+
+/** Display label for a plan run: notes if set, else "scenario (date) #id" */
+export function formatPlanRunLabel(r: PlanRun): string {
+  if (r.notes && String(r.notes).trim()) return String(r.notes).trim()
+  return `${r.scenario_name} (${r.run_at}) #${r.id}`
+}
+
+/** One row from GET /forecast/runs (available baseline runs to pin). */
+export interface ForecastRunOption {
+  train_end_week_start: string
+  model_name?: string | null
+  count_rows: number
+  created_at?: string | null
+  notes?: string | null
 }
 
 export interface ProjectedInventory {
@@ -39,18 +112,24 @@ export interface Product {
   sku: string
   name: string | null
   description: string | null
+  uom: string
+  active: boolean
+  product_family?: string | null
 }
 
 export interface Warehouse {
   id: number
   code: string
   name: string | null
+  timezone: string
+  active: boolean
 }
 
 export interface Supplier {
   id: number
   code: string
   name: string | null
+  active: boolean
 }
 
 export interface Lane {
@@ -75,6 +154,7 @@ export interface PlanningPolicy {
   lead_time_haulage_weeks: string
   lead_time_putaway_weeks: string
   lead_time_padding_weeks: string
+  include_samples: boolean
 }
 
 /** Planning exception for exceptions queue (Phase 3). */
@@ -122,6 +202,8 @@ export interface SkuWeekExplanation {
   policy?: SkuWeekExplanationPolicy | null
   projection?: SkuWeekExplanationProjection | null
   forecast_method: string
+  demand_breakdown?: Record<string, unknown> | null
+  demand_includes_samples?: boolean | null
 }
 
 export interface Receipt {
@@ -155,10 +237,202 @@ export interface ImportRowError {
   errors: string[]
 }
 
+/** Backbone import: row_number + message per error */
+export interface BackboneImportError {
+  row_number: number
+  message: string
+}
+
+export interface BackboneImportResult {
+  rows_processed: number
+  rows_failed: number
+  errors: BackboneImportError[]
+}
+
+/** Backbone: warehouse-product planning parameters */
+export interface WarehouseProduct {
+  id: number
+  warehouse_id: number
+  product_id: number
+  safety_stock_mode: 'fixed_units' | 'fixed_weeks'
+  safety_stock_units: number | null
+  safety_stock_weeks: number | null
+  haulage_buffer_weeks: number
+  stocking_buffer_weeks: number
+  reorder_review_weeks: number
+  active: boolean
+}
+
+/** Backbone: supplier-product (lead time, MOQ, pack size) */
+export interface SupplierProduct {
+  id: number
+  supplier_id: number
+  product_id: number
+  lead_time_weeks: number
+  moq_units: number | null
+  pack_size_units: number | null
+  active: boolean
+}
+
 export interface ImportDryRunResult {
   valid: boolean
   total_rows: number
   valid_rows: number
   errors: ImportRowError[]
   preview?: Record<string, string | number | null>[]
+}
+
+/** Timeline view: lead time segments + markers. */
+export interface TimelineSegment {
+  key: string
+  label: string
+  start_week_index: number
+  duration_weeks: number
+  tooltip: string
+}
+
+export interface TimelineMarker {
+  key: string
+  label: string
+  week_index: number
+  type: 'stockout' | 'receipt' | 'need_by'
+  tooltip: string
+  qty?: string
+}
+
+export interface TimelineReceiptRow {
+  week_start: string
+  qty: string
+  on_time: boolean
+}
+
+export interface TimelineResponse {
+  week_labels: string[]
+  segments: TimelineSegment[]
+  markers: TimelineMarker[]
+  receipts: TimelineReceiptRow[]
+}
+
+/** Plan run demand input row (single truth for planning). */
+export interface DemandInputRow {
+  week_start: string
+  sku: string
+  warehouse_code: string
+  demand_qty: number
+  source: string
+  source_ref: Record<string, unknown> | null
+  demand_breakdown_json: Record<string, unknown> | null
+  demand_includes_samples: boolean
+  is_frozen: boolean
+}
+
+/** Stock position breakdown row (per SKU x warehouse). */
+export interface StockPositionBreakdown {
+  plan_run_id: number
+  sku: string
+  warehouse_code: string
+  current_week_start: string
+  on_hand_qty: string
+  on_hand_snapshot_week: string | null
+  avg_weekly_demand: string
+  forecast_window_weeks: number
+  target_weeks: number
+  safety_stock_weeks: number
+  safety_stock_method: string
+  safety_stock_units: number
+  supplier_lead_time_weeks: number
+  haulage_buffer_weeks: number
+  stocking_buffer_weeks: number
+  effective_lead_time_weeks: number
+  reorder_point_units: number
+  target_stock_units: number
+  next_breach_week_start: string | null
+  projected_qty_at_breach: number | null
+  recommended_order_week_start: string | null
+  recommended_order_qty: number
+  projected_qty_at_arrival: number | null
+  moq_units: number | null
+  pack_size_units: number | null
+  mode: string
+}
+
+/** Forecast methods descriptor (governance/audit). */
+export interface ForecastMethodsDoc {
+  method_version: string
+  updated_at: string
+  overview?: Record<string, unknown>
+  inputs?: Record<string, unknown>
+  time_series_prep?: Record<string, unknown>
+  forecasting?: Record<string, unknown>
+  planning_integration?: Record<string, unknown>
+  known_limitations?: string[]
+  audit?: { hash?: string }
+}
+
+/** Forecast method acknowledgement (sign-off). */
+export interface ForecastMethodAcknowledgement {
+  id: number
+  created_by: string
+  method_version: string
+  method_hash: string
+  acknowledged_at: string
+  notes: string | null
+}
+
+/** Rolling week row (opening/receipts/demand/closing + planned order). */
+export interface StockPositionRollingWeek {
+  week_start: string
+  opening_qty: string
+  receipts_qty: string
+  demand_qty: string
+  closing_qty: string
+  weeks_of_cover: number | null
+  stockout: boolean
+  planned_order_qty: string | null
+}
+
+/** Planning readiness diagnostics from GET /api/v1/diagnostics/planning-readiness */
+export interface PlanningReadinessDiagnostics {
+  ready_to_plan: boolean
+  blockers: Array<{ code: string; message: string; action_label: string; action_href: string }>
+  stats: {
+    products_count: number
+    policies_count: number
+    demand_rows: number
+    demand_latest_week: string | null
+    demand_warehouses: string[]
+    soh_rows: number
+    soh_latest_week: string | null
+    soh_warehouses: string[]
+    soh_config_warehouses: string[]
+    receipts_rows: number
+    receipts_latest_week: string | null
+    plan_runs_count: number
+    projected_inventory_rows_for_run: number
+    planned_orders_rows_for_run: number
+  }
+}
+
+export async function fetchPlanningReadiness(planRunId?: number | null): Promise<PlanningReadinessDiagnostics> {
+  const params = planRunId != null ? `?plan_run_id=${planRunId}` : ''
+  const { data } = await api.get<PlanningReadinessDiagnostics>(`/v1/diagnostics/planning-readiness${params}`)
+  return data
+}
+
+/** Per-warehouse readiness from GET /api/v1/diagnostics/warehouse-readiness */
+export interface WarehouseReadinessItem {
+  warehouse_code: string
+  has_soh: boolean
+  has_demand: boolean
+  has_policies: boolean
+  overlap_pairs: number
+  ready: boolean
+  blockers: string[]
+  soh_latest_week: string | null
+  demand_latest_week: string | null
+}
+
+export async function fetchWarehouseReadiness(demandSource: string = 'actuals'): Promise<WarehouseReadinessItem[]> {
+  const { data } = await api.get<WarehouseReadinessItem[]>(`/v1/diagnostics/warehouse-readiness?demand_source=${demandSource}`)
+  return data
 }

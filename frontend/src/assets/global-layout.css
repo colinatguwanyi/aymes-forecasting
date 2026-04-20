@@ -1,4 +1,5 @@
-/* Enterprise layout: single font, locked colours, no gradients/shadows */
+/* Enterprise WMS console: Tailwind + neutral theme */
+@import 'tailwindcss';
 
 :root {
   /* Base */

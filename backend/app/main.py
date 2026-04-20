@@ -10,18 +10,37 @@ from fastapi.staticfiles import StaticFiles
 
 from app.database import Base, engine
 from app.routers import (
+    admin_forecast_methods,
+    app_settings,
+    auth,
+    data_health,
+    diagnostics,
+    sales_reports,
+    stock_coverage_reports,
     products,
     warehouses,
     suppliers,
+    warehouse_products,
+    supplier_products,
+    backbone_imports,
+    projections,
+    backbone_reports,
     lanes,
     planning_policies,
     inventory,
     receipts,
     demand,
     plan_run,
+    stock_position,
+    timeline,
     imports_router,
     exports,
     templates,
+    ingestion,
+    forecast,
+    forecast_v2,
+    warehouse_product_codes,
+    soh_reports,
 )
 
 logger = logging.getLogger(__name__)
@@ -52,18 +71,37 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+app.include_router(auth.router, prefix="/api/v1/auth", tags=["auth"])
 app.include_router(products.router, prefix="/api/products", tags=["products"])
 app.include_router(warehouses.router, prefix="/api/warehouses", tags=["warehouses"])
 app.include_router(suppliers.router, prefix="/api/suppliers", tags=["suppliers"])
+app.include_router(warehouse_products.router, prefix="/api/warehouse-products", tags=["warehouse-products"])
+app.include_router(supplier_products.router, prefix="/api/supplier-products", tags=["supplier-products"])
+app.include_router(backbone_imports.router, prefix="/api/backbone/import", tags=["backbone-import"])
+app.include_router(projections.router, prefix="/api/projections", tags=["projections"])
+app.include_router(backbone_reports.router, prefix="/api/backbone/reports", tags=["backbone-reports"])
 app.include_router(lanes.router, prefix="/api/lanes", tags=["lanes"])
 app.include_router(planning_policies.router, prefix="/api/planning-policies", tags=["planning-policies"])
 app.include_router(inventory.router, prefix="/api/inventory", tags=["inventory"])
 app.include_router(receipts.router, prefix="/api/receipts", tags=["receipts"])
 app.include_router(demand.router, prefix="/api/demand", tags=["demand"])
 app.include_router(plan_run.router, prefix="/api/plan", tags=["plan"])
+app.include_router(stock_position.router, prefix="/api/stock-position", tags=["stock-position"])
+app.include_router(timeline.router, prefix="/api/timeline", tags=["timeline"])
 app.include_router(imports_router.router, prefix="/api/import", tags=["imports"])
 app.include_router(exports.router, prefix="/api/exports", tags=["exports"])
 app.include_router(templates.router, prefix="/api/templates", tags=["templates"])
+app.include_router(ingestion.router, prefix="/api/ingestion", tags=["ingestion"])
+app.include_router(forecast.router, prefix="/api/forecast", tags=["forecast"])
+app.include_router(forecast_v2.router, prefix="/api/v1/forecast", tags=["forecast-v2"])
+app.include_router(admin_forecast_methods.router, prefix="/api/admin/forecast-methods", tags=["admin-forecast-methods"])
+app.include_router(app_settings.router, prefix="/api/admin/settings", tags=["admin-settings"])
+app.include_router(warehouse_product_codes.router, prefix="/api/admin/warehouse-product-codes", tags=["admin-warehouse-product-codes"])
+app.include_router(soh_reports.router, prefix="/api/v1/reports/stock-on-hand", tags=["reports-soh"])
+app.include_router(sales_reports.router, prefix="/api/v1/reports/sales", tags=["reports-sales"])
+app.include_router(data_health.router, prefix="/api/v1/reports/data-health", tags=["reports-data-health"])
+app.include_router(stock_coverage_reports.router, prefix="/api/v1/reports/stock-coverage", tags=["reports-stock-coverage"])
+app.include_router(diagnostics.router, prefix="/api/v1/diagnostics", tags=["diagnostics"])
 
 # Serve built frontend (after: cd frontend && npm run build)
 if _SERVE_FRONTEND:

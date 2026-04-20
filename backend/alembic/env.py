@@ -13,7 +13,9 @@ from app.database import Base
 from app.models import *
 
 config = context.config
-config.set_main_option("sqlalchemy.url", settings.database_url)
+# Escape % for ConfigParser (e.g. %40 in URL-encoded password becomes %%)
+url_for_config = settings.database_url.replace("%", "%%")
+config.set_main_option("sqlalchemy.url", url_for_config)
 
 if config.config_file_name is not None:
     fileConfig(config.config_file_name)

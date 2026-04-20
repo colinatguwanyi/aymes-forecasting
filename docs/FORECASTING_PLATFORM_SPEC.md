@@ -68,6 +68,10 @@ Must be visible in UI and exportable (CSV + "SKU explanation report").
 
 **Current:** products, warehouses, suppliers, lanes, planning_policies, inventory_snapshots_weekly, receipts, demand_actuals, plan_runs, projected_inventory, planned_orders.
 
+**Added (ingestion + baseline):**
+- ingestion_runs, ingestion_rejections, sku_code_map, demand_stage_weekly, demand_facts_weekly (canonical weekly demand), baseline_forecasts_weekly.
+- See **docs/INGESTION_CONTRACT.md** for week bucketing (W-TUE), CSV schemas, idempotency, mapping, completeness.
+
 **To add (as needed):**
 - supplier_sku (lead times, MOQ, pack size).
 - forecast_runs / forecast_values (method, horizon, overrides).
@@ -110,7 +114,7 @@ Must be visible in UI and exportable (CSV + "SKU explanation report").
 | **Phase 4** | Reporting suite + accuracy metrics + optional AI summaries. |
 
 **Default methods (if not already set):**
-- Baseline: seasonal moving average (weekly).
+- Baseline: **seasonal_naive_52** (forecast week t = actual same week last year if exists, else rolling mean of last 8 weeks). Deterministic, no heavy deps. Exposed via POST /api/forecast/runs and GET /api/forecast/baseline; not yet integrated into planning.
 - Outlier handling: clamp extreme spikes.
 - Safety stock: weeks-of-cover target per category.
 - Ordering: reorder point + lot sizing (MOQ/pack).

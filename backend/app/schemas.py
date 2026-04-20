@@ -1,6 +1,6 @@
 from __future__ import annotations
 import logging
-from datetime import date
+from datetime import date, datetime
 from decimal import Decimal
 from typing import Any, Optional
 
@@ -15,6 +15,8 @@ class ProductBase(BaseModel):
     sku: str
     name: Optional[str] = None
     description: Optional[str] = None
+    uom: str = "units"
+    active: bool = True
 
 
 class ProductCreate(ProductBase):
@@ -31,6 +33,8 @@ class Product(ProductBase):
 class WarehouseBase(BaseModel):
     code: str
     name: Optional[str] = None
+    timezone: str = "Europe/London"
+    active: bool = True
 
 
 class WarehouseCreate(WarehouseBase):
@@ -47,6 +51,7 @@ class Warehouse(WarehouseBase):
 class SupplierBase(BaseModel):
     code: str
     name: Optional[str] = None
+    active: bool = True
 
 
 class SupplierCreate(SupplierBase):
@@ -58,6 +63,69 @@ class Supplier(SupplierBase):
 
     class Config:
         from_attributes = True
+
+
+# Backbone: warehouse_products, supplier_products
+class WarehouseProductBase(BaseModel):
+    safety_stock_mode: str = "fixed_units"  # "fixed_units" | "fixed_weeks"
+    safety_stock_units: Optional[int] = None
+    safety_stock_weeks: Optional[Decimal] = None
+    haulage_buffer_weeks: int = 0
+    stocking_buffer_weeks: int = 0
+    reorder_review_weeks: int = 1
+    active: bool = True
+
+
+class WarehouseProductCreate(WarehouseProductBase):
+    warehouse_id: int
+    product_id: int
+
+
+class WarehouseProduct(WarehouseProductBase):
+    id: int
+    warehouse_id: int
+    product_id: int
+
+    class Config:
+        from_attributes = True
+
+
+class WarehouseProductUpdate(BaseModel):
+    safety_stock_mode: Optional[str] = None
+    safety_stock_units: Optional[int] = None
+    safety_stock_weeks: Optional[Decimal] = None
+    haulage_buffer_weeks: Optional[int] = None
+    stocking_buffer_weeks: Optional[int] = None
+    reorder_review_weeks: Optional[int] = None
+    active: Optional[bool] = None
+
+
+class SupplierProductBase(BaseModel):
+    lead_time_weeks: int = 0
+    moq_units: Optional[int] = None
+    pack_size_units: Optional[int] = None
+    active: bool = True
+
+
+class SupplierProductCreate(SupplierProductBase):
+    supplier_id: int
+    product_id: int
+
+
+class SupplierProduct(SupplierProductBase):
+    id: int
+    supplier_id: int
+    product_id: int
+
+    class Config:
+        from_attributes = True
+
+
+class SupplierProductUpdate(BaseModel):
+    lead_time_weeks: Optional[int] = None
+    moq_units: Optional[int] = None
+    pack_size_units: Optional[int] = None
+    active: Optional[bool] = None
 
 
 class LaneBase(BaseModel):
@@ -153,6 +221,11 @@ class PlanRunBase(BaseModel):
     scenario_name: str
     run_at: date
     created_at: date
+    demand_source: str = "actuals"
+    freeze_weeks: int = 4
+    plan_start_week_start: Optional[date] = None
+    created_by: Optional[str] = None
+    notes: Optional[str] = None
 
 
 class PlanRun(PlanRunBase):
@@ -163,14 +236,15 @@ class PlanRun(PlanRunBase):
 
 
 class ProjectedInventoryBase(BaseModel):
+    """Auditability: start_qty, receipts_qty, demand_qty, end_qty (projected_qty), weeks_cover (weeks_of_cover), stockout."""
     week_start: date
     sku: str
     warehouse_code: str
     start_qty: Optional[Decimal] = None
     receipts_qty: Optional[Decimal] = None
     demand_qty: Optional[Decimal] = None
-    projected_qty: Decimal
-    weeks_of_cover: Optional[Decimal] = None
+    projected_qty: Decimal  # end_qty
+    weeks_of_cover: Optional[Decimal] = None  # weeks_cover
     stockout: bool = False
 
 
@@ -260,3 +334,41 @@ class ImportDryRunResult(BaseModel):
     valid_rows: int
     errors: list[ImportRowError] = Field(default_factory=list)
     preview: Optional[list[dict[str, Any]]] = None
+
+
+# Warehouse Product Codes (external_code → sku mapping per warehouse)
+class WarehouseProductCodeCreate(BaseModel):
+    warehouse_code: str = Field(..., min_length=1, max_length=32)
+    external_code: str = Field(..., min_length=1, max_length=128)
+    sku: str = Field(..., min_length=1, max_length=64)
+    external_name: Optional[str] = None
+    hs_code: Optional[str] = Field(None, max_length=64)
+    active: bool = True
+    match_method: Optional[str] = Field(None, max_length=32)
+    match_confidence: Optional[int] = Field(None, ge=0, le=100)
+
+
+class WarehouseProductCodeUpdate(BaseModel):
+    sku: Optional[str] = Field(None, min_length=1, max_length=64)
+    external_name: Optional[str] = None
+    hs_code: Optional[str] = Field(None, max_length=64)
+    active: Optional[bool] = None
+    match_method: Optional[str] = Field(None, max_length=32)
+    match_confidence: Optional[int] = Field(None, ge=0, le=100)
+
+
+class WarehouseProductCodeResponse(BaseModel):
+    id: int
+    warehouse_code: str
+    external_code: str
+    sku: str
+    external_name: Optional[str]
+    hs_code: Optional[str]
+    active: bool
+    match_method: Optional[str]
+    match_confidence: Optional[int]
+    created_at: datetime
+    updated_at: datetime
+
+    class Config:
+        from_attributes = True

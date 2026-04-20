@@ -34,6 +34,22 @@ def parse_decimal(s: str) -> tuple[bool, Decimal | str]:
         return False, "Invalid number"
 
 
+def parse_date_ddmmyyyy(s: str) -> tuple[bool, Any]:
+    """Parse DD/MM/YYYY; return (ok, date or error message)."""
+    s = (s or "").strip()
+    if not s:
+        return False, "Empty date"
+    try:
+        d = datetime.strptime(s, "%d/%m/%Y").date()
+        return True, d
+    except ValueError:
+        try:
+            d = datetime.strptime(s, "%Y-%m-%d").date()
+            return True, d
+        except ValueError:
+            return False, "Invalid date (use DD/MM/YYYY or YYYY-MM-DD)"
+
+
 def validate_inventory_snapshots(rows: list[dict[str, Any]]) -> ImportDryRunResult:
     errors: list[ImportRowError] = []
     preview: list[dict[str, Any]] = []
@@ -190,6 +206,54 @@ def validate_products(rows: list[dict[str, Any]]) -> ImportDryRunResult:
 
 
 def read_csv(file_content: bytes) -> list[dict[str, Any]]:
-    text = file_content.decode("utf-8-sig")
+    """Decode CSV bytes to text; try UTF-8 (with BOM) first, then Windows-1252 (common for Excel)."""
+    for encoding in ("utf-8-sig", "utf-8", "cp1252", "latin-1"):
+        try:
+            text = file_content.decode(encoding)
+            break
+        except UnicodeDecodeError:
+            continue
+    else:
+        raise ValueError("Could not decode file as UTF-8, CP1252, or Latin-1")
     reader = csv.DictReader(io.StringIO(text))
     return list(reader)
+
+
+def read_csv_chunked(
+    file_content: bytes,
+    chunk_size: int = 5000,
+) -> Any:
+    """Yield CSV rows in chunks to avoid loading large files fully into memory."""
+    for encoding in ("utf-8-sig", "utf-8", "cp1252", "latin-1"):
+        try:
+            text = file_content.decode(encoding)
+            break
+        except UnicodeDecodeError:
+            continue
+    else:
+        raise ValueError("Could not decode file as UTF-8, CP1252, or Latin-1")
+    reader = csv.DictReader(io.StringIO(text))
+    chunk: list[dict[str, Any]] = []
+    for row in reader:
+        chunk.append(row)
+        if len(chunk) >= chunk_size:
+            yield chunk
+            chunk = []
+    if chunk:
+        yield chunk
+
+
+def read_csv_or_xlsx(file_content: bytes, filename: str | None = None) -> list[dict[str, Any]]:
+    """Parse CSV or XLSX into list of dicts. Keys are stripped. For XLSX uses pandas (openpyxl)."""
+    fn = (filename or "").lower()
+    if fn.endswith(".xlsx") or fn.endswith(".xls"):
+        import pandas as pd  # noqa: PLC0415
+
+        df = pd.read_excel(io.BytesIO(file_content), engine="openpyxl" if fn.endswith(".xlsx") else None)
+        df = df.rename(columns=lambda c: (c.strip() if isinstance(c, str) else str(c)))
+        rows = df.to_dict("records")
+        out: list[dict[str, Any]] = []
+        for r in rows:
+            out.append({str(k): (None if (isinstance(v, float) and pd.isna(v)) else v) for k, v in r.items()})
+        return out
+    return read_csv(file_content)

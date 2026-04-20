@@ -1,117 +1,111 @@
 <template>
-  <div class="page-content-inner">
-    <p class="muted">Table and chart by SKU/warehouse. Compare up to two scenarios.</p>
+  <div class="space-y-4">
+    <PageHeader title="Inventory Projection" :breadcrumbs="[{ label: 'Planning', path: '/' }]">
+      <template #actions>
+        <button type="button" class="px-4 py-2 text-sm font-medium text-neutral-700 bg-white border border-neutral-300 rounded-lg hover:bg-neutral-50" @click="exportCsv">Export CSV</button>
+      </template>
+    </PageHeader>
 
-    <section class="content-section controls">
-      <div class="form-row">
-        <label class="form-label">Scenario 1</label>
-        <select v-model="runId1" class="app-select" style="max-width: 18rem;">
-          <option :value="null">—</option>
-          <option v-for="r in planRuns" :key="r.id" :value="r.id">{{ r.scenario_name }} ({{ r.created_at }})</option>
+    <FilterBar v-model="search" search-placeholder="Search SKU or warehouse…" :has-active-filters="hasActiveFilters" @clear="runId1 = null; runId2 = null; skuFilter = ''; whFilter = ''; stockoutOnly = false; search = ''">
+      <template #filters>
+        <select v-model="runId1" class="border border-neutral-300 rounded-md px-3 py-2 text-sm bg-white min-w-48">
+          <option :value="null">Plan run 1</option>
+          <option v-for="r in planRuns" :key="r.id" :value="r.id">{{ r.scenario_name }}</option>
         </select>
-      </div>
-      <div class="form-row">
-        <label class="form-label">Scenario 2</label>
-        <select v-model="runId2" class="app-select" style="max-width: 18rem;">
-          <option :value="null">—</option>
-          <option v-for="r in planRuns" :key="r.id" :value="r.id">{{ r.scenario_name }} ({{ r.created_at }})</option>
+        <select v-model="runId2" class="border border-neutral-300 rounded-md px-3 py-2 text-sm bg-white min-w-48">
+          <option :value="null">Plan run 2</option>
+          <option v-for="r in planRuns" :key="'2-' + r.id" :value="r.id">{{ r.scenario_name }}</option>
         </select>
-      </div>
-      <div class="form-row">
-        <label class="form-label">SKU filter</label>
-        <input v-model="skuFilter" class="app-input" placeholder="SKU" style="max-width: 10rem;" />
-      </div>
-      <div class="form-row">
-        <label class="form-label">Warehouse filter</label>
-        <input v-model="whFilter" class="app-input" placeholder="Warehouse" style="max-width: 10rem;" />
-      </div>
-    </section>
+        <select v-model="skuFilter" class="border border-neutral-300 rounded-md px-3 py-2 text-sm bg-white min-w-40">
+          <option value="">All SKUs</option>
+          <option v-for="p in products" :key="p.id" :value="p.sku">{{ p.sku }}</option>
+        </select>
+        <select v-model="whFilter" class="border border-neutral-300 rounded-md px-3 py-2 text-sm bg-white min-w-40">
+          <option value="">All warehouses</option>
+          <option v-for="w in warehouses" :key="w.id" :value="w.code">{{ w.code }}</option>
+        </select>
+        <label class="flex items-center gap-2 text-sm text-neutral-700">
+          <input v-model="stockoutOnly" type="checkbox" class="rounded border-neutral-300" />
+          Stockout only
+        </label>
+      </template>
+    </FilterBar>
 
-    <section v-if="loading" class="content-section">Loading...</section>
+    <section v-if="loading" class="text-sm text-neutral-500 py-8">Loading…</section>
     <template v-else>
-      <section class="content-section">
-        <h2>Projected inventory (Scenario 1)</h2>
-        <p class="muted">Click a row to open the explain-the-forecast panel.</p>
-        <div v-if="data1.length" class="app-table-wrap">
-          <table class="app-table">
-            <thead>
+      <section class="border border-neutral-200 rounded-lg bg-white overflow-hidden">
+        <h2 class="px-4 py-3 text-sm font-medium text-neutral-700 border-b border-neutral-200">Projected inventory (Scenario 1)</h2>
+        <p class="px-4 py-1 text-xs text-neutral-500">Click a row to open the explain-the-forecast panel.</p>
+        <div v-if="displayData1.length" class="overflow-x-auto max-h-[50vh] overflow-y-auto">
+          <table class="w-full text-sm border-collapse">
+            <thead class="sticky top-0 bg-neutral-50 border-b border-neutral-200">
               <tr>
-                <th>Week start</th>
-                <th>SKU</th>
-                <th>Warehouse</th>
-                <th>Projected qty</th>
-                <th>Weeks of cover</th>
-                <th>Stockout</th>
+                <th class="px-3 py-2 text-left font-medium text-neutral-600">Week start</th>
+                <th class="px-3 py-2 text-left font-medium text-neutral-600">SKU</th>
+                <th class="px-3 py-2 text-left font-medium text-neutral-600">Warehouse</th>
+                <th class="px-3 py-2 text-left font-medium text-neutral-600">Projected qty</th>
+                <th class="px-3 py-2 text-left font-medium text-neutral-600">Weeks of cover</th>
+                <th class="px-3 py-2 text-left font-medium text-neutral-600">Stockout</th>
               </tr>
             </thead>
             <tbody>
               <tr
-                v-for="r in data1"
+                v-for="r in displayData1"
                 :key="`1-${r.id}`"
-                :class="{ 'row-status-error': r.stockout }"
-                class="row-clickable"
-                role="button"
-                tabindex="0"
+                :class="[r.stockout && 'bg-red-50', 'border-b border-neutral-100 hover:bg-neutral-50 cursor-pointer']"
                 @click="openExplanation(runId1!, r)"
-                @keydown.enter="openExplanation(runId1!, r)"
-                @keydown.space.prevent="openExplanation(runId1!, r)"
               >
-                <td>{{ r.week_start }}</td>
-                <td>{{ r.sku }}</td>
-                <td>{{ r.warehouse_code }}</td>
-                <td>{{ r.projected_qty }}</td>
-                <td>{{ r.weeks_of_cover ?? '—' }}</td>
-                <td>{{ r.stockout ? 'Yes' : 'No' }}</td>
+                <td class="px-3 py-2">{{ r.week_start }}</td>
+                <td class="px-3 py-2">{{ r.sku }}</td>
+                <td class="px-3 py-2">{{ r.warehouse_code }}</td>
+                <td class="px-3 py-2">{{ r.projected_qty }}</td>
+                <td class="px-3 py-2">{{ r.weeks_of_cover ?? '—' }}</td>
+                <td class="px-3 py-2">{{ r.stockout ? 'Yes' : 'No' }}</td>
               </tr>
             </tbody>
           </table>
         </div>
-        <p v-else class="muted">No data. Select a scenario and run a plan if needed.</p>
+        <p v-else class="px-4 py-8 text-sm text-neutral-500">No data. Select a scenario and run a plan if needed.</p>
       </section>
 
-      <section class="content-section">
-        <h2>Projected inventory (Scenario 2)</h2>
-        <p class="muted">Click a row to open the explain-the-forecast panel.</p>
-        <div v-if="data2.length" class="app-table-wrap">
-          <table class="app-table">
-            <thead>
+      <section class="border border-neutral-200 rounded-lg bg-white overflow-hidden">
+        <h2 class="px-4 py-3 text-sm font-medium text-neutral-700 border-b border-neutral-200">Projected inventory (Scenario 2)</h2>
+        <p class="px-4 py-1 text-xs text-neutral-500">Click a row to open the explain-the-forecast panel.</p>
+        <div v-if="displayData2.length" class="overflow-x-auto max-h-[50vh] overflow-y-auto">
+          <table class="w-full text-sm border-collapse">
+            <thead class="sticky top-0 bg-neutral-50 border-b border-neutral-200">
               <tr>
-                <th>Week start</th>
-                <th>SKU</th>
-                <th>Warehouse</th>
-                <th>Projected qty</th>
-                <th>Weeks of cover</th>
-                <th>Stockout</th>
+                <th class="px-3 py-2 text-left font-medium text-neutral-600">Week start</th>
+                <th class="px-3 py-2 text-left font-medium text-neutral-600">SKU</th>
+                <th class="px-3 py-2 text-left font-medium text-neutral-600">Warehouse</th>
+                <th class="px-3 py-2 text-left font-medium text-neutral-600">Projected qty</th>
+                <th class="px-3 py-2 text-left font-medium text-neutral-600">Weeks of cover</th>
+                <th class="px-3 py-2 text-left font-medium text-neutral-600">Stockout</th>
               </tr>
             </thead>
             <tbody>
               <tr
-                v-for="r in data2"
+                v-for="r in displayData2"
                 :key="`2-${r.id}`"
-                :class="{ 'row-status-error': r.stockout }"
-                class="row-clickable"
-                role="button"
-                tabindex="0"
+                :class="[r.stockout && 'bg-red-50', 'border-b border-neutral-100 hover:bg-neutral-50 cursor-pointer']"
                 @click="runId2 && openExplanation(runId2, r)"
-                @keydown.enter="runId2 && openExplanation(runId2, r)"
-                @keydown.space.prevent="runId2 && openExplanation(runId2, r)"
               >
-                <td>{{ r.week_start }}</td>
-                <td>{{ r.sku }}</td>
-                <td>{{ r.warehouse_code }}</td>
-                <td>{{ r.projected_qty }}</td>
-                <td>{{ r.weeks_of_cover ?? '—' }}</td>
-                <td>{{ r.stockout ? 'Yes' : 'No' }}</td>
+                <td class="px-3 py-2">{{ r.week_start }}</td>
+                <td class="px-3 py-2">{{ r.sku }}</td>
+                <td class="px-3 py-2">{{ r.warehouse_code }}</td>
+                <td class="px-3 py-2">{{ r.projected_qty }}</td>
+                <td class="px-3 py-2">{{ r.weeks_of_cover ?? '—' }}</td>
+                <td class="px-3 py-2">{{ r.stockout ? 'Yes' : 'No' }}</td>
               </tr>
             </tbody>
           </table>
         </div>
-        <p v-else class="muted">No data.</p>
+        <p v-else class="px-4 py-8 text-sm text-neutral-500">No data.</p>
       </section>
 
-      <section class="content-section chart-section">
-        <h2>Projected qty over time (first SKU/WH in list)</h2>
-        <div class="chart-container" ref="chartContainer">
+      <section class="border border-neutral-200 rounded-lg bg-white overflow-hidden p-4">
+        <h2 class="text-sm font-medium text-neutral-700 mb-2">Projected qty over time (first SKU/WH in list)</h2>
+        <div class="chart-container min-h-[200px]" ref="chartContainer">
           <canvas ref="chartCanvas"></canvas>
         </div>
       </section>
@@ -150,20 +144,55 @@
 import { ref, computed, onMounted, watch } from 'vue'
 import { useLayoutStore } from '@/stores/layout'
 import { usePlanningStore } from '@/stores/planning'
+import { useAdminStore } from '@/stores/admin'
 import type { ProjectedInventory, SkuWeekExplanation } from '@/api/client'
 import { Chart, registerables } from 'chart.js'
+import PageHeader from '@/components/console/PageHeader.vue'
+import FilterBar from '@/components/console/FilterBar.vue'
 
 Chart.register(...registerables)
 
 const store = usePlanningStore()
+const adminStore = useAdminStore()
 const layout = useLayoutStore()
 const loading = ref(true)
 const runId1 = ref<number | null>(null)
 const runId2 = ref<number | null>(null)
 const skuFilter = ref('')
 const whFilter = ref('')
+const search = ref('')
+const stockoutOnly = ref(false)
+const products = computed(() => adminStore.products)
+const warehouses = computed(() => adminStore.warehouses)
 const data1 = ref<ProjectedInventory[]>([])
 const data2 = ref<ProjectedInventory[]>([])
+
+const hasActiveFilters = computed(() => !!runId1.value || !!runId2.value || !!skuFilter.value || !!whFilter.value || stockoutOnly.value)
+
+function filterBySearchAndStockout(list: ProjectedInventory[], q: string): ProjectedInventory[] {
+  let out = list
+  if (q) {
+    const lower = q.toLowerCase()
+    out = out.filter((r) => r.sku.toLowerCase().includes(lower) || r.warehouse_code.toLowerCase().includes(lower))
+  }
+  if (stockoutOnly.value) out = out.filter((r) => r.stockout)
+  return out
+}
+
+const displayData1 = computed(() => filterBySearchAndStockout(data1.value, search.value))
+const displayData2 = computed(() => filterBySearchAndStockout(data2.value, search.value))
+
+function exportCsv() {
+  const rows = [...displayData1.value]
+  const headers = ['week_start', 'sku', 'warehouse_code', 'projected_qty', 'weeks_of_cover', 'stockout']
+  const csv = [headers.join(','), ...rows.map((r) => [r.week_start, r.sku, r.warehouse_code, r.projected_qty, r.weeks_of_cover ?? '', r.stockout ? 'Yes' : 'No'].join(','))].join('\n')
+  const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' })
+  const a = document.createElement('a')
+  a.href = URL.createObjectURL(blob)
+  a.download = 'projected_inventory_weekly.csv'
+  a.click()
+  URL.revokeObjectURL(a.href)
+}
 const chartCanvas = ref<HTMLCanvasElement | null>(null)
 const chartContainer = ref<HTMLDivElement | null>(null)
 const explanation = ref(false)
@@ -254,7 +283,7 @@ watch(
   }
 )
 onMounted(async () => {
-  await store.fetchPlanRuns()
+  await Promise.all([store.fetchPlanRuns(), adminStore.fetchProducts(), adminStore.fetchWarehouses()])
   if (store.planRuns.length) runId1.value = store.planRuns[0].id
   loading.value = false
   await load()
