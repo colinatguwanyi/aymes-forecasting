@@ -104,6 +104,17 @@ def _sqlalchemy_db_error_response(exc: OperationalError | ProgrammingError) -> J
     orig = getattr(exc, "orig", None)
     logger.warning("Database error (503): %s", exc, exc_info=True)
     detail: str = _DB_UNAVAILABLE
+    if orig is not None and getattr(orig, "args", None):
+        errno = orig.args[0] if orig.args else None
+        if errno == 1205:
+            detail = (
+                "MySQL lock wait timeout (1205). Another session is holding a row lock — often Beekeeper "
+                "(disable long transactions / turn on Auto Commit), a second browser tab running Execute, "
+                "or a previous build still running. Close other DB clients, wait, then retry build-weekly once."
+            )
+            if settings.environment.lower() in ("dev", "local", "development"):
+                detail = f"{detail} Server said: {orig!s}"
+            return JSONResponse(status_code=503, content={"detail": detail})
     if settings.environment.lower() in ("dev", "local", "development") and orig is not None:
         detail = f"{_DB_UNAVAILABLE} Server said: {orig!s}"
     return JSONResponse(status_code=503, content={"detail": detail})

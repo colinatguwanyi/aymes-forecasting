@@ -4,7 +4,7 @@ from datetime import date, datetime
 from decimal import Decimal
 from typing import Any, Optional
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 from app.models import DemandType, PlanningMode, SafetyStockMethod
 
@@ -30,11 +30,28 @@ class Product(ProductBase):
         from_attributes = True
 
 
+_WAREHOUSE_SITE_TYPES = frozenset({"soh_warehouse", "factory", "third_party_3pl"})
+
+
 class WarehouseBase(BaseModel):
     code: str
     name: Optional[str] = None
     timezone: str = "Europe/London"
     active: bool = True
+    is_own_site: bool = True
+    operator_name: Optional[str] = Field(None, description="3PL or site operator when not an AYMES-owned site")
+    address: Optional[str] = None
+    site_type: str = Field(
+        "soh_warehouse",
+        description="soh_warehouse | factory | third_party_3pl",
+    )
+
+    @field_validator("site_type")
+    @classmethod
+    def validate_site_type(cls, v: str) -> str:
+        if v not in _WAREHOUSE_SITE_TYPES:
+            raise ValueError(f"site_type must be one of: {', '.join(sorted(_WAREHOUSE_SITE_TYPES))}")
+        return v
 
 
 class WarehouseCreate(WarehouseBase):
@@ -43,6 +60,7 @@ class WarehouseCreate(WarehouseBase):
 
 class Warehouse(WarehouseBase):
     id: int
+    has_stock: bool = Field(False, description="True if SOH or stock position shows quantity > 0")
 
     class Config:
         from_attributes = True

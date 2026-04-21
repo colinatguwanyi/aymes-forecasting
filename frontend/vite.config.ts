@@ -14,6 +14,10 @@ export default defineConfig({
       '/api': {
         target: 'http://127.0.0.1:8000',
         changeOrigin: true,
+        // Large CSV/XLSX uploads finish quickly in the browser, then the API stages millions of
+        // rows before responding — the default proxy idle timeout drops the connection otherwise.
+        timeout: 3_600_000,
+        proxyTimeout: 3_600_000,
       },
       '/docs': { target: 'http://127.0.0.1:8000', changeOrigin: true },
       '/openapi.json': { target: 'http://127.0.0.1:8000', changeOrigin: true },

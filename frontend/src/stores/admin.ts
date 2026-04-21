@@ -85,17 +85,43 @@ export const useAdminStore = defineStore('admin', () => {
     return data
   }
 
-  async function createWarehouse(w: { code: string; name?: string; timezone?: string; active?: boolean }) {
+  async function createWarehouse(w: {
+    code: string
+    name?: string | null
+    timezone?: string
+    active?: boolean
+    is_own_site?: boolean
+    operator_name?: string | null
+    address?: string | null
+    site_type?: string
+  }) {
     const { data } = await api.post<Warehouse>('/warehouses', w)
     warehouses.value.push(data)
     return data
   }
 
-  async function updateWarehouse(id: number, w: Partial<{ code: string; name: string; timezone: string; active: boolean }>) {
+  async function updateWarehouse(
+    id: number,
+    w: {
+      code: string
+      name?: string | null
+      timezone?: string
+      active?: boolean
+      is_own_site?: boolean
+      operator_name?: string | null
+      address?: string | null
+      site_type?: string
+    },
+  ) {
     const { data } = await api.put<Warehouse>(`/warehouses/${id}`, w)
     const i = warehouses.value.findIndex((x) => x.id === id)
     if (i >= 0) warehouses.value[i] = data
     return data
+  }
+
+  async function deleteWarehouse(id: number) {
+    await api.delete(`/warehouses/${id}`)
+    warehouses.value = warehouses.value.filter((x) => x.id !== id)
   }
 
   async function createSupplier(s: { code: string; name?: string; active?: boolean }) {
@@ -197,6 +223,7 @@ export const useAdminStore = defineStore('admin', () => {
     updateProduct,
     createWarehouse,
     updateWarehouse,
+    deleteWarehouse,
     createSupplier,
     updateSupplier,
     createLane,

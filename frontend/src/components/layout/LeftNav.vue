@@ -3,6 +3,15 @@
     <button type="button" class="nav-toggle" @click="layout.toggleNav()" aria-label="Toggle navigation">
       <span class="nav-toggle-icon">{{ layout.navCollapsed ? '→' : '←' }}</span>
     </button>
+    <button
+      v-show="!layout.navCollapsed"
+      type="button"
+      class="nav-collapse-all"
+      :disabled="!anyGroupOpen"
+      @click="closeAllGroups"
+    >
+      Collapse all sections
+    </button>
     <nav class="nav-list" aria-label="Main">
       <!-- Overview -->
       <div class="nav-group">
@@ -165,6 +174,18 @@ function toggle(key: keyof typeof open) {
   open[key] = !open[key]
 }
 
+const anyGroupOpen = computed(
+  () => open.planning || open.forecast || open.reports || open.master || open.settings
+)
+
+function closeAllGroups(): void {
+  open.planning = false
+  open.forecast = false
+  open.reports = false
+  open.master = false
+  open.settings = false
+}
+
 function syncOpenFromRoute() {
   const p = route.path
   if (
@@ -242,6 +263,27 @@ watch(
 }
 .nav-toggle:hover {
   background: rgb(248 250 252);
+}
+.nav-collapse-all {
+  display: block;
+  width: 100%;
+  padding: 0.35rem 0.75rem;
+  border: none;
+  border-bottom: 1px solid rgb(226 232 240);
+  background: rgb(248 250 252);
+  color: rgb(71 85 105);
+  font-size: 0.6875rem;
+  font-weight: 500;
+  cursor: pointer;
+  text-align: center;
+}
+.nav-collapse-all:hover:not(:disabled) {
+  background: rgb(241 245 249);
+  color: var(--accent, #214a7d);
+}
+.nav-collapse-all:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
 }
 .nav-toggle-icon {
   display: block;

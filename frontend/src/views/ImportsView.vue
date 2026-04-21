@@ -3,26 +3,35 @@
     <header class="page-header">
       <h1>Imports</h1>
       <p class="muted mt-1">
-        Master data and warehouse feeds in one place. Pick a <strong>card</strong> below, then upload. Product Master is shared catalog data; warehouse rows scope ingestion runs for history.
+        Pick a <strong>card</strong>, confirm the <strong>target</strong> below, then upload. Catalog imports are platform-wide; feed imports are tied to the warehouse you select.
       </p>
     </header>
 
-    <!-- Warehouse context -->
-    <section class="card card-body">
-      <div class="flex flex-wrap items-end gap-4">
-        <div>
-          <label class="form-label">Warehouse context</label>
-          <select v-model="warehouse" class="select" @change="onWarehouseChange">
-            <option v-for="opt in WAREHOUSE_OPTIONS" :key="opt.value" :value="opt.value">{{ opt.label }}</option>
-          </select>
-          <p class="text-xs text-slate-500 mt-1">Used for Sales Out, SOH, and demand. Product Master applies platform-wide.</p>
+    <!-- At-a-glance: catalog vs feed target (reduces wrong-warehouse uploads) -->
+    <section class="import-context-summary card card-body" aria-label="Import scope summary">
+      <div class="import-context-summary__grid">
+        <div class="import-context-summary__block import-context-summary__block--catalog">
+          <h2 class="import-context-summary__heading">Platform catalog</h2>
+          <p class="import-context-summary__text">
+            <strong>Not warehouse-specific.</strong> Product Master and warehouse code mappings update shared reference data for the whole platform.
+          </p>
+        </div>
+        <div class="import-context-summary__block import-context-summary__block--feeds">
+          <h2 class="import-context-summary__heading">Operational feed target</h2>
+          <p class="import-context-summary__target">
+            <span class="import-context-summary__target-label">Warehouse</span>
+            <strong class="import-context-summary__warehouse">{{ warehouse }}</strong>
+          </p>
+          <p class="import-context-summary__text">
+            Sales Out, Sales (direct), Samples, SOH, and demand pipeline files are loaded for <strong>{{ warehouse }}</strong> only. Switch the warehouse before uploading if this is not the site you intend.
+          </p>
         </div>
       </div>
     </section>
 
-    <!-- Master data cards -->
-    <section v-if="masterDataCards.length" class="space-y-3">
-      <h2 class="import-section-title">Master data</h2>
+    <!-- Master data cards (catalog — visually separate from warehouse feeds) -->
+    <section v-if="masterDataCards.length" class="import-scope-block import-scope-block--catalog space-y-3">
+      <h2 class="import-section-title import-section-title--catalog">Master data · catalog</h2>
       <div class="import-card-grid">
         <button
           v-for="c in masterDataCards"
@@ -47,9 +56,26 @@
       </div>
     </section>
 
+    <!-- Warehouse selector: only affects operational feeds -->
+    <section class="card card-body import-warehouse-card">
+      <div class="flex flex-wrap items-end gap-4">
+        <div class="min-w-48">
+          <label class="form-label">Warehouse for operational feeds</label>
+          <select v-model="warehouse" class="select import-warehouse-card__select" @change="onWarehouseChange">
+            <option v-for="opt in WAREHOUSE_OPTIONS" :key="opt.value" :value="opt.value">{{ opt.label }}</option>
+          </select>
+          <p class="text-xs text-slate-500 mt-1">
+            Changing this updates <strong>{{ warehouse }}</strong> in the summary above and which feed cards and formats are shown. It does not change catalog scope.
+          </p>
+        </div>
+      </div>
+    </section>
+
     <!-- Warehouse operational cards -->
-    <section v-if="operationalCards.length" class="space-y-3">
-      <h2 class="import-section-title">Warehouse data · {{ warehouse }}</h2>
+    <section v-if="operationalCards.length" class="import-scope-block import-scope-block--feeds space-y-3">
+      <h2 class="import-section-title import-section-title--feeds">
+        Warehouse data · <strong class="import-section-warehouse">{{ warehouse }}</strong>
+      </h2>
       <div class="import-card-grid">
         <button
           v-for="c in operationalCards"
@@ -79,8 +105,20 @@
       <div class="flex items-start justify-between gap-3">
         <div class="min-w-0">
           <h3 class="text-lg font-medium text-slate-800">{{ selectedCard.title }}</h3>
-          <p class="text-sm text-slate-600 mt-0.5">
-            <strong>Format:</strong> {{ selectedCard.formatName }} · <strong>Target:</strong> {{ selectedCard.targetWarehouse }}
+          <p class="import-detail-target text-sm text-slate-600 mt-1">
+            <span><strong>Format:</strong> {{ selectedCard.formatName }}</span>
+            <span class="import-detail-target__sep" aria-hidden="true">·</span>
+            <span class="import-detail-target__target-line">
+              <strong>Target:</strong>
+              <strong
+                class="import-detail-target__emphasis"
+                :class="
+                  isCatalogImportSelected
+                    ? 'import-detail-target__emphasis--catalog'
+                    : 'import-detail-target__emphasis--warehouse'
+                "
+              >{{ importTargetDisplay }}</strong>
+            </span>
           </p>
           <p class="text-xs text-slate-500 mt-1">Required columns: {{ selectedCard.requiredColumns.join(', ') || '—' }}</p>
         </div>
@@ -249,7 +287,18 @@
       <!-- Upload result + execute -->
       <div v-if="currentUploadResult" class="mt-4 p-3 rounded-lg bg-slate-50 text-sm flex flex-wrap items-center gap-2">
         <span>Run ID: <code class="text-xs bg-slate-200 px-1.5 py-0.5 rounded">{{ currentUploadResult.run_id.slice(0, 8) }}</code></span>
-        <span>Staged {{ currentUploadResult.staged_count }}, rejected {{ currentUploadResult.rejected_count }}</span>
+        <span v-if="!currentUploadResult.duplicate_noop">
+          Staged {{ currentUploadResult.staged_count }}, rejected {{ currentUploadResult.rejected_count }}
+        </span>
+        <p
+          v-if="currentUploadResult.duplicate_noop"
+          class="w-full basis-full text-sm text-amber-900 bg-amber-50 border border-amber-200 rounded px-2 py-1.5"
+        >
+          {{
+            currentUploadResult.message ||
+              'This exact file was already imported successfully. Nothing new was staged. Use a different file or clear the prior run if you need to re-import.'
+          }}
+        </p>
         <span v-if="currentUploadResult.mode" class="badge" :class="currentUploadResult.mode === 'historical' ? 'badge-warn' : 'badge-info'">{{ currentUploadResult.mode }}</span>
         <button v-if="currentUploadResult.requires_confirm" type="button" class="btn-secondary text-sm border-amber-300" @click="showConfirmModal(currentUploadResult)">Confirm backfill</button>
         <button
@@ -298,7 +347,9 @@
     <!-- Link-only card (Warehouse Product Codes) -->
     <section v-else-if="selectedCard?.linkHref" class="card card-body">
       <h3 class="text-lg font-medium text-slate-800">{{ selectedCard.title }}</h3>
-      <p class="text-sm text-slate-600 mt-1">Map BLP external codes to canonical SKUs before importing BLP SOH.</p>
+      <p class="text-sm text-slate-600 mt-1">
+        Map {{ warehouse }} external codes to canonical SKUs before importing {{ warehouse }} SOH.
+      </p>
       <router-link :to="selectedCard.linkHref" class="btn-primary mt-3 inline-block">{{ selectedCard.linkLabel || 'Open' }}</router-link>
     </section>
 
@@ -318,7 +369,24 @@
           </template>
           <template #cell-actions="{ row }">
             <button type="button" class="btn-secondary text-xs py-1 px-2" @click="openRunDrawer(getRunRow(row))">Details</button>
-            <button v-if="getRunRow(row).status === 'pending'" type="button" class="btn-primary text-xs py-1 px-2 ml-1" @click="executePendingRun(row)">Execute</button>
+            <button
+              v-if="getRunRow(row).status === 'pending' && row.needsConfirmBeforeExecute"
+              type="button"
+              class="btn-secondary text-xs py-1 px-2 ml-1 border-amber-400 text-amber-900 hover:bg-amber-50"
+              @click="confirmPendingRunFromTable(String(row.id))"
+            >
+              Confirm
+            </button>
+            <button
+              v-if="getRunRow(row).status === 'pending'"
+              type="button"
+              class="btn-primary text-xs py-1 px-2 ml-1"
+              :disabled="Boolean(row.needsConfirmBeforeExecute)"
+              :title="row.needsConfirmBeforeExecute ? 'Confirm this run first (amber button)' : undefined"
+              @click="executePendingRun(row)"
+            >
+              Execute
+            </button>
           </template>
           <template #empty>
             <p class="text-slate-500">No runs yet. Upload a file above.</p>
@@ -378,7 +446,7 @@
 <script setup lang="ts">
 import { ref, computed, watch, onMounted } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import api from '@/api/client'
+import api, { INGESTION_UPLOAD_TIMEOUT_MS } from '@/api/client'
 import { useAdminStore } from '@/stores/admin'
 import { useBannerStore } from '@/stores/banner'
 import DataTable from '@/components/console/DataTable.vue'
@@ -401,6 +469,8 @@ interface IngestionRunRow {
   inserted_count: number
   rejected_count: number
   started_at: string | null
+  requires_confirm?: boolean
+  confirmed_at?: string | null
 }
 interface IngestionRunDetail extends IngestionRunRow {
   rejections_sample: { row_number: number; reason: string; raw_payload: unknown }[]
@@ -417,6 +487,9 @@ interface IngestionUploadResult {
   date_min?: string
   date_max?: string
   import_summary?: { distinct_skus: number; total_qty: number; row_count: number; parsing_errors: number }
+  /** Server skipped work: same file bytes already ingested successfully for this entity */
+  duplicate_noop?: boolean
+  message?: string | null
 }
 interface LatestRun {
   id: string
@@ -460,6 +533,17 @@ const operationalCards = computed(() =>
   visibleCards.value.filter(
     (c) => c.dataType !== 'product_master' && c.dataType !== 'warehouse_product_codes',
   ),
+)
+
+const isCatalogImportSelected = computed(
+  () =>
+    selectedDataType.value === 'product_master' ||
+    selectedDataType.value === 'warehouse_product_codes',
+)
+
+/** Shown next to Format in the detail panel — bold emphasis in template. */
+const importTargetDisplay = computed(() =>
+  isCatalogImportSelected.value ? 'Platform-wide (catalog)' : `Warehouse ${warehouse.value}`,
 )
 
 function selectImportCard(c: ImportCardDef) {
@@ -592,6 +676,7 @@ const currentUploadResult = computed(() => {
 const needsExecute = computed(() => {
   const r = currentUploadResult.value
   if (!r) return false
+  if (r.duplicate_noop) return false
   if (selectedDataType.value === 'sales_out' || selectedDataType.value === 'stock_on_hand') return true
   if (['demand_pipeline', 'sales_direct', 'samples', 'product_master'].includes(selectedDataType.value)) return true
   return false
@@ -603,13 +688,25 @@ const executeButtonLabel = computed(() => {
   return 'Execute transform'
 })
 
+function ingestionRunNeedsConfirmation(row: Record<string, unknown>): boolean {
+  if (String(row.status ?? '') !== 'pending') return false
+  const req = row.requires_confirm === true || row.requires_confirm === 1
+  if (!req) return false
+  const conf = row.confirmed_at
+  return conf == null || conf === ''
+}
+
 const ingestionRunsForTable = computed(() =>
-  ingestionRuns.value.map((r) => ({
-    ...r,
-    file_name: r.file_name || '—',
-    started_at: r.started_at ? formatDate(r.started_at) : '—',
-    actions: '',
-  }))
+  ingestionRuns.value.map((r) => {
+    const base = { ...r } as Record<string, unknown>
+    return {
+      ...r,
+      file_name: r.file_name || '—',
+      started_at: r.started_at ? formatDate(r.started_at) : '—',
+      actions: '',
+      needsConfirmBeforeExecute: ingestionRunNeedsConfirmation(base),
+    }
+  })
 )
 
 function formatDate(iso: string) {
@@ -629,7 +726,7 @@ function formatDateShort(iso: string) {
 }
 
 const IMPORT_UPLOAD_HINT =
-  'Large files can take a while. Keep this tab open until the run summary appears below.'
+  'The progress bar only tracks sending the file. Staging on the server can take 10–30+ minutes for multi-million-row files. Keep this tab open until the run ID appears; use dev tools Network tab if the request is still pending.'
 
 function formatApiDetail(err: unknown): string {
   const msg =
@@ -638,6 +735,29 @@ function formatApiDetail(err: unknown): string {
       : null
   if (msg == null) return 'Request failed.'
   return typeof msg === 'string' ? msg : JSON.stringify(msg)
+}
+
+/** Backend returns 409 with detail.code confirmation_required for large/historical runs. */
+function humanizeIngestion409(err: unknown): string | null {
+  const res =
+    err && typeof err === 'object' && 'response' in err
+      ? (err as { response?: { status?: number; data?: { detail?: unknown } } }).response
+      : undefined
+  if (res?.status !== 409) return null
+  const d = res.data?.detail
+  if (
+    d &&
+    typeof d === 'object' &&
+    'code' in d &&
+    (d as { code: string }).code === 'confirmation_required'
+  ) {
+    return (
+      'Confirmation required: click «Confirm backfill» for this run on the Imports page, then run Execute again. ' +
+      'Or confirm with POST /api/ingestion/runs/{run_id}/confirm?confirmed_by=you — then build/execute. ' +
+      'Until then, rows stay in staging only (inserted_count stays 0).'
+    )
+  }
+  return null
 }
 
 function beginImportUploadDisplay(fileName?: string) {
@@ -653,10 +773,13 @@ function onImportMultipartProgress(e: { loaded: number; total?: number }) {
   if (!importUploadUi.value) return
   const total = e.total
   if (total && total > 0) {
+    const uploadComplete = e.loaded >= total
     importUploadUi.value = {
       ...importUploadUi.value,
-      percent: Math.min(99, Math.round((100 * e.loaded) / total)),
-      message: 'Sending file to server…',
+      percent: uploadComplete ? 99 : Math.min(98, Math.round((100 * e.loaded) / total)),
+      message: uploadComplete
+        ? 'File sent — server is staging rows (often much slower than this bar; do not refresh — can take many minutes)…'
+        : 'Sending file to server…',
     }
   } else {
     importUploadUi.value = {
@@ -667,20 +790,32 @@ function onImportMultipartProgress(e: { loaded: number; total?: number }) {
   }
 }
 
-function setImportUploadProcessing(message: string) {
-  importUploadUi.value = {
-    message,
-    percent: null,
-    hint: 'The server is parsing and staging rows — often slower than the upload bar. A run ID will appear below when done.',
-  }
-}
-
 function endImportUploadDisplay() {
   importUploadUi.value = null
 }
 
 function getRunRow(row: Record<string, unknown>): { id: string; status: string } {
   return { id: String(row.id), status: String(row.status ?? '') }
+}
+
+async function confirmPendingRunFromTable(runId: string): Promise<void> {
+  try {
+    await api.post(`/ingestion/runs/${runId}/confirm`, null, {
+      params: { confirmed_by: 'imports_table' },
+    })
+    await loadIngestionRuns()
+    bannerStore.add({
+      type: 'success',
+      title: 'Run confirmed',
+      message: 'Click Execute to write staged rows into planning tables.',
+    })
+  } catch (err: unknown) {
+    bannerStore.add({
+      type: 'error',
+      title: 'Confirm failed',
+      message: formatApiDetail(err),
+    })
+  }
 }
 
 function statusBadgeClass(status: string) {
@@ -742,10 +877,17 @@ async function uploadSalesOutWithMode(mode: 'weekly' | 'historical') {
   try {
     const { data } = await api.post<IngestionUploadResult>('/ingestion/sales-out/upload', form, {
       params,
+      timeout: INGESTION_UPLOAD_TIMEOUT_MS,
       onUploadProgress: (e) => onImportMultipartProgress(e),
     })
-    setImportUploadProcessing('Staging Sales Out rows on server…')
     salesOutUploadResult.value = { ...data, confirmed: data.requires_confirm ? false : true }
+    if (data.duplicate_noop) {
+      bannerStore.add({
+        type: 'info',
+        title: 'Same file as a completed import',
+        message: data.message || 'The server did not stage again because this file was already imported successfully.',
+      })
+    }
     salesOutFile.value = null
     if (salesOutFileInput.value) salesOutFileInput.value.value = ''
     try {
@@ -806,10 +948,17 @@ async function uploadSohWithMode(mode: 'weekly' | 'historical') {
   try {
     const { data } = await api.post<IngestionUploadResult>('/ingestion/stock-on-hand/upload', form, {
       params,
+      timeout: INGESTION_UPLOAD_TIMEOUT_MS,
       onUploadProgress: (e) => onImportMultipartProgress(e),
     })
-    setImportUploadProcessing('Staging SOH rows on server…')
     sohUploadResult.value = { ...data, confirmed: data.requires_confirm ? false : true }
+    if (data.duplicate_noop) {
+      bannerStore.add({
+        type: 'info',
+        title: 'Same file as a completed import',
+        message: data.message || 'The server did not stage again because this file was already imported successfully.',
+      })
+    }
     sohFile.value = null
     if (sohFileInput.value) sohFileInput.value.value = ''
     try {
@@ -852,10 +1001,17 @@ async function uploadDemandWithMode(mode: 'weekly' | 'historical') {
   try {
     const { data } = await api.post<IngestionUploadResult>('/ingestion/upload', form, {
       params: { entity: 'demand', mode },
+      timeout: INGESTION_UPLOAD_TIMEOUT_MS,
       onUploadProgress: (e) => onImportMultipartProgress(e),
     })
-    setImportUploadProcessing('Staging demand rows on server…')
     demandUploadResult.value = { ...data, confirmed: data.requires_confirm ? false : true }
+    if (data.duplicate_noop) {
+      bannerStore.add({
+        type: 'info',
+        title: 'Same file as a completed import',
+        message: data.message || 'The server did not stage again because this file was already imported successfully.',
+      })
+    }
     demandFile.value = null
     if (demandFileInput.value) demandFileInput.value.value = ''
     try {
@@ -889,10 +1045,17 @@ async function uploadProductMaster() {
   try {
     const { data } = await api.post<IngestionUploadResult>('/ingestion/upload', form, {
       params: { entity: 'product_master', mode: 'weekly' },
+      timeout: INGESTION_UPLOAD_TIMEOUT_MS,
       onUploadProgress: (e) => onImportMultipartProgress(e),
     })
-    setImportUploadProcessing('Staging product master on server…')
     productMasterUploadResult.value = { ...data, confirmed: true }
+    if (data.duplicate_noop) {
+      bannerStore.add({
+        type: 'info',
+        title: 'Same file as a completed import',
+        message: data.message || 'The server did not stage again because this file was already imported successfully.',
+      })
+    }
     productMasterFile.value = null
     if (productMasterFileInput.value) productMasterFileInput.value.value = ''
     try {
@@ -954,18 +1117,22 @@ async function executeCurrentRun() {
   try {
     if (selectedDataType.value === 'sales_out') {
       try {
-        await api.post(`/ingestion/sales-out/${r.run_id}/build-weekly`)
+        await api.post(`/ingestion/sales-out/${r.run_id}/build-weekly`, null, {
+          timeout: INGESTION_UPLOAD_TIMEOUT_MS,
+        })
         await loadIngestionRuns()
         bannerStore.add({ type: 'success', title: 'Sales Out build-weekly completed', message: 'demand_actuals written.' })
       } catch (err: unknown) {
-        const detail = formatApiDetail(err)
+        const detail = humanizeIngestion409(err) ?? formatApiDetail(err)
         importUploadError.value = detail
         alert(`Build failed: ${detail}`)
       }
       salesOutUploadResult.value = null
     } else if (selectedDataType.value === 'stock_on_hand') {
       try {
-        await api.post(`/ingestion/stock-on-hand/${r.run_id}/execute`)
+        await api.post(`/ingestion/stock-on-hand/${r.run_id}/execute`, null, {
+          timeout: INGESTION_UPLOAD_TIMEOUT_MS,
+        })
         await loadIngestionRuns()
         bannerStore.add({ type: 'success', title: 'SOH import executed', message: 'inventory_snapshots_weekly updated.' })
       } catch (err: unknown) {
@@ -983,11 +1150,13 @@ async function executeCurrentRun() {
       sohRejectionDetail.value = null
     } else if (['demand_pipeline', 'sales_direct', 'samples', 'product_master'].includes(selectedDataType.value)) {
       try {
-        await api.post(`/ingestion/runs/${r.run_id}/execute`)
+        await api.post(`/ingestion/runs/${r.run_id}/execute`, null, {
+          timeout: INGESTION_UPLOAD_TIMEOUT_MS,
+        })
         await loadIngestionRuns()
         bannerStore.add({ type: 'success', title: 'Import executed', message: 'Transform completed.' })
       } catch (err: unknown) {
-        const detail = formatApiDetail(err)
+        const detail = humanizeIngestion409(err) ?? formatApiDetail(err)
         importUploadError.value = detail
         alert(`Execute failed: ${detail}`)
       }
@@ -1000,12 +1169,20 @@ async function executeCurrentRun() {
   }
 }
 
-function executePendingRun(row: Record<string, unknown>) {
+async function executePendingRun(row: Record<string, unknown>) {
   const id = String(row.id)
   const entity = String(row.entity ?? '')
+  if (ingestionRunNeedsConfirmation(row)) {
+    bannerStore.add({
+      type: 'error',
+      title: 'Confirm this run first',
+      message: 'Use the amber «Confirm» button in this row, then «Execute».',
+    })
+    return
+  }
   if (entity === 'stock_on_hand') {
     sohExecuting.value = true
-    api.post(`/ingestion/stock-on-hand/${id}/execute`).then(() => {
+    api.post(`/ingestion/stock-on-hand/${id}/execute`, null, { timeout: INGESTION_UPLOAD_TIMEOUT_MS }).then(() => {
       loadIngestionRuns()
       bannerStore.add({ type: 'success', title: 'SOH executed', message: '' })
     }).catch(() => {
@@ -1014,20 +1191,20 @@ function executePendingRun(row: Record<string, unknown>) {
       sohExecuting.value = false
     })
   } else if (entity === 'sales_out') {
-    api.post(`/ingestion/sales-out/${id}/build-weekly`).then(() => {
+    api.post(`/ingestion/sales-out/${id}/build-weekly`, null, { timeout: INGESTION_UPLOAD_TIMEOUT_MS }).then(() => {
       loadIngestionRuns()
       bannerStore.add({ type: 'success', title: 'Sales Out build-weekly completed', message: '' })
-    }).catch((err) => {
-      const msg = err?.response?.data?.detail
-      alert(msg ? `Build failed: ${typeof msg === 'string' ? msg : JSON.stringify(msg)}` : 'Build failed.')
+    }).catch((err: unknown) => {
+      const msg = humanizeIngestion409(err) ?? formatApiDetail(err)
+      alert(`Build failed: ${msg}`)
     })
   } else {
-    api.post(`/ingestion/runs/${id}/execute`).then(() => {
+    api.post(`/ingestion/runs/${id}/execute`, null, { timeout: INGESTION_UPLOAD_TIMEOUT_MS }).then(() => {
       loadIngestionRuns()
       bannerStore.add({ type: 'success', title: 'Import executed', message: '' })
-    }).catch((err) => {
-      const msg = err?.response?.data?.detail
-      alert(msg ? `Execute failed: ${typeof msg === 'string' ? msg : JSON.stringify(msg)}` : 'Execute failed.')
+    }).catch((err: unknown) => {
+      const msg = humanizeIngestion409(err) ?? formatApiDetail(err)
+      alert(`Execute failed: ${msg}`)
     })
   }
 }
@@ -1073,6 +1250,116 @@ function downloadRejectionsCsv() {
   letter-spacing: 0.06em;
   text-transform: uppercase;
   color: rgb(100 116 139);
+}
+.import-section-title--catalog {
+  color: rgb(30 64 175);
+}
+.import-section-title--feeds {
+  color: rgb(21 128 61);
+}
+.import-section-warehouse {
+  font-size: inherit;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  color: rgb(15 23 42);
+}
+.import-context-summary {
+  border: 1px solid rgb(226 232 240);
+  background: linear-gradient(to bottom, rgb(248 250 252), rgb(255 255 255));
+}
+.import-context-summary__grid {
+  display: grid;
+  gap: 1rem;
+}
+@media (min-width: 768px) {
+  .import-context-summary__grid {
+    grid-template-columns: 1fr 1fr;
+    gap: 1.5rem;
+  }
+}
+.import-context-summary__block {
+  padding: 0.25rem 0;
+}
+@media (min-width: 768px) {
+  .import-context-summary__block--feeds {
+    border-left: 1px solid rgb(226 232 240);
+    padding-left: 1.5rem;
+  }
+}
+.import-context-summary__heading {
+  font-size: 0.6875rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: rgb(71 85 105);
+  margin: 0 0 0.5rem;
+}
+.import-context-summary__target {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0.5rem 0.75rem;
+  margin: 0 0 0.5rem;
+}
+.import-context-summary__target-label {
+  font-size: 0.75rem;
+  font-weight: 600;
+  color: rgb(100 116 139);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.import-context-summary__warehouse {
+  font-size: 1.5rem;
+  font-weight: 800;
+  line-height: 1.1;
+  color: var(--accent, #214a7d);
+  letter-spacing: 0.03em;
+}
+.import-context-summary__text {
+  font-size: 0.8125rem;
+  line-height: 1.45;
+  color: rgb(51 65 85);
+  margin: 0;
+}
+.import-scope-block--catalog {
+  padding-top: 0.25rem;
+  border-top: 3px solid rgb(199 210 254);
+  margin-top: 0.25rem;
+}
+.import-scope-block--feeds {
+  padding-top: 0.25rem;
+  border-top: 3px solid rgb(167 243 208);
+  margin-top: 0.25rem;
+}
+.import-warehouse-card__select {
+  font-weight: 600;
+}
+.import-detail-target {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0.25rem 0.5rem;
+}
+.import-detail-target__sep {
+  color: rgb(148 163 184);
+  user-select: none;
+}
+.import-detail-target__target-line {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0.35rem;
+}
+.import-detail-target__emphasis {
+  font-size: 1.0625rem;
+  font-weight: 800;
+  letter-spacing: 0.02em;
+}
+.import-detail-target__emphasis--catalog {
+  color: rgb(67 56 202);
+}
+.import-detail-target__emphasis--warehouse {
+  color: rgb(22 101 52);
 }
 .import-card-grid {
   display: grid;

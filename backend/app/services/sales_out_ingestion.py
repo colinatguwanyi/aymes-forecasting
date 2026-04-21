@@ -14,7 +14,6 @@ from app.models import (
     DemandActual,
     DemandFactsWeekly,
     DemandType,
-    IngestionMode,
     IngestionRejection,
     IngestionRun,
     IngestionStatus,
@@ -28,6 +27,10 @@ logger = logging.getLogger(__name__)
 
 SALES_OUT_WAREHOUSE = "AAH"
 HISTORICAL_BATCH_WEEKS = 8
+# Stream stage rows so multi-million-row runs do not load all into RAM.
+STAGE_YIELD_PER = 5000
+# Commit in chunks so one build does not hold row/table locks for the whole run.
+WRITE_KEY_BATCH = 6000
 
 # Column name variants (strip and case-insensitive match)
 def _get(row: dict[str, Any], *keys: str) -> Any:
@@ -122,13 +125,8 @@ def build_demand_from_sales_out(db: Session, run_id: UUID) -> tuple[int, int, in
         raise ValueError(f"Run entity is {getattr(run.entity, 'value', run.entity)}, expected sales_out")
 
     run.status = IngestionStatus.RUNNING
-    db.flush()
-
-    stage_rows = (
-        db.query(SalesOutStage)
-        .filter(SalesOutStage.ingestion_run_id == run_id)
-        .all()
-    )
+    db.commit()
+    db.refresh(run)
 
     # aah_code -> sku (products)
     aah_to_sku: dict[str, str] = {}
@@ -142,8 +140,15 @@ def build_demand_from_sales_out(db: Session, run_id: UUID) -> tuple[int, int, in
         lambda: (Decimal("0"), Decimal("0"), Decimal("0"), 0)
     )
     rejected = 0
+    staged_count = 0
 
-    for row in stage_rows:
+    stage_q = (
+        db.query(SalesOutStage)
+        .filter(SalesOutStage.ingestion_run_id == run_id)
+        .yield_per(STAGE_YIELD_PER)
+    )
+    for row in stage_q:
+        staged_count += 1
         aah = (getattr(row, "aah_product_code", None) or "").strip()
         sku = aah_to_sku.get(aah)
         if not sku:
@@ -173,14 +178,12 @@ def build_demand_from_sales_out(db: Session, run_id: UUID) -> tuple[int, int, in
             prev_cnt + 1,
         )
 
-    # Group by week for batch processing (historical mode)
+    # Group by week for batch processing
     weeks_sorted = sorted({k[0] for k in aggregated.keys()})
-    mode = getattr(run, "mode", None)
-    is_historical = mode == IngestionMode.HISTORICAL
 
     weeks_written = 0
-    if is_historical and len(weeks_sorted) > HISTORICAL_BATCH_WEEKS:
-        # Chunked: process batches of weeks, commit each batch
+    if len(weeks_sorted) > HISTORICAL_BATCH_WEEKS:
+        # Chunked by calendar week: commit after each chunk (releases locks / undo log).
         progress: dict[str, int | str] = {"batches_done": 0, "weeks_done": 0}
         for i in range(0, len(weeks_sorted), HISTORICAL_BATCH_WEEKS):
             batch_weeks = weeks_sorted[i : i + HISTORICAL_BATCH_WEEKS]
@@ -222,14 +225,57 @@ def build_demand_from_sales_out(db: Session, run_id: UUID) -> tuple[int, int, in
                     )
                 )
                 weeks_written += 1
-            db.flush()
             progress["batches_done"] = (i // HISTORICAL_BATCH_WEEKS) + 1
             progress["weeks_done"] = weeks_written
             _pm = getattr(run, "progress_meta", None)
             _run_pm = _pm if isinstance(_pm, dict) else {}
             run.progress_meta = {**_run_pm, **progress}
+            db.commit()
+            db.refresh(run)
+    elif len(aggregated) > WRITE_KEY_BATCH:
+        keys_sorted = sorted(aggregated.keys(), key=lambda k: (k[0], k[1]))
+        for bi in range(0, len(keys_sorted), WRITE_KEY_BATCH):
+            batch_keys = keys_sorted[bi : bi + WRITE_KEY_BATCH]
+            for (week_start, sku) in batch_keys:
+                db.query(DemandActual).filter(
+                    DemandActual.week_start == week_start,
+                    DemandActual.sku == sku,
+                    DemandActual.warehouse_code == SALES_OUT_WAREHOUSE,
+                    DemandActual.demand_type == DemandType.CUSTOMER,
+                ).delete(synchronize_session=False)
+                db.query(DemandFactsWeekly).filter(
+                    DemandFactsWeekly.week_start == week_start,
+                    DemandFactsWeekly.sku == sku,
+                    DemandFactsWeekly.warehouse_code == SALES_OUT_WAREHOUSE,
+                    DemandFactsWeekly.demand_type == DemandType.CUSTOMER,
+                ).delete(synchronize_session=False)
+            for (week_start, sku) in batch_keys:
+                inv_qty = aggregated[(week_start, sku)][0]
+                db.add(
+                    DemandActual(
+                        week_start=week_start,
+                        sku=sku,
+                        warehouse_code=SALES_OUT_WAREHOUSE,
+                        demand_type=DemandType.CUSTOMER,
+                        qty=inv_qty,
+                    )
+                )
+                db.add(
+                    DemandFactsWeekly(
+                        week_start=week_start,
+                        sku=sku,
+                        warehouse_code=SALES_OUT_WAREHOUSE,
+                        demand_type=DemandType.CUSTOMER,
+                        qty=inv_qty,
+                        source_run_id=run_id,
+                        is_imputed=False,
+                        is_outlier=False,
+                    )
+                )
+                weeks_written += 1
+            db.commit()
+            db.refresh(run)
     else:
-        # Weekly mode or small historical: single transaction
         keys_to_write = list(aggregated.keys())
         for (week_start, sku) in keys_to_write:
             db.query(DemandActual).filter(
@@ -274,10 +320,10 @@ def build_demand_from_sales_out(db: Session, run_id: UUID) -> tuple[int, int, in
     run.status = IngestionStatus.SUCCESS
     run.error_summary = None
     run.finished_at = datetime.now(timezone.utc)
-    run.row_count = len(stage_rows)
+    run.row_count = staged_count
     db.flush()
     logger.info(
         "build_demand_from_sales_out: run_id=%s staged=%s weeks_written=%s rejected=%s",
-        run_id, len(stage_rows), weeks_written, rejected,
+        run_id, staged_count, weeks_written, rejected,
     )
-    return len(stage_rows), weeks_written, rejected
+    return staged_count, weeks_written, rejected

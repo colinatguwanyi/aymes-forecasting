@@ -98,6 +98,11 @@ class Warehouse(Base):
     name = Column(String(256), nullable=True)
     timezone = Column(String(64), nullable=False, server_default="Europe/London")
     active = Column(Boolean, nullable=False, server_default=text("1"))
+    # Site metadata (3PL vs AYMES, address, operational type)
+    is_own_site = Column(Boolean, nullable=False, server_default=text("1"))
+    operator_name = Column(String(256), nullable=True)
+    address = Column(Text, nullable=True)
+    site_type = Column(String(32), nullable=False, server_default="soh_warehouse")
 
 
 class Supplier(Base):

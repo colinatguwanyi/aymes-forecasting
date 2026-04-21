@@ -1,5 +1,8 @@
 import axios from 'axios'
 
+/** Use on ingestion file POSTs; staging can run many minutes after upload bytes complete. */
+export const INGESTION_UPLOAD_TIMEOUT_MS = 3_600_000
+
 const api = axios.create({
   baseURL: '/api',
   headers: { 'Content-Type': 'application/json' },
@@ -117,12 +120,18 @@ export interface Product {
   product_family?: string | null
 }
 
+/** site_type: soh_warehouse | factory | third_party_3pl */
 export interface Warehouse {
   id: number
   code: string
   name: string | null
   timezone: string
   active: boolean
+  is_own_site: boolean
+  operator_name: string | null
+  address: string | null
+  site_type: string
+  has_stock: boolean
 }
 
 export interface Supplier {

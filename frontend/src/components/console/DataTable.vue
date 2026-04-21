@@ -66,29 +66,15 @@
               </slot>
             </td>
             <td v-if="rowActions.length" :class="['text-right', densityTdClass]" @click.stop>
-              <div class="relative inline-block" :ref="(el) => setMenuEl(idx, el as HTMLElement)">
+              <div class="inline-block" :ref="(el) => setMenuEl(idx, el as HTMLElement)">
                 <button
                   type="button"
                   class="p-1.5 rounded hover:bg-neutral-200 text-neutral-500 hover:text-neutral-700"
                   aria-label="Row actions"
-                  @click.stop="toggleMenu(idx)"
+                  @click.stop="toggleMenu(idx, row)"
                 >
                   <svg class="w-4 h-4" fill="currentColor" viewBox="0 0 20 20"><path d="M10 6a2 2 0 110-4 2 2 0 010 4zM10 12a2 2 0 110-4 2 2 0 010 4zM10 18a2 2 0 110-4 2 2 0 010 4z" /></svg>
                 </button>
-                <div
-                  v-if="openMenuIdx === idx"
-                  class="absolute right-0 mt-1 w-40 py-1 bg-white border border-neutral-200 rounded-md shadow-lg z-20"
-                >
-                  <button
-                    v-for="action in rowActions"
-                    :key="action.id"
-                    type="button"
-                    class="w-full text-left px-3 py-2 text-sm text-neutral-700 hover:bg-neutral-100"
-                    @click="runAction(action, row)"
-                  >
-                    {{ action.label }}
-                  </button>
-                </div>
               </div>
             </td>
           </tr>
@@ -134,11 +120,36 @@
         </div>
       </div>
     </div>
+
+    <Teleport to="body">
+      <div
+        v-if="openMenuIdx !== null && menuPosition && openMenuRow"
+        ref="floatingMenuRef"
+        class="data-table-floating-menu"
+        :style="{
+          top: menuPosition.top,
+          left: menuPosition.left,
+        }"
+        role="menu"
+        @click.stop
+      >
+        <button
+          v-for="action in rowActions"
+          :key="action.id"
+          type="button"
+          class="w-full text-left px-3 py-2 text-sm text-neutral-700 hover:bg-neutral-100"
+          role="menuitem"
+          @click="runAction(action, openMenuRow)"
+        >
+          {{ action.label }}
+        </button>
+      </div>
+    </Teleport>
   </div>
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted, onUnmounted } from 'vue'
+import { ref, computed, onMounted, onUnmounted, nextTick } from 'vue'
 
 export interface DataTableColumn {
   key: string
@@ -212,31 +223,84 @@ function formatCell(value: unknown, col: DataTableColumn): string {
   return String(value)
 }
 
+const MENU_WIDTH_PX = 160
+const MENU_ITEM_APPROX_PX = 40
+
 const openMenuIdx = ref<number | null>(null)
+const openMenuRow = ref<Record<string, unknown> | null>(null)
+const menuPosition = ref<{ top: string; left: string } | null>(null)
 const menuEls = ref<Record<number, HTMLElement | null>>({})
+const floatingMenuRef = ref<HTMLElement | null>(null)
 
 function setMenuEl(idx: number, el: HTMLElement | null) {
   menuEls.value[idx] = el
 }
 
-function toggleMenu(idx: number) {
-  openMenuIdx.value = openMenuIdx.value === idx ? null : idx
+function closeMenu() {
+  openMenuIdx.value = null
+  openMenuRow.value = null
+  menuPosition.value = null
+}
+
+function positionFloatingMenu(idx: number) {
+  const wrap = menuEls.value[idx]
+  if (!wrap) return
+  const btn = wrap.querySelector('button')
+  if (!btn) return
+  const rect = btn.getBoundingClientRect()
+  const itemCount = Math.max(1, props.rowActions.length)
+  const menuHeight = itemCount * MENU_ITEM_APPROX_PX + 8
+  let top = rect.bottom + 4
+  if (top + menuHeight > window.innerHeight - 8) {
+    top = Math.max(8, rect.top - menuHeight - 4)
+  }
+  let left = rect.right - MENU_WIDTH_PX
+  if (left < 8) left = 8
+  if (left + MENU_WIDTH_PX > window.innerWidth - 8) {
+    left = Math.max(8, window.innerWidth - MENU_WIDTH_PX - 8)
+  }
+  menuPosition.value = { top: `${top}px`, left: `${left}px` }
+}
+
+async function toggleMenu(idx: number, row: Record<string, unknown>) {
+  if (openMenuIdx.value === idx) {
+    closeMenu()
+    return
+  }
+  openMenuIdx.value = idx
+  openMenuRow.value = row
+  menuPosition.value = { top: '0px', left: '0px' }
+  await nextTick()
+  positionFloatingMenu(idx)
 }
 
 function runAction(action: RowAction, row: Record<string, unknown>) {
-  openMenuIdx.value = null
+  closeMenu()
   action.handler(row)
 }
 
 function onClickOutside(e: MouseEvent) {
-  const el = openMenuIdx.value !== null ? menuEls.value[openMenuIdx.value] : null
-  if (el && !el.contains(e.target as Node)) {
-    openMenuIdx.value = null
-  }
+  const t = e.target as Node
+  if (floatingMenuRef.value?.contains(t)) return
+  const idx = openMenuIdx.value
+  if (idx !== null && menuEls.value[idx]?.contains(t)) return
+  closeMenu()
 }
 
-onMounted(() => document.addEventListener('click', onClickOutside))
-onUnmounted(() => document.removeEventListener('click', onClickOutside))
+function onScrollOrResize() {
+  if (openMenuIdx.value !== null) positionFloatingMenu(openMenuIdx.value)
+}
+
+onMounted(() => {
+  document.addEventListener('click', onClickOutside)
+  window.addEventListener('scroll', onScrollOrResize, true)
+  window.addEventListener('resize', onScrollOrResize)
+})
+onUnmounted(() => {
+  document.removeEventListener('click', onClickOutside)
+  window.removeEventListener('scroll', onScrollOrResize, true)
+  window.removeEventListener('resize', onScrollOrResize)
+})
 </script>
 
 <style scoped>
@@ -253,5 +317,22 @@ onUnmounted(() => document.removeEventListener('click', onClickOutside))
   z-index: 10;
   background: var(--table-header-bg, #153256);
   border-bottom: 1px solid #0f2847;
+}
+</style>
+
+<style>
+/* Unscoped: teleported to body */
+.data-table-floating-menu {
+  position: fixed;
+  z-index: 10050;
+  min-width: 10rem;
+  width: 10rem;
+  padding: 0.25rem 0;
+  background: white;
+  border: 1px solid rgb(229 231 235);
+  border-radius: 0.375rem;
+  box-shadow:
+    0 10px 15px -3px rgb(0 0 0 / 0.1),
+    0 4px 6px -4px rgb(0 0 0 / 0.1);
 }
 </style>

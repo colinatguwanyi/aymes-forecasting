@@ -37,7 +37,8 @@ def run_projection_endpoint(
     return {"run_id": run_id}
 
 
-@router.get("/")
+@router.get("")
+@router.get("/", include_in_schema=False)
 def list_projections(
     run_id: str = Query(...),
     warehouse_id: Optional[int] = Query(None),
