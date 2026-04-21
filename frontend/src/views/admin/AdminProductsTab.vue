@@ -3,24 +3,7 @@
     <PageHeader
       title="Products"
       :breadcrumbs="[{ label: 'Admin', path: '/admin/products' }]"
-    >
-      <template #actions>
-        <button
-          type="button"
-          class="px-4 py-2 text-sm font-medium text-white bg-neutral-700 rounded-lg hover:bg-neutral-800"
-          @click="openDrawer('add')"
-        >
-          Add product
-        </button>
-        <button
-          type="button"
-          class="px-4 py-2 text-sm font-medium text-neutral-700 bg-white border border-neutral-300 rounded-lg hover:bg-neutral-50"
-          @click="exportCsv"
-        >
-          Export CSV
-        </button>
-      </template>
-    </PageHeader>
+    />
 
     <FilterBar
       v-model="search"
@@ -28,6 +11,16 @@
       :has-active-filters="filterActive !== 'all'"
       @clear="filterActive = 'all'; search = ''"
     >
+      <template #leading>
+        <button type="button" class="btn-primary px-4" @click="openDrawer('add')">Add product</button>
+        <button
+          type="button"
+          class="btn-secondary px-4"
+          @click="exportCsv"
+        >
+          Export CSV
+        </button>
+      </template>
       <template #filters>
         <select
           v-model="filterActive"
@@ -107,7 +100,7 @@
         </button>
         <button
           type="button"
-          class="px-4 py-2 text-sm font-medium text-white bg-neutral-700 rounded-lg hover:bg-neutral-800"
+          class="btn-primary px-4"
           @click="submitDrawer"
         >
           {{ drawerMode === 'add' ? 'Add product' : 'Save' }}

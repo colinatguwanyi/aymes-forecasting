@@ -393,9 +393,24 @@ async function loadWarehouseReadiness() {
 watch([demandSource], loadWarehouseReadiness)
 
 onMounted(async () => {
-  await Promise.all([store.fetchPlanRuns(), loadDataHealth(), loadWarehouseReadiness()])
-  if (store.planRuns.length && selectedRunId.value == null) selectedRunId.value = store.planRuns[0].id
-  loading.value = false
+  try {
+    await Promise.all([store.fetchPlanRuns(), loadDataHealth(), loadWarehouseReadiness()])
+    if (store.planRuns.length && selectedRunId.value == null) selectedRunId.value = store.planRuns[0].id
+  } catch (err: unknown) {
+    const res = err && typeof err === 'object' && 'response' in err ? (err as { response?: { status?: number; data?: { detail?: unknown } } }).response : null
+    const detail = res?.data?.detail
+    const msg =
+      res?.status === 503
+        ? (typeof detail === 'string' ? detail : 'Database unavailable. Start MySQL and the API.')
+        : detail != null
+          ? typeof detail === 'string'
+            ? detail
+            : JSON.stringify(detail)
+          : 'Could not load dashboard data. Is the API running on port 8000?'
+    bannerStore.add({ type: 'error', title: 'Dashboard load failed', message: msg })
+  } finally {
+    loading.value = false
+  }
 })
 
 watch(selectedRunId, async (id) => {

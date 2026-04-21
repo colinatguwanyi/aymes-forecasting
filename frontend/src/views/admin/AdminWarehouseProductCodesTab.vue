@@ -7,7 +7,7 @@
       <template #actions>
         <button
           type="button"
-          class="px-4 py-2 text-sm font-medium text-white bg-neutral-700 rounded-lg hover:bg-neutral-800"
+          class="btn-primary px-4"
           @click="openDrawer('add')"
         >
           Add mapping
@@ -131,7 +131,7 @@
         </button>
         <button
           type="button"
-          class="px-4 py-2 text-sm font-medium text-white bg-neutral-700 rounded-lg hover:bg-neutral-800"
+          class="btn-primary px-4"
           @click="submitDrawer"
         >
           {{ drawerMode === 'add' ? 'Add' : 'Save' }}
@@ -189,7 +189,7 @@
           </button>
           <button
             type="button"
-            class="px-4 py-2 text-sm font-medium text-white bg-neutral-700 rounded-lg hover:bg-neutral-800"
+            class="btn-primary px-4"
             :disabled="!bulkFile || !bulkWarehouse"
             @click="submitBulkUpload"
           >

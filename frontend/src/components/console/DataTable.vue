@@ -9,9 +9,9 @@
               :key="col.key"
               :class="[
                 densityThClass,
-                'text-left font-medium text-slate-500 whitespace-nowrap',
+                'text-left font-medium text-white/95 whitespace-nowrap',
                 col.align === 'right' && 'text-right',
-                col.sortable && 'cursor-pointer select-none hover:text-slate-700',
+                col.sortable && 'cursor-pointer select-none hover:text-white',
               ]"
               @click="col.sortable && emit('sort', col.key)"
             >
@@ -23,7 +23,7 @@
                 </template>
               </span>
             </th>
-            <th v-if="rowActions.length" :class="['w-12 text-right font-medium text-slate-500', densityThClass]"></th>
+            <th v-if="rowActions.length" :class="['w-12 text-right font-medium text-white/95', densityThClass]"></th>
           </tr>
         </thead>
         <tbody>
@@ -251,7 +251,7 @@ onUnmounted(() => document.removeEventListener('click', onClickOutside))
   position: sticky;
   top: 0;
   z-index: 10;
-  background: rgb(248 250 252);
-  border-bottom: 1px solid rgb(226 232 240);
+  background: var(--table-header-bg, #153256);
+  border-bottom: 1px solid #0f2847;
 }
 </style>

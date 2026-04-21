@@ -1,6 +1,7 @@
 # pyright: reportUnknownMemberType=false, reportUnknownArgumentType=false, reportUnknownVariableType=false
 from __future__ import annotations
 import logging
+from contextlib import asynccontextmanager
 from pathlib import Path
 
 from fastapi import FastAPI, Request
@@ -64,10 +65,30 @@ _ASSETS_DIR = _DIST / "assets"
 # Require a full Vite build (index + assets). Partial dist/ (e.g. repo stub) must not mount — StaticFiles raises if missing.
 _SERVE_FRONTEND = _DIST.is_dir() and (_DIST / "index.html").is_file() and _ASSETS_DIR.is_dir()
 
+
+@asynccontextmanager
+async def _lifespan(_app: FastAPI):
+    try:
+        with engine.connect() as conn:
+            conn.execute(text("SELECT 1"))
+        host_part = settings.database_url.split("@")[-1] if "@" in settings.database_url else settings.database_url
+        _uvicorn_log.info(
+            "Database OK (ssl_disabled=%s, target=%s)",
+            settings.database_ssl_disabled,
+            host_part,
+        )
+    except Exception:
+        logger.exception(
+            "Database connection failed at startup. Fix MySQL / DATABASE_URL / DATABASE_SSL_DISABLED, then restart."
+        )
+    yield
+
+
 app = FastAPI(
     title="Weekly Supply Planning API",
     description="MVP weekly supply planning with SKU/warehouse projections and planned orders",
     version="1.0.0",
+    lifespan=_lifespan,
 )
 
 _DB_UNAVAILABLE = (
@@ -100,26 +121,16 @@ app.add_exception_handler(OperationalError, _sqlalchemy_operational_handler)  # 
 app.add_exception_handler(ProgrammingError, _sqlalchemy_programming_handler)  # pyright: ignore[reportArgumentType]
 
 
-@app.on_event("startup")
-async def _log_database_connectivity() -> None:
-    try:
-        with engine.connect() as conn:
-            conn.execute(text("SELECT 1"))
-        host_part = settings.database_url.split("@")[-1] if "@" in settings.database_url else settings.database_url
-        _uvicorn_log.info(
-            "Database OK (ssl_disabled=%s, target=%s)",
-            settings.database_ssl_disabled,
-            host_part,
-        )
-    except Exception:
-        logger.exception(
-            "Database connection failed at startup. Fix MySQL / DATABASE_URL / DATABASE_SSL_DISABLED, then restart."
-        )
-
-
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:5173", "http://127.0.0.1:5173", "http://localhost:8000", "http://127.0.0.1:8000"],
+    allow_origins=[
+        "http://localhost:5173",
+        "http://127.0.0.1:5173",
+        "http://localhost:5174",
+        "http://127.0.0.1:5174",
+        "http://localhost:8000",
+        "http://127.0.0.1:8000",
+    ],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],

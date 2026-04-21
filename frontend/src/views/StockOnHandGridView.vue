@@ -38,8 +38,10 @@
       </div>
     </section>
 
-    <section v-if="loaded" class="content-section">
-      <p v-if="!gridData.week_starts.length" class="muted">No SOH data for this warehouse.</p>
+    <section class="content-section">
+      <p v-if="loadError" class="text-red-700 bg-red-50 border border-red-200 rounded-lg px-3 py-2 text-sm">{{ loadError }}</p>
+      <p v-else-if="loading && !hasGridContent" class="muted">Loading grid…</p>
+      <p v-else-if="!gridData.week_starts.length" class="muted">No SOH data for this warehouse.</p>
       <template v-else>
         <p class="muted mb-2">
           Anchor week: {{ gridData.anchor_week_start }} · {{ gridData.total_products }} products
@@ -56,10 +58,10 @@
             </thead>
             <tbody>
               <tr v-if="loading">
-                <td :colspan="gridData.week_starts.length + 4" class="py-8 text-center text-slate-500">Loading…</td>
+                <td :colspan="gridData.week_starts.length + 3" class="py-8 text-center text-slate-500">Loading…</td>
               </tr>
               <tr v-else-if="!gridData.rows.length">
-                <td :colspan="gridData.week_starts.length + 4" class="py-12 text-center text-slate-500">No products match filters.</td>
+                <td :colspan="gridData.week_starts.length + 3" class="py-12 text-center text-slate-500">No products match filters.</td>
               </tr>
               <tr v-else v-for="row in gridData.rows" :key="row.sku">
                 <td class="sticky-col sku-col font-mono text-sm">{{ row.sku }}</td>
@@ -162,7 +164,7 @@ const searchText = ref('')
 const page = ref(1)
 const pageSize = ref(50)
 const loading = ref(false)
-const loaded = ref(false)
+const loadError = ref<string | null>(null)
 const gridData = ref<GridResponse>({
   warehouse_code: '',
   anchor_week_start: null,
@@ -175,6 +177,11 @@ const totalPages = computed(() =>
   gridData.value.total_products > 0
     ? Math.max(1, Math.ceil(gridData.value.total_products / pageSize.value))
     : 1
+)
+
+/** True once we have weeks or rows (avoids "No SOH data" flash while first request is in flight). */
+const hasGridContent = computed(
+  () => gridData.value.week_starts.length > 0 || gridData.value.rows.length > 0,
 )
 
 function formatWeek(ws: string): string {
@@ -209,7 +216,7 @@ watch(searchText, () => {
 
 async function loadGrid() {
   loading.value = true
-  loaded.value = false
+  loadError.value = null
   try {
     const params: Record<string, string | number> = {
       warehouse_code: warehouseCode.value,
@@ -220,10 +227,33 @@ async function loadGrid() {
     if (searchText.value.trim()) params.q = searchText.value.trim()
     const { data } = await api.get<GridResponse>('/v1/reports/stock-on-hand/grid', { params })
     gridData.value = data
-    loaded.value = true
+  } catch (err: unknown) {
+    loadError.value = formatGridError(err)
+    gridData.value = {
+      warehouse_code: warehouseCode.value,
+      anchor_week_start: null,
+      week_starts: [],
+      total_products: 0,
+      rows: [],
+    }
   } finally {
     loading.value = false
   }
+}
+
+function formatGridError(err: unknown): string {
+  const res = err && typeof err === 'object' && 'response' in err ? (err as { response?: { status?: number; data?: { detail?: unknown } } }).response : null
+  if (res?.status === 503) {
+    const d = res.data?.detail
+    return typeof d === 'string' ? d : 'Server unavailable (database?). Check API is running and MySQL is up.'
+  }
+  const d = res?.data?.detail
+  if (d != null) return typeof d === 'string' ? d : JSON.stringify(d)
+  if (err && typeof err === 'object' && 'message' in err && typeof (err as { message: string }).message === 'string') {
+    const m = (err as { message: string }).message
+    if (/Network Error|ECONNREFUSED/i.test(m)) return 'Cannot reach API. Start the backend (uvicorn) and ensure Vite proxy targets port 8000.'
+  }
+  return 'Failed to load grid.'
 }
 
 watch([warehouseCode, weeks], () => {
@@ -279,9 +309,15 @@ onMounted(async () => {
   font-weight: 500;
 }
 thead .sticky-col {
-  background: rgb(248 250 252);
+  background: var(--table-header-bg, #153256);
+  color: var(--table-header-text, #f8fafc);
 }
 thead .total-col {
-  background: rgb(226 232 240);
+  background: var(--table-header-bg, #153256);
+  color: var(--table-header-text, #f8fafc);
+}
+.soh-grid-table thead .week-col {
+  background: var(--table-header-bg, #153256);
+  color: var(--table-header-text, #f8fafc);
 }
 </style>

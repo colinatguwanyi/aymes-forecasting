@@ -97,12 +97,35 @@
       </div>
       <p v-else-if="lastRunLoaded && !lastRun" class="mt-3 text-sm text-slate-500">No runs yet for this entity.</p>
 
+      <!-- Upload / server processing feedback -->
+      <div v-if="importUploadUi" class="import-upload-progress mt-4" role="status" aria-live="polite">
+        <div class="flex items-center gap-2 text-sm text-slate-700">
+          <span class="import-upload-progress__spinner" aria-hidden="true" />
+          <span>{{ importUploadUi.message }}</span>
+          <span v-if="importUploadUi.percent != null" class="tabular-nums text-slate-500">{{ importUploadUi.percent }}%</span>
+        </div>
+        <div class="import-upload-progress__track">
+          <div
+            class="import-upload-progress__fill"
+            :class="{
+              'import-upload-progress__fill--indeterminate':
+                importUploadUi.percent == null,
+            }"
+            :style="importUploadUi.percent != null ? { width: `${importUploadUi.percent}%` } : undefined"
+          />
+        </div>
+        <p class="text-xs text-slate-500 mt-1.5">
+          {{ importUploadUi.hint }}
+        </p>
+      </div>
+      <p v-if="importUploadError" class="mt-3 text-sm text-red-700 rounded-lg bg-red-50 border border-red-200 px-3 py-2">{{ importUploadError }}</p>
+
       <div class="flex flex-wrap items-center gap-2 mt-4">
         <a v-if="selectedCard.templateHref" :href="selectedCard.templateHref" download class="btn-secondary">Template</a>
         <template v-if="selectedCard.dataType === 'sales_out'">
           <input type="file" ref="salesOutFileInput" accept=".csv,.xlsx,.xls" class="hidden" @change="onSalesOutFileSelect" />
           <button type="button" class="btn-primary" :disabled="salesOutUploading" @click="salesOutFileInput?.click()">
-            {{ salesOutUploading ? 'Uploading…' : 'Upload (weekly)' }}
+            {{ salesOutUploading ? 'Working…' : 'Choose file' }}
           </button>
           <button
             v-if="selectedCard.supportsHistorical"
@@ -111,7 +134,7 @@
             :disabled="salesOutUploading"
             @click="salesOutFileInput?.click()"
           >
-            Upload historical backfill
+            Choose file (historical)
           </button>
         </template>
         <template v-else-if="selectedCard.dataType === 'stock_on_hand'">
@@ -120,7 +143,7 @@
           </button>
           <input type="file" ref="sohFileInput" accept=".csv,.xlsx,.xls" class="hidden" @change="onSohFileSelect" />
           <button type="button" class="btn-primary" :disabled="sohUploading" @click="sohFileInput?.click()">
-            {{ sohUploading ? 'Uploading…' : 'Upload (weekly)' }}
+            {{ sohUploading ? 'Working…' : 'Choose file' }}
           </button>
           <button
             v-if="selectedCard.supportsHistorical && !isBlpSohHistoricalDisabled"
@@ -129,7 +152,7 @@
             :disabled="sohUploading"
             @click="sohFileInput?.click()"
           >
-            Upload historical backfill
+            Choose file (historical)
           </button>
           <p v-else-if="selectedCard.supportsHistorical && selectedCard.historicalDisabledMessage" class="text-sm text-amber-700">
             {{ selectedCard.historicalDisabledMessage }}
@@ -138,7 +161,7 @@
         <template v-else-if="selectedCard.dataType === 'demand_pipeline' || selectedCard.dataType === 'sales_direct' || selectedCard.dataType === 'samples'">
           <input type="file" ref="demandFileInput" accept=".csv" class="hidden" @change="onDemandFileSelect" />
           <button type="button" class="btn-primary" :disabled="demandUploading" @click="demandFileInput?.click()">
-            {{ demandUploading ? 'Uploading…' : 'Upload (weekly)' }}
+            {{ demandUploading ? 'Working…' : 'Choose file' }}
           </button>
           <button
             v-if="selectedCard.supportsHistorical"
@@ -147,13 +170,13 @@
             :disabled="demandUploading"
             @click="demandFileInput?.click()"
           >
-            Upload historical backfill
+            Choose file (historical)
           </button>
         </template>
         <template v-else-if="selectedCard.dataType === 'product_master'">
           <input type="file" ref="productMasterFileInput" accept=".csv" class="hidden" @change="onProductMasterFileSelect" />
           <button type="button" class="btn-primary" :disabled="productMasterUploading" @click="productMasterFileInput?.click()">
-            {{ productMasterUploading ? 'Uploading…' : 'Upload' }}
+            {{ productMasterUploading ? 'Working…' : 'Choose file' }}
           </button>
         </template>
       </div>
@@ -233,10 +256,10 @@
           v-if="needsExecute"
           type="button"
           class="btn-primary text-sm"
-          :disabled="(currentUploadResult.requires_confirm && !currentUploadResult.confirmed) || executing"
+          :disabled="(currentUploadResult.requires_confirm && !currentUploadResult.confirmed) || executeTransformBusy"
           @click="executeCurrentRun"
         >
-          {{ executing ? 'Executing…' : executeButtonLabel }}
+          {{ executeTransformBusy ? 'Executing…' : executeButtonLabel }}
         </button>
       </div>
       <div
@@ -404,6 +427,13 @@ interface LatestRun {
   finished_at: string | null
 }
 
+/** Visible upload + post-upload server work (staging). */
+interface ImportUploadUi {
+  message: string
+  percent: number | null
+  hint: string
+}
+
 const route = useRoute()
 const router = useRouter()
 const adminStore = useAdminStore()
@@ -515,6 +545,10 @@ const runColumns: DataTableColumn[] = [
   { key: 'actions', label: '' },
 ]
 
+const importUploadUi = ref<ImportUploadUi | null>(null)
+const importUploadError = ref<string | null>(null)
+const executeTransformBusy = ref(false)
+
 const salesOutFileInput = ref<HTMLInputElement | null>(null)
 const salesOutFile = ref<File | null>(null)
 const salesOutUploading = ref(false)
@@ -569,8 +603,6 @@ const executeButtonLabel = computed(() => {
   return 'Execute transform'
 })
 
-const executing = computed(() => sohExecuting.value)
-
 const ingestionRunsForTable = computed(() =>
   ingestionRuns.value.map((r) => ({
     ...r,
@@ -594,6 +626,57 @@ function formatDateShort(iso: string) {
   } catch {
     return iso
   }
+}
+
+const IMPORT_UPLOAD_HINT =
+  'Large files can take a while. Keep this tab open until the run summary appears below.'
+
+function formatApiDetail(err: unknown): string {
+  const msg =
+    err && typeof err === 'object' && 'response' in err
+      ? (err as { response?: { data?: { detail?: unknown } } }).response?.data?.detail
+      : null
+  if (msg == null) return 'Request failed.'
+  return typeof msg === 'string' ? msg : JSON.stringify(msg)
+}
+
+function beginImportUploadDisplay(fileName?: string) {
+  importUploadError.value = null
+  importUploadUi.value = {
+    message: fileName ? `Sending «${fileName}»…` : 'Sending file…',
+    percent: 0,
+    hint: IMPORT_UPLOAD_HINT,
+  }
+}
+
+function onImportMultipartProgress(e: { loaded: number; total?: number }) {
+  if (!importUploadUi.value) return
+  const total = e.total
+  if (total && total > 0) {
+    importUploadUi.value = {
+      ...importUploadUi.value,
+      percent: Math.min(99, Math.round((100 * e.loaded) / total)),
+      message: 'Sending file to server…',
+    }
+  } else {
+    importUploadUi.value = {
+      ...importUploadUi.value,
+      percent: null,
+      message: 'Sending file to server…',
+    }
+  }
+}
+
+function setImportUploadProcessing(message: string) {
+  importUploadUi.value = {
+    message,
+    percent: null,
+    hint: 'The server is parsing and staging rows — often slower than the upload bar. A run ID will appear below when done.',
+  }
+}
+
+function endImportUploadDisplay() {
+  importUploadUi.value = null
 }
 
 function getRunRow(row: Record<string, unknown>): { id: string; status: string } {
@@ -633,6 +716,7 @@ function onSalesOutFileSelect(e: Event) {
   const target = e.target as HTMLInputElement
   salesOutFile.value = target.files?.[0] ?? null
   salesOutUploadResult.value = null
+  importUploadError.value = null
 }
 
 function setSalesOutLast24Months() {
@@ -647,6 +731,7 @@ async function uploadSalesOutWithMode(mode: 'weekly' | 'historical') {
   if (!salesOutFile.value) return
   salesOutUploading.value = true
   salesOutUploadResult.value = null
+  beginImportUploadDisplay(salesOutFile.value.name)
   const form = new FormData()
   form.append('file', salesOutFile.value)
   const params: Record<string, string> = { mode }
@@ -657,21 +742,23 @@ async function uploadSalesOutWithMode(mode: 'weekly' | 'historical') {
   try {
     const { data } = await api.post<IngestionUploadResult>('/ingestion/sales-out/upload', form, {
       params,
-      onUploadProgress: (e) => {
-        if (e.total) salesOutUploading.value = true
-      },
+      onUploadProgress: (e) => onImportMultipartProgress(e),
     })
+    setImportUploadProcessing('Staging Sales Out rows on server…')
     salesOutUploadResult.value = { ...data, confirmed: data.requires_confirm ? false : true }
     salesOutFile.value = null
     if (salesOutFileInput.value) salesOutFileInput.value.value = ''
-    await loadIngestionRuns()
+    try {
+      await loadIngestionRuns()
+    } catch {
+      /* upload succeeded; table refresh is best-effort */
+    }
   } catch (err: unknown) {
-    const msg = err && typeof err === 'object' && 'response' in err
-      ? (err as { response?: { data?: { detail?: string } } }).response?.data?.detail
-      : null
-    alert(msg ? `Upload failed: ${typeof msg === 'string' ? msg : JSON.stringify(msg)}` : 'Upload failed.')
+    importUploadError.value = formatApiDetail(err)
+    bannerStore.add({ type: 'error', title: 'Upload failed', message: importUploadError.value })
   } finally {
     salesOutUploading.value = false
+    endImportUploadDisplay()
   }
 }
 
@@ -680,6 +767,7 @@ function onSohFileSelect(e: Event) {
   sohFile.value = target.files?.[0] ?? null
   sohUploadResult.value = null
   sohError.value = null
+  importUploadError.value = null
 }
 
 async function downloadSohTemplate() {
@@ -708,6 +796,7 @@ async function uploadSohWithMode(mode: 'weekly' | 'historical') {
   sohError.value = null
   sohRejectionDetail.value = null
   sohUploading.value = true
+  beginImportUploadDisplay(sohFile.value.name)
   const form = new FormData()
   form.append('file', sohFile.value)
   const params: Record<string, string> = { mode }
@@ -717,14 +806,17 @@ async function uploadSohWithMode(mode: 'weekly' | 'historical') {
   try {
     const { data } = await api.post<IngestionUploadResult>('/ingestion/stock-on-hand/upload', form, {
       params,
-      onUploadProgress: (e) => {
-        if (e.total) sohUploading.value = true
-      },
+      onUploadProgress: (e) => onImportMultipartProgress(e),
     })
+    setImportUploadProcessing('Staging SOH rows on server…')
     sohUploadResult.value = { ...data, confirmed: data.requires_confirm ? false : true }
     sohFile.value = null
     if (sohFileInput.value) sohFileInput.value.value = ''
-    await loadIngestionRuns()
+    try {
+      await loadIngestionRuns()
+    } catch {
+      /* upload succeeded */
+    }
     if (data.rejected_count > 0) {
       const { data: runDetail } = await api.get<IngestionRunDetail>(`/ingestion/runs/${data.run_id}`, { params: { rejections_limit: 20 } })
       sohRejectionDetail.value = {
@@ -733,10 +825,13 @@ async function uploadSohWithMode(mode: 'weekly' | 'historical') {
       }
     }
   } catch (err: unknown) {
-    const res = err && typeof err === 'object' && 'response' in err ? (err as { response?: { data?: { detail?: unknown } } }).response : null
-    sohError.value = res?.data?.detail != null ? (typeof res.data.detail === 'string' ? res.data.detail : JSON.stringify(res.data.detail)) : 'Upload failed.'
+    const detail = formatApiDetail(err)
+    sohError.value = detail
+    importUploadError.value = detail
+    bannerStore.add({ type: 'error', title: 'SOH upload failed', message: detail })
   } finally {
     sohUploading.value = false
+    endImportUploadDisplay()
   }
 }
 
@@ -744,29 +839,36 @@ function onDemandFileSelect(e: Event) {
   const target = e.target as HTMLInputElement
   demandFile.value = target.files?.[0] ?? null
   demandUploadResult.value = null
+  importUploadError.value = null
 }
 
 async function uploadDemandWithMode(mode: 'weekly' | 'historical') {
   if (!demandFile.value) return
   demandUploading.value = true
   demandUploadResult.value = null
+  beginImportUploadDisplay(demandFile.value.name)
   const form = new FormData()
   form.append('file', demandFile.value)
   try {
     const { data } = await api.post<IngestionUploadResult>('/ingestion/upload', form, {
       params: { entity: 'demand', mode },
+      onUploadProgress: (e) => onImportMultipartProgress(e),
     })
+    setImportUploadProcessing('Staging demand rows on server…')
     demandUploadResult.value = { ...data, confirmed: data.requires_confirm ? false : true }
     demandFile.value = null
     if (demandFileInput.value) demandFileInput.value.value = ''
-    await loadIngestionRuns()
+    try {
+      await loadIngestionRuns()
+    } catch {
+      /* upload succeeded */
+    }
   } catch (err: unknown) {
-    const msg = err && typeof err === 'object' && 'response' in err
-      ? (err as { response?: { data?: { detail?: string } } }).response?.data?.detail
-      : null
-    alert(msg ? `Upload failed: ${typeof msg === 'string' ? msg : JSON.stringify(msg)}` : 'Upload failed.')
+    importUploadError.value = formatApiDetail(err)
+    bannerStore.add({ type: 'error', title: 'Upload failed', message: importUploadError.value })
   } finally {
     demandUploading.value = false
+    endImportUploadDisplay()
   }
 }
 
@@ -774,29 +876,36 @@ function onProductMasterFileSelect(e: Event) {
   const target = e.target as HTMLInputElement
   productMasterFile.value = target.files?.[0] ?? null
   productMasterUploadResult.value = null
+  importUploadError.value = null
 }
 
 async function uploadProductMaster() {
   if (!productMasterFile.value) return
   productMasterUploading.value = true
   productMasterUploadResult.value = null
+  beginImportUploadDisplay(productMasterFile.value.name)
   const form = new FormData()
   form.append('file', productMasterFile.value)
   try {
     const { data } = await api.post<IngestionUploadResult>('/ingestion/upload', form, {
       params: { entity: 'product_master', mode: 'weekly' },
+      onUploadProgress: (e) => onImportMultipartProgress(e),
     })
+    setImportUploadProcessing('Staging product master on server…')
     productMasterUploadResult.value = { ...data, confirmed: true }
     productMasterFile.value = null
     if (productMasterFileInput.value) productMasterFileInput.value.value = ''
-    await loadIngestionRuns()
+    try {
+      await loadIngestionRuns()
+    } catch {
+      /* upload succeeded */
+    }
   } catch (err: unknown) {
-    const msg = err && typeof err === 'object' && 'response' in err
-      ? (err as { response?: { data?: { detail?: string } } }).response?.data?.detail
-      : null
-    alert(msg ? `Upload failed: ${typeof msg === 'string' ? msg : JSON.stringify(msg)}` : 'Upload failed.')
+    importUploadError.value = formatApiDetail(err)
+    bannerStore.add({ type: 'error', title: 'Upload failed', message: importUploadError.value })
   } finally {
     productMasterUploading.value = false
+    endImportUploadDisplay()
   }
 }
 
@@ -835,45 +944,59 @@ async function confirmBackfill() {
 async function executeCurrentRun() {
   const r = currentUploadResult.value
   if (!r || (r.requires_confirm && !r.confirmed)) return
-  if (selectedDataType.value === 'sales_out') {
-    try {
-      await api.post(`/ingestion/sales-out/${r.run_id}/build-weekly`)
-      await loadIngestionRuns()
-      bannerStore.add({ type: 'success', title: 'Sales Out build-weekly completed', message: 'demand_actuals written.' })
-    } catch (err: unknown) {
-      const msg = err && typeof err === 'object' && 'response' in err
-        ? (err as { response?: { data?: { detail?: string } } }).response?.data?.detail
-        : null
-      alert(msg ? `Build failed: ${typeof msg === 'string' ? msg : JSON.stringify(msg)}` : 'Build failed.')
+  executeTransformBusy.value = true
+  importUploadError.value = null
+  importUploadUi.value = {
+    message: 'Running transform on server…',
+    percent: null,
+    hint: 'Writing canonical tables. This may take longer than the file upload.',
+  }
+  try {
+    if (selectedDataType.value === 'sales_out') {
+      try {
+        await api.post(`/ingestion/sales-out/${r.run_id}/build-weekly`)
+        await loadIngestionRuns()
+        bannerStore.add({ type: 'success', title: 'Sales Out build-weekly completed', message: 'demand_actuals written.' })
+      } catch (err: unknown) {
+        const detail = formatApiDetail(err)
+        importUploadError.value = detail
+        alert(`Build failed: ${detail}`)
+      }
+      salesOutUploadResult.value = null
+    } else if (selectedDataType.value === 'stock_on_hand') {
+      try {
+        await api.post(`/ingestion/stock-on-hand/${r.run_id}/execute`)
+        await loadIngestionRuns()
+        bannerStore.add({ type: 'success', title: 'SOH import executed', message: 'inventory_snapshots_weekly updated.' })
+      } catch (err: unknown) {
+        const res = err && typeof err === 'object' && 'response' in err ? (err as { response?: { data?: { detail?: unknown } } }).response : null
+        const detail =
+          res?.data?.detail != null
+            ? typeof res.data.detail === 'string'
+              ? res.data.detail
+              : JSON.stringify(res.data.detail)
+            : 'Execute failed.'
+        sohError.value = detail
+        importUploadError.value = detail
+      }
+      sohUploadResult.value = null
+      sohRejectionDetail.value = null
+    } else if (['demand_pipeline', 'sales_direct', 'samples', 'product_master'].includes(selectedDataType.value)) {
+      try {
+        await api.post(`/ingestion/runs/${r.run_id}/execute`)
+        await loadIngestionRuns()
+        bannerStore.add({ type: 'success', title: 'Import executed', message: 'Transform completed.' })
+      } catch (err: unknown) {
+        const detail = formatApiDetail(err)
+        importUploadError.value = detail
+        alert(`Execute failed: ${detail}`)
+      }
+      demandUploadResult.value = null
+      productMasterUploadResult.value = null
     }
-    salesOutUploadResult.value = null
-  } else if (selectedDataType.value === 'stock_on_hand') {
-    sohExecuting.value = true
-    try {
-      await api.post(`/ingestion/stock-on-hand/${r.run_id}/execute`)
-      await loadIngestionRuns()
-      bannerStore.add({ type: 'success', title: 'SOH import executed', message: 'inventory_snapshots_weekly updated.' })
-    } catch (err: unknown) {
-      const res = err && typeof err === 'object' && 'response' in err ? (err as { response?: { data?: { detail?: unknown } } }).response : null
-      sohError.value = res?.data?.detail != null ? (typeof res.data.detail === 'string' ? res.data.detail : JSON.stringify(res.data.detail)) : 'Execute failed.'
-    } finally {
-      sohExecuting.value = false
-    }
-    sohUploadResult.value = null
-    sohRejectionDetail.value = null
-  } else if (['demand_pipeline', 'sales_direct', 'samples', 'product_master'].includes(selectedDataType.value)) {
-    try {
-      await api.post(`/ingestion/runs/${r.run_id}/execute`)
-      await loadIngestionRuns()
-      bannerStore.add({ type: 'success', title: 'Import executed', message: 'Transform completed.' })
-    } catch (err: unknown) {
-      const msg = err && typeof err === 'object' && 'response' in err
-        ? (err as { response?: { data?: { detail?: string } } }).response?.data?.detail
-        : null
-      alert(msg ? `Execute failed: ${typeof msg === 'string' ? msg : JSON.stringify(msg)}` : 'Execute failed.')
-    }
-    demandUploadResult.value = null
-    productMasterUploadResult.value = null
+  } finally {
+    executeTransformBusy.value = false
+    endImportUploadDisplay()
   }
 }
 
@@ -1014,5 +1137,52 @@ function downloadRejectionsCsv() {
   font-weight: 500;
   color: rgb(37 99 235);
   text-decoration: underline;
+}
+
+.import-upload-progress {
+  padding: 0.75rem 1rem;
+  border-radius: 0.5rem;
+  border: 1px solid rgb(226 232 240);
+  background: rgb(248 250 252);
+}
+.import-upload-progress__track {
+  height: 6px;
+  border-radius: 9999px;
+  background: rgb(226 232 240);
+  overflow: hidden;
+  margin-top: 0.5rem;
+}
+.import-upload-progress__fill {
+  height: 100%;
+  border-radius: 9999px;
+  background: rgb(37 99 235);
+  transition: width 0.2s ease-out;
+  min-width: 0;
+}
+.import-upload-progress__fill--indeterminate {
+  width: 42%;
+  animation: import-upload-indeterminate 1.2s ease-in-out infinite;
+}
+@keyframes import-upload-indeterminate {
+  0% {
+    transform: translateX(-100%);
+  }
+  100% {
+    transform: translateX(340%);
+  }
+}
+.import-upload-progress__spinner {
+  width: 1rem;
+  height: 1rem;
+  border: 2px solid rgb(226 232 240);
+  border-top-color: rgb(37 99 235);
+  border-radius: 50%;
+  animation: import-upload-spin 0.65s linear infinite;
+  flex-shrink: 0;
+}
+@keyframes import-upload-spin {
+  to {
+    transform: rotate(360deg);
+  }
 }
 </style>

@@ -7,7 +7,7 @@ export const useLayoutStore = defineStore('layout', () => {
   const rightPanelTitle = ref('')
   const pageTitle = ref('')
 
-  const navWidth = computed(() => (navCollapsed.value ? 64 : 232)) // px; matches CSS vars
+  const navWidth = computed(() => (navCollapsed.value ? 108 : 240)) // px; align with --left-nav-* CSS vars
   const rightPanelWidth = computed(() => (rightPanelOpen.value ? 380 : 0))
 
   function toggleNav() {

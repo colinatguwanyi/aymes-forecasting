@@ -2,6 +2,7 @@
 # pyright: reportMissingImports=false
 from datetime import date
 from typing import cast
+import uuid
 
 import pytest
 from decimal import Decimal
@@ -42,14 +43,20 @@ def _ensure_warehouses(db):
     db.commit()
 
 
+def _uniq_sku(prefix: str) -> str:
+    """Avoid duplicate-key failures when tests run against a shared non-empty MySQL."""
+    return f"{prefix}-{uuid.uuid4().hex[:12]}"
+
+
 def test_aah_never_includes_samples_in_breakdown(db_session) -> None:
     """AAH: _actuals_by_week_with_breakdown excludes SAMPLES even when policy has include_samples=True."""
     _ensure_warehouses(db_session)
     db = db_session
-    db.add(Product(sku="SKU-A", name="P", uom="units", active=True))
+    sku = _uniq_sku("DWS-A")
+    db.add(Product(sku=sku, name="P", uom="units", active=True))
     db.add(
         PlanningPolicy(
-            sku="SKU-A",
+            sku=sku,
             warehouse_code="AAH",
             include_samples=True,  # Policy says include, but AAH must ignore
             target_weeks=Decimal("4"),
@@ -61,7 +68,7 @@ def test_aah_never_includes_samples_in_breakdown(db_session) -> None:
     db.add(
         DemandActual(
             week_start=w,
-            sku="SKU-A",
+            sku=sku,
             warehouse_code="AAH",
             demand_type=DemandType.CUSTOMER,
             qty=Decimal("100"),
@@ -70,7 +77,7 @@ def test_aah_never_includes_samples_in_breakdown(db_session) -> None:
     db.add(
         DemandActual(
             week_start=w,
-            sku="SKU-A",
+            sku=sku,
             warehouse_code="AAH",
             demand_type=DemandType.SAMPLES,
             qty=Decimal("20"),
@@ -78,11 +85,11 @@ def test_aah_never_includes_samples_in_breakdown(db_session) -> None:
     )
     db.commit()
 
-    policy_include_samples = {("SKU-A", "AAH"): True}
+    policy_include_samples = {(sku, "AAH"): True}
     totals, breakdowns = _actuals_by_week_with_breakdown(
         db, w, w, policy_include_samples
     )
-    key = (w, "SKU-A", "AAH")
+    key = (w, sku, "AAH")
     assert key in totals
     assert totals[key] == Decimal("100")  # CUSTOMER only, SAMPLES excluded
     assert breakdowns[key]["included"] == ["CUSTOMER", "ADJUSTMENT"]
@@ -93,10 +100,11 @@ def test_blp_includes_samples_when_policy_true(db_session) -> None:
     """BLP: _actuals_by_week_with_breakdown includes SAMPLES when include_samples=True."""
     _ensure_warehouses(db_session)
     db = db_session
-    db.add(Product(sku="SKU-B", name="P", uom="units", active=True))
+    sku = _uniq_sku("DWS-B")
+    db.add(Product(sku=sku, name="P", uom="units", active=True))
     db.add(
         PlanningPolicy(
-            sku="SKU-B",
+            sku=sku,
             warehouse_code="BLP",
             include_samples=True,
             target_weeks=Decimal("4"),
@@ -108,7 +116,7 @@ def test_blp_includes_samples_when_policy_true(db_session) -> None:
     db.add(
         DemandActual(
             week_start=w,
-            sku="SKU-B",
+            sku=sku,
             warehouse_code="BLP",
             demand_type=DemandType.CUSTOMER,
             qty=Decimal("50"),
@@ -117,7 +125,7 @@ def test_blp_includes_samples_when_policy_true(db_session) -> None:
     db.add(
         DemandActual(
             week_start=w,
-            sku="SKU-B",
+            sku=sku,
             warehouse_code="BLP",
             demand_type=DemandType.SAMPLES,
             qty=Decimal("10"),
@@ -125,11 +133,11 @@ def test_blp_includes_samples_when_policy_true(db_session) -> None:
     )
     db.commit()
 
-    policy_include_samples = {("SKU-B", "BLP"): True}
+    policy_include_samples = {(sku, "BLP"): True}
     totals, breakdowns = _actuals_by_week_with_breakdown(
         db, w, w, policy_include_samples
     )
-    key = (w, "SKU-B", "BLP")
+    key = (w, sku, "BLP")
     assert key in totals
     assert totals[key] == Decimal("60")  # CUSTOMER + SAMPLES
     assert "SAMPLES" in breakdowns[key]["included"]
@@ -139,10 +147,11 @@ def test_blp_excludes_samples_when_policy_false(db_session) -> None:
     """BLP: _actuals_by_week_with_breakdown excludes SAMPLES when include_samples=False."""
     _ensure_warehouses(db_session)
     db = db_session
-    db.add(Product(sku="SKU-C", name="P", uom="units", active=True))
+    sku = _uniq_sku("DWS-C")
+    db.add(Product(sku=sku, name="P", uom="units", active=True))
     db.add(
         PlanningPolicy(
-            sku="SKU-C",
+            sku=sku,
             warehouse_code="BLP",
             include_samples=False,
             target_weeks=Decimal("4"),
@@ -154,7 +163,7 @@ def test_blp_excludes_samples_when_policy_false(db_session) -> None:
     db.add(
         DemandActual(
             week_start=w,
-            sku="SKU-C",
+            sku=sku,
             warehouse_code="BLP",
             demand_type=DemandType.CUSTOMER,
             qty=Decimal("30"),
@@ -163,7 +172,7 @@ def test_blp_excludes_samples_when_policy_false(db_session) -> None:
     db.add(
         DemandActual(
             week_start=w,
-            sku="SKU-C",
+            sku=sku,
             warehouse_code="BLP",
             demand_type=DemandType.SAMPLES,
             qty=Decimal("5"),
@@ -171,11 +180,11 @@ def test_blp_excludes_samples_when_policy_false(db_session) -> None:
     )
     db.commit()
 
-    policy_include_samples = {("SKU-C", "BLP"): False}
+    policy_include_samples = {(sku, "BLP"): False}
     totals, breakdowns = _actuals_by_week_with_breakdown(
         db, w, w, policy_include_samples
     )
-    key = (w, "SKU-C", "BLP")
+    key = (w, sku, "BLP")
     assert key in totals
     assert totals[key] == Decimal("30")  # CUSTOMER only
     assert "SAMPLES" in breakdowns[key]["excluded"]
@@ -185,10 +194,11 @@ def test_resolve_demand_aah_excludes_samples(db_session) -> None:
     """resolve_demand_for_run: AAH demand excludes SAMPLES in plan_run_demand_inputs_weekly."""
     _ensure_warehouses(db_session)
     db = db_session
-    db.add(Product(sku="SKU-D", name="P", uom="units", active=True))
+    sku = _uniq_sku("DWS-D")
+    db.add(Product(sku=sku, name="P", uom="units", active=True))
     db.add(
         PlanningPolicy(
-            sku="SKU-D",
+            sku=sku,
             warehouse_code="AAH",
             include_samples=True,
             target_weeks=Decimal("4"),
@@ -200,7 +210,7 @@ def test_resolve_demand_aah_excludes_samples(db_session) -> None:
     db.add(
         DemandActual(
             week_start=w,
-            sku="SKU-D",
+            sku=sku,
             warehouse_code="AAH",
             demand_type=DemandType.CUSTOMER,
             qty=Decimal("80"),
@@ -209,7 +219,7 @@ def test_resolve_demand_aah_excludes_samples(db_session) -> None:
     db.add(
         DemandActual(
             week_start=w,
-            sku="SKU-D",
+            sku=sku,
             warehouse_code="AAH",
             demand_type=DemandType.SAMPLES,
             qty=Decimal("15"),
@@ -232,7 +242,7 @@ def test_resolve_demand_aah_excludes_samples(db_session) -> None:
         db.query(PlanRunDemandInputWeekly)
         .filter(
             PlanRunDemandInputWeekly.plan_run_id == run.id,
-            PlanRunDemandInputWeekly.sku == "SKU-D",
+            PlanRunDemandInputWeekly.sku == sku,
             PlanRunDemandInputWeekly.warehouse_code == "AAH",
         )
         .first()

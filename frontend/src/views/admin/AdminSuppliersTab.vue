@@ -2,7 +2,7 @@
   <div class="space-y-4">
     <PageHeader title="Suppliers" :breadcrumbs="[{ label: 'Admin', path: '/admin/suppliers' }]">
       <template #actions>
-        <button type="button" class="px-4 py-2 text-sm font-medium text-white bg-neutral-700 rounded-lg hover:bg-neutral-800" @click="openDrawer('add')">Add supplier</button>
+        <button type="button" class="btn-primary px-4" @click="openDrawer('add')">Add supplier</button>
         <button type="button" class="px-4 py-2 text-sm font-medium text-neutral-700 bg-white border border-neutral-300 rounded-lg hover:bg-neutral-50" @click="exportCsv">Export CSV</button>
       </template>
     </PageHeader>
@@ -44,7 +44,7 @@
       </form>
       <template #footer>
         <button type="button" class="px-4 py-2 text-sm font-medium text-neutral-600 bg-white border border-neutral-300 rounded-lg hover:bg-neutral-50" @click="drawerOpen = false">Cancel</button>
-        <button type="button" class="px-4 py-2 text-sm font-medium text-white bg-neutral-700 rounded-lg hover:bg-neutral-800" @click="submitDrawer">{{ drawerMode === 'add' ? 'Add supplier' : 'Save' }}</button>
+        <button type="button" class="btn-primary px-4" @click="submitDrawer">{{ drawerMode === 'add' ? 'Add supplier' : 'Save' }}</button>
       </template>
     </DrawerForm>
   </div>

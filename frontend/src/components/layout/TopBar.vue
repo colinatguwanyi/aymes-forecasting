@@ -54,8 +54,8 @@ const title = computed(() => layout.pageTitle || (route.meta?.title as string) |
 .top-bar-title {
   margin: 0;
   font-size: 1.125rem;
-  font-weight: 500;
-  color: rgb(15 23 42);
+  font-weight: 600;
+  color: var(--text, #1a3c68);
 }
 .top-bar-actions {
   display: flex;

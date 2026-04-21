@@ -2,6 +2,7 @@
 # pyright: reportMissingImports=false
 from datetime import date
 from decimal import Decimal
+import uuid
 
 import pytest
 from sqlalchemy.orm import sessionmaker
@@ -40,15 +41,21 @@ def _ensure_aah_blp(db):
     db.commit()
 
 
+def _uniq_sku(prefix: str) -> str:
+    """Avoid duplicate-key failures when tests run against a shared non-empty MySQL."""
+    return f"{prefix}-{uuid.uuid4().hex[:12]}"
+
+
 def test_readiness_only_aah_has_data(db_session) -> None:
     """When only AAH has SOH/demand/policies, readiness returns correct flags."""
     _ensure_aah_blp(db_session)
     db = db_session
-    db.add(Product(sku="SKU1", name="P1", uom="units", active=True))
+    sku = _uniq_sku("WSP-1")
+    db.add(Product(sku=sku, name="P1", uom="units", active=True))
     db.commit()
     db.add(
         PlanningPolicy(
-            sku="SKU1",
+            sku=sku,
             warehouse_code="AAH",
             target_weeks=Decimal("4"),
             safety_stock_weeks=Decimal("1"),
@@ -57,7 +64,7 @@ def test_readiness_only_aah_has_data(db_session) -> None:
     db.add(
         InventorySnapshotWeekly(
             week_start=date(2025, 2, 17),
-            sku="SKU1",
+            sku=sku,
             warehouse_code="AAH",
             on_hand_qty=Decimal("100"),
             source_type="soh",
@@ -66,7 +73,7 @@ def test_readiness_only_aah_has_data(db_session) -> None:
     db.add(
         DemandActual(
             week_start=date(2025, 2, 17),
-            sku="SKU1",
+            sku=sku,
             warehouse_code="AAH",
             demand_type=DemandType.CUSTOMER,
             qty=Decimal("10"),
@@ -91,11 +98,12 @@ def test_run_plan_scope_aah_produces_rows(db_session) -> None:
     """run_plan with scope [AAH] produces projected_inventory rows when AAH has data."""
     _ensure_aah_blp(db_session)
     db = db_session
-    db.add(Product(sku="SKU2", name="P2", uom="units", active=True))
+    sku = _uniq_sku("WSP-2")
+    db.add(Product(sku=sku, name="P2", uom="units", active=True))
     db.commit()
     db.add(
         PlanningPolicy(
-            sku="SKU2",
+            sku=sku,
             warehouse_code="AAH",
             target_weeks=Decimal("4"),
             safety_stock_weeks=Decimal("1"),
@@ -104,7 +112,7 @@ def test_run_plan_scope_aah_produces_rows(db_session) -> None:
     db.add(
         InventorySnapshotWeekly(
             week_start=date(2025, 2, 17),
-            sku="SKU2",
+            sku=sku,
             warehouse_code="AAH",
             on_hand_qty=Decimal("100"),
             source_type="soh",
@@ -113,7 +121,7 @@ def test_run_plan_scope_aah_produces_rows(db_session) -> None:
     db.add(
         DemandActual(
             week_start=date(2025, 2, 17),
-            sku="SKU2",
+            sku=sku,
             warehouse_code="AAH",
             demand_type=DemandType.CUSTOMER,
             qty=Decimal("10"),
@@ -133,7 +141,8 @@ def test_run_plan_scope_blp_not_ready_returns_400(db_session) -> None:
     """run_plan with scope [BLP] when BLP has no SOH/demand/policies raises AllWarehousesSkippedError."""
     _ensure_aah_blp(db_session)
     db = db_session
-    db.add(Product(sku="SKU3", name="P3", uom="units", active=True))
+    sku = _uniq_sku("WSP-3")
+    db.add(Product(sku=sku, name="P3", uom="units", active=True))
     db.commit()
     # No policies, SOH, or demand for BLP
 
@@ -158,11 +167,12 @@ def test_run_plan_scope_aah_blp_plans_aah_skips_blp(db_session) -> None:
     """run_plan with scope [AAH, BLP]: plans AAH, records BLP skipped."""
     _ensure_aah_blp(db_session)
     db = db_session
-    db.add(Product(sku="SKU4", name="P4", uom="units", active=True))
+    sku = _uniq_sku("WSP-4")
+    db.add(Product(sku=sku, name="P4", uom="units", active=True))
     db.commit()
     db.add(
         PlanningPolicy(
-            sku="SKU4",
+            sku=sku,
             warehouse_code="AAH",
             target_weeks=Decimal("4"),
             safety_stock_weeks=Decimal("1"),
@@ -171,7 +181,7 @@ def test_run_plan_scope_aah_blp_plans_aah_skips_blp(db_session) -> None:
     db.add(
         InventorySnapshotWeekly(
             week_start=date(2025, 2, 17),
-            sku="SKU4",
+            sku=sku,
             warehouse_code="AAH",
             on_hand_qty=Decimal("100"),
             source_type="soh",
@@ -180,7 +190,7 @@ def test_run_plan_scope_aah_blp_plans_aah_skips_blp(db_session) -> None:
     db.add(
         DemandActual(
             week_start=date(2025, 2, 17),
-            sku="SKU4",
+            sku=sku,
             warehouse_code="AAH",
             demand_type=DemandType.CUSTOMER,
             qty=Decimal("10"),

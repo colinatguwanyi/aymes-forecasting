@@ -287,9 +287,15 @@ onMounted(async () => {
   font-weight: 500;
 }
 thead .sticky-col {
-  background: rgb(248 250 252);
+  background: var(--table-header-bg, #153256);
+  color: var(--table-header-text, #f8fafc);
 }
 thead .total-col {
-  background: rgb(226 232 240);
+  background: var(--table-header-bg, #153256);
+  color: var(--table-header-text, #f8fafc);
+}
+.sales-grid-table thead .week-col {
+  background: var(--table-header-bg, #153256);
+  color: var(--table-header-text, #f8fafc);
 }
 </style>
