@@ -15,9 +15,9 @@ from decimal import Decimal
 from typing import Any, cast
 from uuid import UUID
 
-from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app.ingestion_progress import merge_ingest_progress
 from app.models import (
     DemandFactsWeekly,
     DemandStageWeekly,
@@ -25,38 +25,12 @@ from app.models import (
     IngestionRejection,
     IngestionRun,
     IngestionStatus,
-    Product,
-    SkuCodeMap,
 )
-from app.services.time_bucketing import week_start_for_date
+from app.services.sku_resolution import active_sku_set, resolve_sku_code_map
 
 logger = logging.getLogger(__name__)
 
 MIN_WEEKS_HISTORY = 60  # configurable; per-sku per-warehouse completeness
-
-
-def _resolve_sku(
-    db: Session,
-    sku_raw: str,
-    week_start: date,
-) -> str:
-    """Apply sku_code_map: old_sku -> new_sku for week_start. Return mapped sku or sku_raw."""
-    row = (
-        db.query(SkuCodeMap)
-        .filter(
-            SkuCodeMap.old_sku == sku_raw,
-            (SkuCodeMap.effective_from_week_start.is_(None)) | (SkuCodeMap.effective_from_week_start <= week_start),
-            (SkuCodeMap.effective_to_week_start.is_(None)) | (SkuCodeMap.effective_to_week_start >= week_start),
-        )
-        .first()
-    )
-    return str(row.new_sku) if row else sku_raw
-
-
-def _active_skus(db: Session) -> set[str]:
-    """Set of sku where products.active = true."""
-    rows = db.execute(select(Product.sku).where(Product.active.is_(True)))
-    return {r[0] for r in rows}
 
 
 def build_weekly_series_from_stage(
@@ -83,8 +57,15 @@ def build_weekly_series_from_stage(
         .all()
     )
     run.row_count = len(stage_rows)
+    merge_ingest_progress(
+        db,
+        run,
+        import_phase="demand_transform",
+        import_message="Transforming staged demand into demand_facts_weekly…",
+        import_detail=f"{len(stage_rows):,} staged rows",
+    )
 
-    active = _active_skus(db)
+    active = active_sku_set(db)
     # (week_start, sku, warehouse_code, demand_type) -> sum(qty) from accepted rows
     aggregated: dict[tuple[date, str, str, DemandType], Decimal] = defaultdict(Decimal)
     # Rejections: (stage_row_id, reason) for rows we skip
@@ -94,9 +75,17 @@ def build_weekly_series_from_stage(
         w_start = cast(date, row.week_start)
         _raw = getattr(row, "sku_raw", None)
         sku_r = "" if _raw is None else str(_raw)
-        mapped_sku = _resolve_sku(db, sku_r, w_start)
+        mapped_sku = resolve_sku_code_map(db, sku_r, w_start)
         if mapped_sku not in active:
-            rejections.append((cast(int, row.id), "SKU not found or inactive", {"sku_raw": sku_r, "sku": mapped_sku, "week_start": str(w_start)}))
+            msg = f"Unmapped SKU: {sku_r} in demand_weekly_transform"
+            logger.error(msg)
+            rejections.append(
+                (
+                    cast(int, row.id),
+                    msg,
+                    {"sku_raw": sku_r, "sku": mapped_sku, "week_start": str(w_start)},
+                )
+            )
             continue
         wh_code = cast(str, row.warehouse_code)
         dt_enum = cast(DemandType, row.demand_type)
@@ -150,7 +139,7 @@ def build_weekly_series_from_stage(
         r_sku_raw = "" if _raw is None else str(_raw)
         r_wh = cast(str, r.warehouse_code)
         r_dt = cast(DemandType, r.demand_type)
-        raw_keys.add((r_week, _resolve_sku(db, r_sku_raw, r_week), r_wh, r_dt))
+        raw_keys.add((r_week, resolve_sku_code_map(db, r_sku_raw, r_week), r_wh, r_dt))
 
     # UPSERT into demand_facts_weekly
     inserted = 0

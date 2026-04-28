@@ -13,11 +13,30 @@
       Collapse all sections
     </button>
     <nav class="nav-list" aria-label="Main">
-      <!-- Overview -->
       <div class="nav-group">
-        <span class="nav-section">Overview</span>
-        <router-link to="/setup" class="nav-item" active-class="active">Setup Checklist</router-link>
-        <router-link v-if="auth.authenticated" to="/" class="nav-item" exact-active-class="active">Supply Dashboard</router-link>
+        <button
+          v-show="!layout.navCollapsed"
+          type="button"
+          class="nav-group-toggle"
+          :aria-expanded="open.data"
+          @click="toggle('data')"
+        >
+          <span class="nav-group-label">Data</span>
+          <span class="nav-chevron" :class="{ open: open.data }" aria-hidden="true">▼</span>
+        </button>
+        <div v-show="layout.navCollapsed || open.data" class="nav-group-body">
+          <router-link to="/data" class="nav-item" active-class="active">Data hub</router-link>
+          <template v-if="auth.canAdmin()">
+            <router-link to="/imports" class="nav-item nav-item--sub" active-class="active">Imports</router-link>
+            <router-link to="/imports/rejections" class="nav-item nav-item--sub" active-class="active">Import rejections</router-link>
+          </template>
+          <router-link to="/reports/data-health" class="nav-item nav-item--sub" active-class="active">Data Health</router-link>
+          <router-link to="/reports" class="nav-item nav-item--sub" active-class="active">Reports hub</router-link>
+          <router-link to="/reports/sales-grid" class="nav-item nav-item--sub" active-class="active">Sales Data</router-link>
+          <router-link to="/reports/stock-on-hand-grid" class="nav-item nav-item--sub" active-class="active">Stock (SOH) Grid</router-link>
+          <router-link to="/reports/stock-on-hand-history" class="nav-item nav-item--sub" active-class="active">SOH History (SKU)</router-link>
+          <router-link to="/reports/stock-coverage" class="nav-item nav-item--sub" active-class="active">Stock Coverage</router-link>
+        </div>
       </div>
 
       <template v-if="auth.canPlanner()">
@@ -26,20 +45,20 @@
             v-show="!layout.navCollapsed"
             type="button"
             class="nav-group-toggle"
-            :aria-expanded="open.planning"
-            @click="toggle('planning')"
+            :aria-expanded="open.runCenter"
+            @click="toggle('runCenter')"
           >
-            <span class="nav-group-label">Supply planning</span>
-            <span class="nav-chevron" :class="{ open: open.planning }" aria-hidden="true">▼</span>
+            <span class="nav-group-label">Run Center</span>
+            <span class="nav-chevron" :class="{ open: open.runCenter }" aria-hidden="true">▼</span>
           </button>
-          <div v-show="layout.navCollapsed || open.planning" class="nav-group-body">
-            <router-link to="/inventory-projection" class="nav-item nav-item--sub" active-class="active">Inventory Projection</router-link>
-            <router-link to="/planning-grid" class="nav-item nav-item--sub" active-class="active">Weekly Planning Grid</router-link>
-            <router-link to="/planned-orders" class="nav-item nav-item--sub" active-class="active">Planned Orders</router-link>
-            <router-link to="/stock-projection" class="nav-item nav-item--sub" active-class="active">Stock Projection</router-link>
-            <router-link to="/stock-position" class="nav-item nav-item--sub" active-class="active">Stock Position</router-link>
-            <router-link to="/exceptions" class="nav-item nav-item--sub" active-class="active">Exceptions</router-link>
+          <div v-show="layout.navCollapsed || open.runCenter" class="nav-group-body">
+            <router-link to="/run-center" class="nav-item" active-class="active">Run Center</router-link>
+            <router-link to="/forecast/check" class="nav-item nav-item--sub" active-class="active">Forecast Check</router-link>
+            <router-link to="/forecast/runs" class="nav-item nav-item--sub" active-class="active">Run Forecast</router-link>
+            <router-link to="/forecast/dashboard" class="nav-item nav-item--sub" active-class="active">Forecast Dashboard</router-link>
             <router-link to="/planning/scenario-manager" class="nav-item nav-item--sub" active-class="active">Scenario Manager</router-link>
+            <router-link to="/forecast/scenarios" class="nav-item nav-item--sub" active-class="active">Forecast Scenarios</router-link>
+            <router-link to="/forecast/exports" class="nav-item nav-item--sub" active-class="active">Forecast Exports</router-link>
           </div>
         </div>
 
@@ -48,17 +67,23 @@
             v-show="!layout.navCollapsed"
             type="button"
             class="nav-group-toggle"
-            :aria-expanded="open.forecast"
-            @click="toggle('forecast')"
+            :aria-expanded="open.workbench"
+            @click="toggle('workbench')"
           >
-            <span class="nav-group-label">Forecast</span>
-            <span class="nav-chevron" :class="{ open: open.forecast }" aria-hidden="true">▼</span>
+            <span class="nav-group-label">Planner Workbench</span>
+            <span class="nav-chevron" :class="{ open: open.workbench }" aria-hidden="true">▼</span>
           </button>
-          <div v-show="layout.navCollapsed || open.forecast" class="nav-group-body">
-            <router-link to="/forecast/dashboard" class="nav-item nav-item--sub" active-class="active">Forecast Dashboard</router-link>
-            <router-link to="/forecast/runs" class="nav-item nav-item--sub" active-class="active">Run Forecast</router-link>
-            <router-link to="/forecast/scenarios" class="nav-item nav-item--sub" active-class="active">Scenarios</router-link>
-            <router-link to="/forecast/exports" class="nav-item nav-item--sub" active-class="active">Forecast Export</router-link>
+          <div v-show="layout.navCollapsed || open.workbench" class="nav-group-body">
+            <router-link to="/workbench" class="nav-item" active-class="active">Workbench</router-link>
+            <router-link to="/" class="nav-item nav-item--sub" exact-active-class="active">Supply Dashboard</router-link>
+            <router-link to="/planning-grid" class="nav-item nav-item--sub" active-class="active">Weekly Planning Grid</router-link>
+            <router-link to="/exceptions" class="nav-item nav-item--sub" active-class="active">Exceptions</router-link>
+            <router-link to="/inventory-projection" class="nav-item nav-item--sub" active-class="active">Inventory Projection</router-link>
+            <router-link to="/stock-position" class="nav-item nav-item--sub" active-class="active">Stock Position</router-link>
+            <router-link to="/stock-projection" class="nav-item nav-item--sub" active-class="active">Stock Projection</router-link>
+            <router-link to="/planned-orders" class="nav-item nav-item--sub" active-class="active">Planned Orders</router-link>
+            <router-link to="/sku-detail" class="nav-item nav-item--sub" active-class="active">SKU Detail</router-link>
+            <router-link to="/exports" class="nav-item nav-item--sub" active-class="active">Planning Exports</router-link>
           </div>
         </div>
       </template>
@@ -68,42 +93,15 @@
           v-show="!layout.navCollapsed"
           type="button"
           class="nav-group-toggle"
-          :aria-expanded="open.reports"
-          @click="toggle('reports')"
+          :aria-expanded="open.setup"
+          @click="toggle('setup')"
         >
-          <span class="nav-group-label">Reports &amp; data</span>
-          <span class="nav-chevron" :class="{ open: open.reports }" aria-hidden="true">▼</span>
+          <span class="nav-group-label">Setup</span>
+          <span class="nav-chevron" :class="{ open: open.setup }" aria-hidden="true">▼</span>
         </button>
-        <div v-show="layout.navCollapsed || open.reports" class="nav-group-body">
-          <router-link to="/reports" class="nav-item nav-item--sub" active-class="active">Reports hub</router-link>
-          <router-link to="/reports/data-health" class="nav-item nav-item--sub" active-class="active">Data Health</router-link>
-          <router-link to="/reports/stock-coverage" class="nav-item nav-item--sub" active-class="active">Stock Coverage</router-link>
-          <router-link to="/reports/stock-on-hand-history" class="nav-item nav-item--sub" active-class="active">SOH History (SKU)</router-link>
-          <router-link to="/reports/sales-grid" class="nav-item nav-item--sub" active-class="active">Sales Data</router-link>
-          <router-link to="/reports/stock-on-hand-grid" class="nav-item nav-item--sub" active-class="active">Stock (SOH) Grid</router-link>
-        </div>
-      </div>
-
-      <template v-if="auth.canPlanner()">
-        <div class="nav-group">
-          <span class="nav-section">Exports</span>
-          <router-link to="/exports" class="nav-item" active-class="active">Planning Exports</router-link>
-        </div>
-      </template>
-
-      <template v-if="auth.canAdmin()">
-        <div class="nav-group">
-          <button
-            v-show="!layout.navCollapsed"
-            type="button"
-            class="nav-group-toggle"
-            :aria-expanded="open.master"
-            @click="toggle('master')"
-          >
-            <span class="nav-group-label">Master data</span>
-            <span class="nav-chevron" :class="{ open: open.master }" aria-hidden="true">▼</span>
-          </button>
-          <div v-show="layout.navCollapsed || open.master" class="nav-group-body">
+        <div v-show="layout.navCollapsed || open.setup" class="nav-group-body">
+          <router-link to="/setup" class="nav-item" active-class="active">Setup Checklist</router-link>
+          <template v-if="auth.canAdmin()">
             <router-link v-slot="{ href, navigate }" to="/admin" custom>
               <a
                 :href="href"
@@ -113,35 +111,20 @@
               >Admin home</a>
             </router-link>
             <router-link to="/admin/products" class="nav-item nav-item--sub" active-class="active">Products</router-link>
+            <router-link to="/admin/warehouses" class="nav-item nav-item--sub" active-class="active">Locations</router-link>
             <router-link to="/admin/suppliers" class="nav-item nav-item--sub" active-class="active">Suppliers</router-link>
-            <router-link to="/admin/warehouses" class="nav-item nav-item--sub" active-class="active">Warehouses</router-link>
             <router-link to="/admin/lanes" class="nav-item nav-item--sub" active-class="active">Lanes</router-link>
             <router-link to="/admin/timelines" class="nav-item nav-item--sub" active-class="active">Timelines</router-link>
-            <router-link to="/imports" class="nav-item nav-item--sub" active-class="active">Imports</router-link>
-          </div>
-        </div>
-
-        <div class="nav-group">
-          <button
-            v-show="!layout.navCollapsed"
-            type="button"
-            class="nav-group-toggle"
-            :aria-expanded="open.settings"
-            @click="toggle('settings')"
-          >
-            <span class="nav-group-label">Settings</span>
-            <span class="nav-chevron" :class="{ open: open.settings }" aria-hidden="true">▼</span>
-          </button>
-          <div v-show="layout.navCollapsed || open.settings" class="nav-group-body">
             <router-link to="/admin/policies" class="nav-item nav-item--sub" active-class="active">Stock Rules</router-link>
             <router-link to="/admin/forecast-methods" class="nav-item nav-item--sub" active-class="active">Forecasting Methods</router-link>
             <router-link to="/admin/forecast-engine" class="nav-item nav-item--sub" active-class="active">Forecast Settings</router-link>
-            <router-link to="/admin/settings" class="nav-item nav-item--sub" active-class="active">Admin Settings</router-link>
             <router-link to="/admin/import-formats" class="nav-item nav-item--sub" active-class="active">Import Formats</router-link>
-            <router-link to="/admin/warehouse-product-codes" class="nav-item nav-item--sub" active-class="active">Warehouse Product Codes</router-link>
-          </div>
+            <router-link to="/admin/warehouse-product-codes" class="nav-item nav-item--sub" active-class="active">Location Product Codes</router-link>
+            <router-link to="/admin/data-management" class="nav-item nav-item--sub" active-class="active">Data Management</router-link>
+            <router-link to="/admin/settings" class="nav-item nav-item--sub" active-class="active">Admin Settings</router-link>
+          </template>
         </div>
-      </template>
+      </div>
     </nav>
   </aside>
 </template>
@@ -163,11 +146,10 @@ const isExactAdminHome = computed(() => {
 })
 
 const open = reactive({
-  planning: true,
-  forecast: true,
-  reports: true,
-  master: false,
-  settings: false,
+  data: true,
+  runCenter: true,
+  workbench: true,
+  setup: false,
 })
 
 function toggle(key: keyof typeof open) {
@@ -175,52 +157,59 @@ function toggle(key: keyof typeof open) {
 }
 
 const anyGroupOpen = computed(
-  () => open.planning || open.forecast || open.reports || open.master || open.settings
+  () => open.data || open.runCenter || open.workbench || open.setup
 )
 
 function closeAllGroups(): void {
-  open.planning = false
-  open.forecast = false
-  open.reports = false
-  open.master = false
-  open.settings = false
+  open.data = false
+  open.runCenter = false
+  open.workbench = false
+  open.setup = false
 }
 
 function syncOpenFromRoute() {
   const p = route.path
+  const name = route.name
   if (
+    name === 'DataHub' ||
+    p.startsWith('/data') ||
+    p.startsWith('/imports') ||
+    p.startsWith('/reports')
+  ) {
+    open.data = true
+  }
+  if (
+    name === 'RunCenter' ||
+    p.startsWith('/run-center') ||
+    p.startsWith('/forecast/') ||
+    p.startsWith('/planning/scenario-manager')
+  ) {
+    open.runCenter = true
+  }
+  if (
+    p === '/' ||
+    p === '' ||
+    name === 'Dashboard' ||
+    name === 'PlannerWorkbench' ||
+    p.startsWith('/workbench') ||
     p.startsWith('/inventory-projection') ||
     p.startsWith('/planning-grid') ||
     p.startsWith('/planned-orders') ||
     p.startsWith('/stock-projection') ||
     p.startsWith('/stock-position') ||
     p.startsWith('/exceptions') ||
-    p.startsWith('/planning/')
+    p.startsWith('/sku-detail') ||
+    p.startsWith('/exports')
   ) {
-    open.planning = true
+    open.workbench = true
   }
-  if (p.startsWith('/forecast/')) open.forecast = true
-  if (p.startsWith('/reports') || p.startsWith('/exports')) open.reports = true
   if (
-    p.startsWith('/admin/products') ||
-    p.startsWith('/admin/suppliers') ||
-    p.startsWith('/admin/warehouses') ||
-    p.startsWith('/admin/lanes') ||
-    p.startsWith('/admin/timelines') ||
+    name === 'Setup' ||
+    p.startsWith('/setup') ||
     p === '/admin' ||
-    p.startsWith('/imports')
+    p.startsWith('/admin/')
   ) {
-    open.master = true
-  }
-  if (
-    p.startsWith('/admin/policies') ||
-    p.startsWith('/admin/forecast-methods') ||
-    p.startsWith('/admin/forecast-engine') ||
-    p.startsWith('/admin/settings') ||
-    p.startsWith('/admin/import-formats') ||
-    p.startsWith('/admin/warehouse-product-codes')
-  ) {
-    open.settings = true
+    open.setup = true
   }
 }
 

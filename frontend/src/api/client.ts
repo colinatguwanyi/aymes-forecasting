@@ -1,13 +1,121 @@
 import axios from 'axios'
 
+export interface NormalizedApiError {
+  message: string
+  code: string
+  detail?: string
+  statusCode?: number
+  nextActions: string[]
+  technicalDetails?: unknown
+}
+
 /** Use on ingestion file POSTs; staging can run many minutes after upload bytes complete. */
 export const INGESTION_UPLOAD_TIMEOUT_MS = 3_600_000
+
+/** Admin full DB reset can run many DELETEs; align with Vite `/api` proxy timeout. */
+export const ADMIN_DATA_RESET_TIMEOUT_MS = 3_600_000
+
+/** Summary + reset-preview run many COUNT queries; allow long responses on large MySQL DBs. */
+export const ADMIN_DATA_MANAGEMENT_READ_TIMEOUT_MS = 3_600_000
 
 const api = axios.create({
   baseURL: '/api',
   headers: { 'Content-Type': 'application/json' },
   withCredentials: true,
 })
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value)
+}
+
+function stringifyDetail(value: unknown): string | undefined {
+  if (value == null) return undefined
+  if (typeof value === 'string') return value
+  try {
+    return JSON.stringify(value)
+  } catch {
+    return String(value)
+  }
+}
+
+function pickString(record: Record<string, unknown>, key: string): string | undefined {
+  const value = record[key]
+  return typeof value === 'string' && value.trim() ? value : undefined
+}
+
+function nextActionsFor(statusCode: number | undefined, code: string): string[] {
+  if (code === 'ECONNABORTED' || code === 'timeout') {
+    return ['Refresh the page or status list before retrying.', 'Check whether the server completed the request in the background.']
+  }
+  if (!statusCode) {
+    return ['Check that the API server is running.', 'Retry after network connectivity is restored.']
+  }
+  if (statusCode === 401) return ['Sign in again, then retry.']
+  if (statusCode === 403) return ['Ask an administrator to confirm your access.', 'Retry with an account that has permission.']
+  if (statusCode === 409) return ['Refresh the current data, resolve the conflict, then retry.']
+  if (statusCode === 422) return ['Check the form inputs and required fields, then retry.']
+  if (statusCode >= 500) return ['Check API/server logs.', 'Retry after the backend is healthy.']
+  return ['Review the error details, then retry.']
+}
+
+export function normalizeApiError(error: unknown): NormalizedApiError {
+  if (axios.isAxiosError(error)) {
+    const statusCode = error.response?.status
+    const responseData = error.response?.data
+    const detail = isRecord(responseData) && 'detail' in responseData ? responseData.detail : responseData
+    const detailRecord = isRecord(detail) ? detail : null
+    const code =
+      (detailRecord && pickString(detailRecord, 'code')) ||
+      (isRecord(responseData) && pickString(responseData, 'code')) ||
+      error.code ||
+      (statusCode ? `http_${statusCode}` : 'network_error')
+    const message =
+      (detailRecord && pickString(detailRecord, 'message')) ||
+      (isRecord(responseData) && pickString(responseData, 'message')) ||
+      stringifyDetail(detail) ||
+      error.message ||
+      'Request failed'
+
+    return {
+      message,
+      code,
+      detail: stringifyDetail(detail),
+      statusCode,
+      nextActions: nextActionsFor(statusCode, code),
+      technicalDetails: {
+        code,
+        statusCode,
+        method: error.config?.method,
+        url: error.config?.url,
+        response: responseData,
+      },
+    }
+  }
+
+  if (error instanceof Error) {
+    const code = error.name || 'error'
+    return {
+      message: error.message || 'Operation failed',
+      code,
+      detail: error.message || undefined,
+      nextActions: nextActionsFor(undefined, code),
+      technicalDetails: {
+        name: error.name,
+        message: error.message,
+        stack: error.stack,
+      },
+    }
+  }
+
+  const detail = stringifyDetail(error)
+  return {
+    message: detail || 'Operation failed',
+    code: 'unknown_error',
+    detail,
+    nextActions: nextActionsFor(undefined, 'unknown_error'),
+    technicalDetails: error,
+  }
+}
 
 // Add X-Dev-User so backend can authenticate without Entra (dev/local only on server).
 // - Vite dev server (npm run dev): always sends (MODE !== production).
@@ -34,10 +142,8 @@ api.interceptors.request.use((config) => {
 api.interceptors.response.use(
   (r) => r,
   (err) => {
-    const detail = err.response?.data?.detail
-    if (detail != null) {
-      console.error('API error:', err.response?.status, typeof detail === 'string' ? detail : JSON.stringify(detail))
-    }
+    const normalized = normalizeApiError(err)
+    console.error('API error:', normalized.statusCode, normalized.message)
     return Promise.reject(err)
   }
 )
@@ -56,6 +162,8 @@ export interface PlanRun {
   notes?: string | null
   warehouses_scope?: string[] | null
   progress_meta?: {
+    planning_mode?: string
+    synthetic_starting_inventory?: boolean
     demand_source?: string
     plan_start_week_start?: string | null
     warehouses_planned?: string[]
@@ -75,10 +183,23 @@ export interface PlanRun {
   } | null
 }
 
-/** Display label for a plan run: notes if set, else "scenario (date) #id" */
+/** Effective planning mode from API metadata; legacy runs without key are stock-aware. */
+export function planRunPlanningMode(r: PlanRun): 'stock_aware' | 'demand_only' {
+  return r.progress_meta?.planning_mode === 'demand_only' ? 'demand_only' : 'stock_aware'
+}
+
+/** Subtle suffix for list labels: demand-only runs are not physical SOH projections. */
+function planRunModeLabelSuffix(r: PlanRun): string {
+  if (planRunPlanningMode(r) !== 'demand_only') return ''
+  const syn = r.progress_meta?.synthetic_starting_inventory ? ' · synthetic start' : ''
+  return ` [Demand-only${syn}]`
+}
+
+/** Display label for a plan run: notes if set, else "scenario (date) #id"; demand_only runs get a mode suffix. */
 export function formatPlanRunLabel(r: PlanRun): string {
-  if (r.notes && String(r.notes).trim()) return String(r.notes).trim()
-  return `${r.scenario_name} (${r.run_at}) #${r.id}`
+  const suffix = planRunModeLabelSuffix(r)
+  if (r.notes && String(r.notes).trim()) return `${String(r.notes).trim()}${suffix}`
+  return `${r.scenario_name} (${r.run_at}) #${r.id}${suffix}`
 }
 
 /** One row from GET /forecast/runs (available baseline runs to pin). */
@@ -403,6 +524,8 @@ export interface StockPositionRollingWeek {
 /** Planning readiness diagnostics from GET /api/v1/diagnostics/planning-readiness */
 export interface PlanningReadinessDiagnostics {
   ready_to_plan: boolean
+  /** Echo of requested planning_mode query (default stock_aware). */
+  planning_mode?: string
   blockers: Array<{ code: string; message: string; action_label: string; action_href: string }>
   stats: {
     products_count: number
@@ -422,9 +545,15 @@ export interface PlanningReadinessDiagnostics {
   }
 }
 
-export async function fetchPlanningReadiness(planRunId?: number | null): Promise<PlanningReadinessDiagnostics> {
-  const params = planRunId != null ? `?plan_run_id=${planRunId}` : ''
-  const { data } = await api.get<PlanningReadinessDiagnostics>(`/v1/diagnostics/planning-readiness${params}`)
+export async function fetchPlanningReadiness(
+  planRunId?: number | null,
+  planningMode: 'stock_aware' | 'demand_only' = 'stock_aware',
+): Promise<PlanningReadinessDiagnostics> {
+  const params = new URLSearchParams()
+  if (planRunId != null) params.set('plan_run_id', String(planRunId))
+  params.set('planning_mode', planningMode)
+  const q = params.toString()
+  const { data } = await api.get<PlanningReadinessDiagnostics>(`/v1/diagnostics/planning-readiness?${q}`)
   return data
 }
 
@@ -441,7 +570,64 @@ export interface WarehouseReadinessItem {
   demand_latest_week: string | null
 }
 
-export async function fetchWarehouseReadiness(demandSource: string = 'actuals'): Promise<WarehouseReadinessItem[]> {
-  const { data } = await api.get<WarehouseReadinessItem[]>(`/v1/diagnostics/warehouse-readiness?demand_source=${demandSource}`)
+export async function fetchWarehouseReadiness(
+  demandSource: string = 'actuals',
+  planningMode: 'stock_aware' | 'demand_only' = 'stock_aware',
+): Promise<WarehouseReadinessItem[]> {
+  const params = new URLSearchParams({ demand_source: demandSource, planning_mode: planningMode })
+  const { data } = await api.get<WarehouseReadinessItem[]>(`/v1/diagnostics/warehouse-readiness?${params}`)
+  return data
+}
+
+export type ForecastCheckStatus = 'green' | 'amber' | 'red'
+
+export interface ForecastCheckCard {
+  status: ForecastCheckStatus
+  message: string
+}
+
+export interface ForecastCheckSalesFreshness extends ForecastCheckCard {
+  latest_week: string | null
+  weeks_available: number
+  sku_count: number
+}
+
+export interface ForecastCheckSohFreshness extends ForecastCheckCard {
+  latest_week: string | null
+  sku_count: number
+}
+
+export interface ForecastCheckRun extends ForecastCheckCard {
+  latest_run_id: number | null
+  run_status: string | null
+  inference_date: string | null
+  completed_at: string | null
+}
+
+export interface ForecastCheckPlanningAlignment extends ForecastCheckCard {
+  latest_baseline: string | null
+  latest_plan_baseline: string | null
+}
+
+export interface ForecastCheckCoverage extends ForecastCheckCard {
+  orphan_sku_count: number
+  policy_gaps: number
+  demand_without_soh_count: number | null
+  demand_without_soh_ratio: number | null
+}
+
+export interface ForecastCheck {
+  overall_status: ForecastCheckStatus
+  headline: string
+  sales_freshness: ForecastCheckSalesFreshness
+  soh_freshness: ForecastCheckSohFreshness
+  forecast_run: ForecastCheckRun
+  planning_alignment: ForecastCheckPlanningAlignment
+  sku_data_coverage: ForecastCheckCoverage
+  actions: string[]
+}
+
+export async function fetchForecastCheck(): Promise<ForecastCheck> {
+  const { data } = await api.get<ForecastCheck>('/v1/forecast/check')
   return data
 }

@@ -15,7 +15,9 @@ from uuid import UUID
 
 from sqlalchemy.orm import Session
 
+from app.ingestion_progress import merge_ingest_progress
 from app.models import (
+    IngestionRun,
     Product,
     ProductMasterAttributes,
     ProductMasterStage,
@@ -195,6 +197,14 @@ def import_from_stage(db: Session, run_id: UUID) -> tuple[int, int]:
     Read product_master_stage for run_id; upsert suppliers, products, supplier_products, product_master_attributes.
     Returns (inserted_count, updated_count) for reporting.
     """
+    _run = db.query(IngestionRun).filter(IngestionRun.id == run_id).first()
+    if _run:
+        merge_ingest_progress(
+            db,
+            _run,
+            import_phase="product_master",
+            import_message="Writing product master to catalog tables…",
+        )
     rows = (
         db.query(ProductMasterStage)
         .filter(ProductMasterStage.ingestion_run_id == run_id)

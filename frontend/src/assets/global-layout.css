@@ -73,7 +73,13 @@ body {
 /* ========== Component layer: design tokens ========== */
 @layer components {
   .page-shell {
-    @apply max-w-7xl mx-auto px-6 py-6;
+    width: 100%;
+    max-width: 1600px;
+    margin-left: auto;
+    margin-right: auto;
+    /* Horizontal padding comes from MainColumn .page-content */
+    padding: 1.5rem 0;
+    box-sizing: border-box;
   }
 
   .page-header {
@@ -245,5 +251,15 @@ p { margin: 0.25rem 0; }
   margin: 0.25rem 0 0.5rem 0;
 }
 
+.app-table {
+  width: 100%;
+}
 .app-table tbody tr.row-status-warning { background: rgba(180, 83, 9, 0.08); }
 .app-table tbody tr.row-status-error { background: rgba(153, 27, 27, 0.08); }
+
+/* Full-width data views within the main column (horizontal padding comes from .page-content) */
+.layout-data-wide {
+  width: 100%;
+  max-width: none;
+  box-sizing: border-box;
+}

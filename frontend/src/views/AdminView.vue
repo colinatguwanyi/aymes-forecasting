@@ -31,6 +31,7 @@ const tabs = [
   { name: 'AdminTimelines', path: '/admin/timelines', label: 'Timelines' },
   { name: 'AdminForecastMethods', path: '/admin/forecast-methods', label: 'Forecasting Methods' },
   { name: 'AdminForecastEngine', path: '/admin/forecast-engine', label: 'Forecast Settings' },
+  { name: 'AdminDataManagement', path: '/admin/data-management', label: 'Data Management' },
   { name: 'AdminSettings', path: '/admin/settings', label: 'Settings' },
   { name: 'AdminImportFormats', path: '/admin/import-formats', label: 'Import Formats' },
   { name: 'AdminWarehouseProductCodes', path: '/admin/warehouse-product-codes', label: 'Warehouse Product Codes' },

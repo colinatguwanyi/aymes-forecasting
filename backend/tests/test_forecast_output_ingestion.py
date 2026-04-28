@@ -106,6 +106,44 @@ def test_unknown_aah_code_rejected(db_session) -> None:
     assert rej.reason == "unknown_aah_code"
 
 
+def test_unknown_warehouse_rejected_for_baseline_build(db_session) -> None:
+    """Forecast baseline build must not auto-create warehouses; missing warehouses.code raises ValueError."""
+    u = uuid4().hex[:8]
+    sku, aah = f"SKUFWH{u}", f"FOAHWH{u}"
+    db_session.add(Product(sku=sku, name="W", uom="units", active=True, aah_code=aah))
+    db_session.commit()
+    run_id = uuid4()
+    db_session.add(
+        IngestionRun(
+            id=run_id,
+            source_type=IngestionSourceType.CSV,
+            entity=IngestionEntity.FORECAST_OUTPUT,
+            status=IngestionStatus.PENDING,
+            row_count=1,
+        )
+    )
+    db_session.commit()
+    aah_to_sku = _aah_to_sku_map(db_session)
+    row = {
+        "AAH_Product_Code": aah,
+        "Inference_Date": "2025-01-07",
+        "Forecast_Week": "2025-01-14",
+        "Model": "Prophet",
+        "Forecast": 100,
+    }
+    validate_and_stage_row(db_session, run_id, row, 2, aah_to_sku)
+    db_session.commit()
+    missing_wh = f"NO-WH-{u}"
+    assert db_session.query(Warehouse).filter(Warehouse.code == missing_wh).first() is None
+    with pytest.raises(ValueError) as exc_info:
+        build_baseline_from_stage(db_session, run_id, warehouse_code=missing_wh)
+    msg = str(exc_info.value)
+    assert "Unknown warehouse_code" in msg
+    assert missing_wh in msg
+    assert "Load warehouse master before importing forecasts" in msg
+    assert db_session.query(Warehouse).filter(Warehouse.code == missing_wh).first() is None
+
+
 def test_multiple_models_ingested(db_session) -> None:
     """Multiple model rows for same SKU are staged and written to baseline_forecasts_weekly."""
     u = uuid4().hex[:8]

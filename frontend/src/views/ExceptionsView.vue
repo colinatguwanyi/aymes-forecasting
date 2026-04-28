@@ -12,7 +12,7 @@
           <label class="form-label">Scenario</label>
           <select v-model="selectedRunId" class="select w-full max-w-xs">
             <option :value="null">Select scenario</option>
-            <option v-for="r in planRuns" :key="r.id" :value="r.id">{{ r.scenario_name }} ({{ r.created_at }})</option>
+            <option v-for="r in planRuns" :key="r.id" :value="r.id">{{ formatPlanRunLabel(r) }}</option>
           </select>
         </div>
         <div>
@@ -32,6 +32,11 @@
           </label>
         </div>
       </div>
+    </section>
+
+    <!-- demand_only: API intentionally returns no physical stock-risk exception queue. -->
+    <section v-if="selectedRunId && isDemandOnlyRun" class="mb-4 p-3 rounded-lg bg-sky-50 border border-sky-200 text-sky-900 text-sm">
+      <strong>Demand-only run.</strong> Stockout and low-cover alerts are turned off here so nothing is mistaken for physical warehouse risk. Use the planning grid or CSV exports for this scenario’s modeled outputs.
     </section>
 
     <section class="card">
@@ -61,7 +66,10 @@
             <p class="text-slate-500">No exceptions in this horizon. Select a scenario and run a plan if needed.</p>
           </template>
         </DataTable>
-        <p v-else class="px-5 py-8 text-sm text-slate-500">No exceptions in this horizon. Select a scenario and run a plan if needed.</p>
+        <p v-else class="px-5 py-8 text-sm text-slate-500">
+          <template v-if="isDemandOnlyRun">No rows here by design for demand-only runs (physical stock-risk exceptions are not listed).</template>
+          <template v-else>No exceptions in this horizon. Select a scenario and run a plan if needed.</template>
+        </p>
       </template>
     </section>
 
@@ -101,6 +109,7 @@ import { usePlanningStore } from '@/stores/planning'
 import DataTable from '@/components/console/DataTable.vue'
 import type { DataTableColumn } from '@/components/console/DataTable.vue'
 import type { PlanningException, SkuWeekExplanation } from '@/api/client'
+import { formatPlanRunLabel, planRunPlanningMode } from '@/api/client'
 
 const store = usePlanningStore()
 const layout = useLayoutStore()
@@ -114,6 +123,12 @@ const explanationLoading = ref(false)
 const explanationData = ref<SkuWeekExplanation | null>(null)
 
 const planRuns = computed(() => store.planRuns)
+const selectedRun = computed(() =>
+  selectedRunId.value != null ? planRuns.value.find((r) => r.id === selectedRunId.value) ?? null : null
+)
+const isDemandOnlyRun = computed(
+  () => selectedRun.value != null && planRunPlanningMode(selectedRun.value) === 'demand_only'
+)
 
 const exceptionColumns: DataTableColumn[] = [
   { key: 'type', label: 'Type' },

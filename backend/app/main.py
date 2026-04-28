@@ -17,6 +17,7 @@ from app.routers import (
     admin_forecast_methods,
     app_settings,
     auth,
+    data_management,
     data_health,
     diagnostics,
     sales_reports,
@@ -171,6 +172,7 @@ app.include_router(ingestion.router, prefix="/api/ingestion", tags=["ingestion"]
 app.include_router(forecast.router, prefix="/api/forecast", tags=["forecast"])
 app.include_router(forecast_v2.router, prefix="/api/v1/forecast", tags=["forecast-v2"])
 app.include_router(admin_forecast_methods.router, prefix="/api/admin/forecast-methods", tags=["admin-forecast-methods"])
+app.include_router(data_management.router, prefix="/api/admin/data-management", tags=["admin-data-management"])
 app.include_router(app_settings.router, prefix="/api/admin/settings", tags=["admin-settings"])
 app.include_router(warehouse_product_codes.router, prefix="/api/admin/warehouse-product-codes", tags=["admin-warehouse-product-codes"])
 app.include_router(soh_reports.router, prefix="/api/v1/reports/stock-on-hand", tags=["reports-soh"])

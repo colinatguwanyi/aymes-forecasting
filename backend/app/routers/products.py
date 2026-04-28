@@ -21,15 +21,14 @@ def list_products(db: Session = Depends(get_db)) -> list[ProductModel]:
 
 @router.post("", response_model=Product)
 @router.post("/", response_model=Product)
-def create_product(p: ProductCreate, db: Session = Depends(get_db)) -> ProductModel:
-    existing = db.query(ProductModel).filter(ProductModel.sku == p.sku).first()
-    if existing:
-        raise HTTPException(status_code=400, detail="SKU already exists")
-    obj = ProductModel(**p.model_dump())
-    db.add(obj)
-    db.commit()
-    db.refresh(obj)
-    return obj
+def create_product(_p: ProductCreate, _db: Session = Depends(get_db)) -> ProductModel:
+    raise HTTPException(
+        status_code=403,
+        detail=(
+            "Direct product creation is disabled. Add or update SKUs via product master ingestion "
+            "(ingestion upload with entity=product_master)."
+        ),
+    )
 
 
 @router.get("/{product_id}", response_model=Product)

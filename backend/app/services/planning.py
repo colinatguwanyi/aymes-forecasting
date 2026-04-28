@@ -106,6 +106,7 @@ def run_plan(
     created_by: str | None = None,
     notes: str | None = None,
     warehouses_scope: list[str] | None = None,
+    planning_mode: str = "stock_aware",
 ) -> PlanRun:
     if run_at is None:
         run_at = date.today()
@@ -113,7 +114,11 @@ def run_plan(
 
     from app.services.warehouse_readiness import check_planning_readiness
 
-    readiness = check_planning_readiness(db, demand_source=demand_source)
+    readiness = check_planning_readiness(
+        db,
+        demand_source=demand_source,
+        planning_mode=planning_mode,
+    )
     readiness_by_wh: dict[str, dict[str, Any]] = {r["warehouse_code"]: r for r in readiness}
 
     # Determine target warehouses
@@ -211,6 +216,22 @@ def run_plan(
         (cast(str, p.sku), cast(str, p.warehouse_code)): p for p in policies
     }
 
+    policy_skus = {cast(str, p.sku) for p in policies}
+    if policy_skus:
+        found_skus = {
+            cast(str, r[0])
+            for r in db.query(Product.sku).filter(Product.sku.in_(policy_skus)).all()
+            if r[0]
+        }
+        missing_pol = sorted(policy_skus - found_skus)
+        if missing_pol:
+            preview = ", ".join(missing_pol[:80])
+            suffix = f" (and {len(missing_pol) - 80} more)" if len(missing_pol) > 80 else ""
+            raise ValueError(
+                "Cannot run plan: planning_policies.sku must exist in products. "
+                f"Missing SKUs: {preview}{suffix}"
+            )
+
     # 4) Forecast: history_weeks = demand where week_start <= run_week; trailing mean = last forecast_window_weeks
     forecast_customer: dict[tuple[str, str], Decimal] = {}
     forecast_samples: dict[tuple[str, str], Decimal] = {}
@@ -265,9 +286,12 @@ def run_plan(
     for k, v in receipts.items():
         receipts_plus_orders[k] += v
 
-    sku_wh_set = set(policy_by_key.keys()) | set(starting_inv.keys())
+    # Valid SKU×warehouse scope comes only from planning_policies (policy_by_key).
+    # Inventory snapshots, demand, and receipts must not add new pairs to the plan loop.
+    sku_wh_set = set(policy_by_key.keys())
     projected_rows: list[dict[str, Any]] = []
     planned_order_rows: list[dict[str, Any]] = []
+    synthetic_starts_used = False
 
     for (sku, wh_code) in sku_wh_set:
         policy = policy_by_key.get((sku, wh_code))
@@ -275,8 +299,15 @@ def run_plan(
             continue
         start_data = starting_inv.get((sku, wh_code))
         if not start_data:
-            continue
-        snapshot_week, start_qty = start_data
+            if planning_mode != "demand_only":
+                continue
+            # demand_only: no InventorySnapshotWeekly for this SKU×warehouse — use a synthetic opening
+            # position (zero) anchored at run_week. This is a modeling anchor only, not physical SOH.
+            snapshot_week = run_week
+            start_qty = Decimal("0")
+            synthetic_starts_used = True
+        else:
+            snapshot_week, start_qty = start_data
         lt_prod = float(cast(Decimal | None, policy.lead_time_production_weeks) or 0)
         lt_slot = float(cast(Decimal | None, policy.lead_time_slot_wait_weeks) or 0)
         lt_haul = float(cast(Decimal | None, policy.lead_time_haulage_weeks) or 0)
@@ -367,35 +398,35 @@ def run_plan(
                     order_qty = max(rop - inv, Decimal("0"))
                     order_qty = Decimal(str(round(float(order_qty), 4)))
 
-            if order_qty > 0 or order_overrides.get((w, sku, wh_code)) is not None:
-                order_qty_used = order_overrides.get((w, sku, wh_code))
-                if order_qty_used is not None:
-                    order_qty = order_qty_used
+            override_qty = order_overrides.get((w, sku, wh_code))
+            if order_qty > 0 or override_qty is not None:
+                if override_qty is not None:
+                    order_qty = override_qty
                 if order_qty > 0:
                     arrival_week = w
                     for _ in range(lt_weeks_int):
                         arrival_week = _next_monday(arrival_week)
                     receipts_plus_orders[(arrival_week, sku, wh_code)] += order_qty
-                planned_order_rows.append({
-                    "plan_run_id": plan_run.id,
-                    "week_start": w,
-                    "sku": sku,
-                    "warehouse_code": wh_code,
-                    "order_qty": order_qty,
-                    "is_frozen": False,
-                })
-                if lt_weeks_int == 0:
-                    inv += order_qty
-                    end_qty_week = inv
-                    woc = (
-                        float(inv) / float(total_forecast_per_week)
-                        if total_forecast_per_week > 0
-                        else 999.0
-                    )
-                    last_proj: dict[str, Any] = projected_rows[-1]
-                    last_proj["projected_qty"] = inv
-                    last_proj["weeks_of_cover"] = Decimal(str(round(woc, 2)))
-                    last_proj["stockout"] = inv < 0
+                    planned_order_rows.append({
+                        "plan_run_id": plan_run.id,
+                        "week_start": w,
+                        "sku": sku,
+                        "warehouse_code": wh_code,
+                        "order_qty": order_qty,
+                        "is_frozen": False,
+                    })
+                    if lt_weeks_int == 0:
+                        inv += order_qty
+                        end_qty_week = inv
+                        woc = (
+                            float(inv) / float(total_forecast_per_week)
+                            if total_forecast_per_week > 0
+                            else 999.0
+                        )
+                        last_proj: dict[str, Any] = projected_rows[-1]
+                        last_proj["projected_qty"] = inv
+                        last_proj["weeks_of_cover"] = Decimal(str(round(woc, 2)))
+                        last_proj["stockout"] = inv < 0
 
     # Safety guard: all SKUs and warehouses in outputs must exist in products/warehouses
     output_skus = {r["sku"] for r in projected_rows} | {r["sku"] for r in planned_order_rows}
@@ -427,21 +458,31 @@ def run_plan(
     planned_wh = list({r["warehouse_code"] for r in projected_rows})
     warehouses_planned_detail: list[dict[str, Any]] = []
     for wh in planned_wh:
-        r = readiness_by_wh.get(wh, {})
+        readiness_row = readiness_by_wh.get(wh, {})
         policy_pairs = sum(1 for (_, w) in policy_by_key if w == wh)
         start_pairs = sum(1 for (_, w) in starting_inv if w == wh)
-        skus_planned = len({r["sku"] for r in projected_rows if r["warehouse_code"] == wh})
+        skus_from_projection = {
+            row["sku"] for row in projected_rows if row["warehouse_code"] == wh
+        }
+        skus_from_orders = {
+            row["sku"]
+            for row in planned_order_rows
+            if row["warehouse_code"] == wh and row["order_qty"] and row["order_qty"] > 0
+        }
+        skus_planned = len(skus_from_projection | skus_from_orders)
         warehouses_planned_detail.append({
             "warehouse_code": wh,
-            "latest_soh_week_start": r.get("soh_latest_week"),
-            "latest_demand_week_start": r.get("demand_latest_week"),
+            "latest_soh_week_start": readiness_row.get("soh_latest_week"),
+            "latest_demand_week_start": readiness_row.get("demand_latest_week"),
             "policy_pairs_count": policy_pairs,
             "starting_inv_pairs_count": start_pairs,
-            "overlap_pairs_count": r.get("overlap_pairs", 0),
+            "overlap_pairs_count": readiness_row.get("overlap_pairs", 0),
             "skus_planned": skus_planned,
         })
     plan_run.progress_meta = {
         "demand_source": demand_source,
+        "planning_mode": planning_mode,
+        "synthetic_starting_inventory": bool(planning_mode == "demand_only" and synthetic_starts_used),
         "plan_start_week_start": plan_start_week_start.isoformat() if plan_start_week_start else None,
         "warehouses_planned": planned_wh,
         "warehouses_planned_detail": warehouses_planned_detail,

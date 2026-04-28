@@ -1,6 +1,8 @@
 """Ingestion API: upload CSV, stage, execute weekly transform, list runs."""
 from __future__ import annotations
+import csv
 import hashlib
+import io
 import logging
 from datetime import date, datetime, timezone
 from decimal import Decimal
@@ -8,6 +10,7 @@ from typing import Any, cast
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile
+from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
 
 from app.database import get_db
@@ -38,6 +41,8 @@ from app.services.soh_ingestion import (
     validate_and_stage_soh_row,
 )
 from app.services.ingestion_mode import compute_date_range_and_mode
+from app.services.ingestion_rejection_summary import build_rejection_summary, iter_rejection_csv_rows
+from app.services.sku_resolution import active_sku_set, resolve_sku_code_map
 from app.services.time_bucketing import week_start_for_date
 from app.services.weekly_series_builder import build_weekly_series_from_stage
 
@@ -72,9 +77,11 @@ def _validate_and_stage_demand(
     db: Session,
     run_id: UUID,
     rows: list[dict[str, Any]],
+    warehouse_code_override: str | None = None,
 ) -> tuple[int, int]:
     """Validate rows, write valid to demand_stage_weekly, rejections to ingestion_rejections. Return (staged_count, rejected_count)."""
     staged = 0
+    active = active_sku_set(db)
     for i, row in enumerate(rows, start=2):
         errs: list[str] = []
         week_ok, week_val = _parse_week_start(row.get("week_start", ""))
@@ -84,7 +91,7 @@ def _validate_and_stage_demand(
         if not qty_ok:
             errs.append(str(qty_val))
         sku_raw = (row.get("sku") or "").strip()
-        wh = (row.get("warehouse_code") or "").strip()
+        wh = (warehouse_code_override or row.get("warehouse_code") or "").strip().upper()
         dt = (row.get("demand_type") or "").strip().upper()
         if not sku_raw:
             errs.append("sku required")
@@ -99,6 +106,19 @@ def _validate_and_stage_demand(
                     row_number=i,
                     raw_payload=dict(row),
                     reason="; ".join(errs),
+                )
+            )
+            continue
+        mapped = resolve_sku_code_map(db, sku_raw, week_val)
+        if mapped not in active:
+            msg = f"Unmapped SKU: {sku_raw} in demand_ingestion"
+            logger.error(msg)
+            db.add(
+                IngestionRejection(
+                    ingestion_run_id=run_id,
+                    row_number=i,
+                    raw_payload={**dict(row), "resolved_sku": mapped},
+                    reason=msg,
                 )
             )
             continue
@@ -234,8 +254,10 @@ async def upload_sales_out(
     file: UploadFile = File(..., description="CSV or XLSX file (Sales Out columns)"),
     created_by: str | None = Query(None),
     mode: str | None = Query(None, description="weekly (default) or historical"),
+    warehouse_code: str | None = Query(None, description="Location code to load Sales Out into"),
     date_from: str | None = Query(None, description="For historical: YYYY-MM-DD; only include rows on or after this date"),
     date_to: str | None = Query(None, description="For historical: YYYY-MM-DD; only include rows on or before this date"),
+    force_reimport: bool = Query(False, description="Bypass same-file duplicate guard and create a new staged run"),
     db: Session = Depends(get_db),
 ) -> dict[str, Any]:
     """Accept Sales Out CSV/XLSX; parse and stage; create ingestion run. Call build-weekly on run_id to write demand_actuals.
@@ -245,8 +267,10 @@ async def upload_sales_out(
         file=file,
         created_by=created_by,
         mode=mode,
+        warehouse_code=warehouse_code,
         date_from=date_from,
         date_to=date_to,
+        force_reimport=force_reimport,
         db=db,
     )
 
@@ -297,7 +321,7 @@ def build_sales_out_weekly(
     run_id: UUID,
     db: Session = Depends(get_db),
 ) -> dict[str, Any]:
-    """Transform staged Sales Out for this run into canonical weekly demand (demand_actuals, W-TUE, AAH)."""
+    """Transform staged Sales Out for this run into canonical weekly demand for the selected location."""
     run = db.query(IngestionRun).filter(IngestionRun.id == run_id).first()
     if not run:
         raise HTTPException(status_code=404, detail="Run not found")
@@ -328,11 +352,12 @@ def build_sales_out_weekly(
 
 @router.post("/stock-on-hand/upload")
 async def upload_stock_on_hand(
-    file: UploadFile = File(..., description="CSV or XLSX (Stock at, Branch Name, AAH Code, STOCK, ON ORDER) or BLP-AYMES (Code, Balance)"),
+    file: UploadFile = File(..., description="CSV or XLSX stock-on-hand file"),
     created_by: str | None = Query(None),
     mode: str | None = Query(None, description="weekly (default) or historical"),
-    warehouse_code: str | None = Query(None, description="Required for BLP-AYMES format (e.g. BLP)"),
-    snapshot_date: str | None = Query(None, description="For BLP-AYMES: YYYY-MM-DD; default today"),
+    warehouse_code: str | None = Query(None, description="Location code to load SOH into"),
+    snapshot_date: str | None = Query(None, description="Snapshot date: YYYY-MM-DD; default today for files that need it"),
+    force_reimport: bool = Query(False, description="Bypass same-file duplicate guard and create a new staged run"),
     db: Session = Depends(get_db),
 ) -> dict[str, Any]:
     """Accept SOH CSV/XLSX; parse and stage (chunked). Call execute on run_id to build daily and weekly canonical."""
@@ -343,6 +368,7 @@ async def upload_stock_on_hand(
         mode=mode,
         warehouse_code=warehouse_code,
         snapshot_date=snapshot_date,
+        force_reimport=force_reimport,
         db=db,
     )
 
@@ -366,6 +392,7 @@ def execute_stock_on_hand(
 async def upload_forecast_output(
     file: UploadFile = File(..., description="XLSX or CSV file (forecast output format)"),
     created_by: str | None = Query(None),
+    force_reimport: bool = Query(False, description="Bypass same-file duplicate guard and create a new staged run"),
     db: Session = Depends(get_db),
 ) -> dict[str, Any]:
     """Accept XLSX/CSV forecast output; parse and stage; create ingestion run. Call execute on run_id to build baseline and publish."""
@@ -373,6 +400,7 @@ async def upload_forecast_output(
         entity="forecast_output",
         file=file,
         created_by=created_by,
+        force_reimport=force_reimport,
         db=db,
     )
 
@@ -393,16 +421,18 @@ async def upload(
     file: UploadFile = File(..., description="CSV file"),
     created_by: str | None = Query(None),
     mode: str | None = Query(None, description="weekly (default) or historical"),
-    warehouse_code: str | None = Query(None, description="For SOH BLP-AYMES format"),
-    snapshot_date: str | None = Query(None, description="For SOH BLP-AYMES: YYYY-MM-DD"),
+    warehouse_code: str | None = Query(None, description="Location code for location-specific imports"),
+    snapshot_date: str | None = Query(None, description="For SOH files that need a snapshot date: YYYY-MM-DD"),
     date_from: str | None = Query(None, description="For Sales Out historical: YYYY-MM-DD; only rows on or after"),
     date_to: str | None = Query(None, description="For Sales Out historical: YYYY-MM-DD; only rows on or before"),
+    force_reimport: bool = Query(False, description="Bypass same-file duplicate guard and create a new staged run"),
     db: Session = Depends(get_db),
 ) -> dict[str, Any]:
     """Accept CSV and entity type; parse and stage; create ingestion run; return run_id.
     Entities: demand (stage -> demand_stage_weekly), product_master (stage -> product_master_stage).
     Idempotency: if an existing run with same entity+file_sha256 has status=success, returns that run_id
-    with duplicate_noop message (no new run created).
+    with duplicate_noop message (no new run created). Pass force_reimport=true after a data reset
+    to create a fresh staged run from the same file bytes.
     """
     logger.info("ingestion/upload: entity=%r filename=%r", entity, file.filename)
     entity_enum = _normalize_entity(entity)
@@ -419,16 +449,18 @@ async def upload(
     file_sha256 = hashlib.sha256(content).hexdigest()
 
     try:
-        existing = (
-            db.query(IngestionRun)
-            .filter(
-                IngestionRun.entity == entity_enum,
-                IngestionRun.file_sha256 == file_sha256,
-                IngestionRun.status == IngestionStatus.SUCCESS,
+        existing = None
+        if not force_reimport:
+            existing = (
+                db.query(IngestionRun)
+                .filter(
+                    IngestionRun.entity == entity_enum,
+                    IngestionRun.file_sha256 == file_sha256,
+                    IngestionRun.status == IngestionStatus.SUCCESS,
+                )
+                .order_by(IngestionRun.finished_at.desc())
+                .first()
             )
-            .order_by(IngestionRun.finished_at.desc())
-            .first()
-        )
         if existing:
             db.commit()
             return {
@@ -462,15 +494,11 @@ async def upload(
             run_id = cast(UUID, run.id)
             headers = list(rows_full[0].keys()) if rows_full else []
             if is_blp_aymes_format(headers):
-                wh_code = (warehouse_code or "").strip()
-                if not wh_code:
-                    fn = (file.filename or "")
-                    if "BLP" in fn.upper():
-                        wh_code = "BLP"
+                wh_code = (warehouse_code or "").strip().upper()
                 if not wh_code:
                     raise HTTPException(
                         status_code=400,
-                        detail="warehouse_code required for BLP-AYMES format (Code, Balance columns)",
+                        detail="warehouse_code required. Create/select a location before uploading SOH.",
                     )
                 snap_date: date
                 if snapshot_date and str(snapshot_date).strip():
@@ -490,9 +518,13 @@ async def upload(
                     rows_full[i : i + SOH_CHUNK_SIZE]
                     for i in range(0, len(rows_full), SOH_CHUNK_SIZE)
                 ]
-                # AAH format: always roll to AAH; warehouse from form only when override desired.
                 # snapshot_date_override used when the file has no "Stock at" date column.
-                wh_code = (warehouse_code or "").strip() or None
+                wh_code = (warehouse_code or "").strip().upper() or None
+                if not wh_code:
+                    raise HTTPException(
+                        status_code=400,
+                        detail="warehouse_code required. Create/select a location before uploading SOH.",
+                    )
                 snap_date_aah: date | None = None
                 if snapshot_date and str(snapshot_date).strip():
                     try:
@@ -500,7 +532,7 @@ async def upload(
                     except ValueError:
                         pass
                 logger.warning(
-                    "SOH_AAH_UPLOAD: snapshot_date_param=%r parsed=%r wh_code=%r rows=%d",
+                    "SOH_UPLOAD: snapshot_date_param=%r parsed=%r wh_code=%r rows=%d",
                     snapshot_date, snap_date_aah, wh_code, len(rows_full),
                 )
                 staged, rejected = _validate_and_stage_soh(
@@ -509,7 +541,7 @@ async def upload(
                     snapshot_date_override=snap_date_aah,
                 )
                 run.row_count = staged + rejected
-                run.progress_meta = {"warehouse_code": wh_code or "AAH"}
+                run.progress_meta = {"warehouse_code": wh_code}
         else:
             try:
                 if entity_enum in (IngestionEntity.FORECAST_OUTPUT, IngestionEntity.SALES_OUT):
@@ -533,17 +565,30 @@ async def upload(
             db.add(run)
             db.flush()
             run_id = cast(UUID, run.id)
+            wh_code = (warehouse_code or "").strip().upper()
             if entity_enum == IngestionEntity.DEMAND:
-                staged, rejected = _validate_and_stage_demand(db, run_id, rows)
+                staged, rejected = _validate_and_stage_demand(db, run_id, rows, warehouse_code_override=wh_code or None)
+                if wh_code:
+                    run.progress_meta = {"warehouse_code": wh_code}
             elif entity_enum == IngestionEntity.PRODUCT_MASTER:
                 staged, rejected = _validate_and_stage_product_master(db, run_id, rows)
             elif entity_enum == IngestionEntity.FORECAST_OUTPUT:
                 staged, rejected = _validate_and_stage_forecast_output(db, run_id, rows)
             else:
-                df = _parse_yyyy_mm_dd(date_from)
-                dt = _parse_yyyy_mm_dd(date_to)
+                if not wh_code:
+                    raise HTTPException(
+                        status_code=400,
+                        detail="warehouse_code required. Create/select a location before uploading Sales Out.",
+                    )
+                # Only apply server-side date window for historical uploads. Weekly uploads must not
+                # reject rows when stray date_from/date_to appear on the query string.
+                if mode and str(mode).strip().lower() == "historical":
+                    df = _parse_yyyy_mm_dd(date_from)
+                    dt = _parse_yyyy_mm_dd(date_to)
+                else:
+                    df, dt = None, None
                 staged, rejected = _validate_and_stage_sales_out(db, run_id, rows, date_from=df, date_to=dt)
-                run.progress_meta = {"warehouse_code": "AAH"}
+                run.progress_meta = {"warehouse_code": wh_code}
 
         run.inserted_count = 0
         run.updated_count = 0
@@ -656,6 +701,17 @@ def execute_run(
         else:
             raise HTTPException(status_code=400, detail=f"Execute not supported for entity={getattr(entity_val, 'value', entity_val)}")
         db.commit()
+    except ValueError as e:
+        db.rollback()
+        run = db.query(IngestionRun).filter(IngestionRun.id == run_id).first()
+        if run:
+            run.status = IngestionStatus.FAILED
+            run.error_summary = str(e)
+            run.finished_at = datetime.now(timezone.utc)
+        db.commit()
+        detail = str(e)
+        status_code = 400 if detail.startswith("Unknown warehouse_code") else 500
+        raise HTTPException(status_code=status_code, detail=detail)
     except Exception as e:
         db.rollback()
         run = db.query(IngestionRun).filter(IngestionRun.id == run_id).first()
@@ -691,7 +747,7 @@ def execute_run(
 @router.get("/runs/latest")
 def get_latest_run(
     entity: IngestionEntity = Query(..., description="Entity: sales_out, stock_on_hand, demand, product_master"),
-    warehouse_code: str | None = Query(None, description="Filter by warehouse (e.g. AAH, BLP). sales_out=AAH only."),
+    warehouse_code: str | None = Query(None, description="Filter by location code."),
     db: Session = Depends(get_db),
 ) -> dict[str, Any] | None:
     """Return latest ingestion run for entity (and warehouse when applicable)."""
@@ -700,15 +756,10 @@ def get_latest_run(
     for r in runs:
         pm = getattr(r, "progress_meta", None) or {}
         wh = pm.get("warehouse_code") if isinstance(pm, dict) else None
-        if entity == IngestionEntity.SALES_OUT:
-            run_wh = wh or "AAH"
-        elif entity == IngestionEntity.STOCK_ON_HAND:
-            run_wh = wh
-        else:
-            run_wh = wh
+        run_wh = wh
         if warehouse_code and run_wh and run_wh.upper() != warehouse_code.upper():
             continue
-        if warehouse_code and not run_wh and entity == IngestionEntity.SALES_OUT and warehouse_code.upper() != "AAH":
+        if warehouse_code and not run_wh:
             continue
         _started = getattr(r, "started_at", None)
         _finished = getattr(r, "finished_at", None)
@@ -765,6 +816,7 @@ def list_runs(
             "date_max": d2.isoformat() if (d2 := getattr(r, "date_max", None)) else None,
             "requires_confirm": getattr(r, "requires_confirm", False),
             "confirmed_at": ca.isoformat() if (ca := getattr(r, "confirmed_at", None)) else None,
+            "progress_meta": getattr(r, "progress_meta", None),
         })
     return out
 
@@ -808,8 +860,46 @@ def get_run(
         "requires_confirm": getattr(run, "requires_confirm", False),
         "confirmed_at": cax.isoformat() if (cax := getattr(run, "confirmed_at", None)) else None,
         "confirmed_by": getattr(run, "confirmed_by", None),
+        "progress_meta": getattr(run, "progress_meta", None),
         "rejections_sample": [
             {"row_number": r.row_number, "reason": r.reason, "raw_payload": r.raw_payload}
             for r in rej
         ],
     }
+
+
+@router.get("/runs/{run_id}/rejections/summary")
+def get_run_rejections_summary(
+    run_id: UUID,
+    db: Session = Depends(get_db),
+) -> dict[str, Any]:
+    """Aggregated rejection breakdown for cleanup (missing SKUs, insufficient history, etc.)."""
+    summary = build_rejection_summary(db, run_id)
+    if not summary:
+        raise HTTPException(status_code=404, detail="Run not found")
+    return summary
+
+
+@router.get("/runs/{run_id}/rejections/export")
+def export_run_rejections_csv(
+    run_id: UUID,
+    db: Session = Depends(get_db),
+) -> StreamingResponse:
+    """Download all rejections for a run as CSV (row_number, reason, raw_payload JSON)."""
+    run = db.query(IngestionRun).filter(IngestionRun.id == run_id).first()
+    if not run:
+        raise HTTPException(status_code=404, detail="Run not found")
+    rows = iter_rejection_csv_rows(db, run_id)
+    buf = io.StringIO()
+    writer = csv.writer(buf)
+    writer.writerow(["row_number", "reason", "raw_payload_json"])
+    for row in rows:
+        writer.writerow(row)
+    buf.seek(0)
+    return StreamingResponse(
+        iter([buf.getvalue()]),
+        media_type="text/csv",
+        headers={
+            "Content-Disposition": f'attachment; filename="rejections_{run_id}.csv"',
+        },
+    )

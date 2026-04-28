@@ -49,10 +49,14 @@ def test_parse_date_ddmmyyyy() -> None:
     assert ok4 is True
     assert val4 == date(2025, 1, 6)
 
+    ok5, val5 = parse_date_ddmmyyyy("25-12-2024")  # DD-MM-YYYY (hyphens)
+    assert ok5 is True
+    assert val5 == date(2024, 12, 25)
+
 
 @pytest.mark.skipif(not _sales_out_schema_available(), reason="Migration 014 (sales_out) not applied")
 def test_unknown_aah_code_rejected() -> None:
-    """Rows with AAH_Product_Code not in products.aah_code are rejected with reason unknown_aah_code."""
+    """Rows with AAH_Product_Code not in products.aah_code are rejected with Unmapped SKU reason."""
     db = SessionLocal()
     run_id = uuid4()
     try:
@@ -87,7 +91,8 @@ def test_unknown_aah_code_rejected() -> None:
         assert getattr(run_after, "rejected_count", 0) == 1
         rej = db.query(IngestionRejection).filter(IngestionRejection.ingestion_run_id == run_id).first()
         assert rej is not None
-        assert "unknown_aah_code" in (getattr(rej, "reason", None) or "")
+        reason = getattr(rej, "reason", None) or ""
+        assert "Unmapped SKU:" in reason and "UNKNOWN_AAH" in reason and "sales_out_ingestion" in reason
     finally:
         db.query(IngestionRejection).filter(IngestionRejection.ingestion_run_id == run_id).delete(synchronize_session=False)
         db.query(SalesOutStage).filter(SalesOutStage.ingestion_run_id == run_id).delete(synchronize_session=False)

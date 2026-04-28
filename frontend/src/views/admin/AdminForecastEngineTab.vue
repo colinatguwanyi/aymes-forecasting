@@ -30,6 +30,7 @@
       </span>
       <span v-else>
         Legacy MySQL not yet accessible — parity validation disabled. Credential whitelisting pending.
+        Forecast runs still execute from the form below; only optional legacy export/parity need this connection.
         <span class="legacy-banner__detail">{{ (legacyDbStatus.errors || [])[0] }}</span>
       </span>
     </div>
@@ -323,7 +324,7 @@
           <div>
             <h3 class="section-title">Forecast Runs</h3>
           </div>
-          <div class="flex gap-2">
+          <div class="flex flex-wrap items-center gap-2">
             <select v-model="runsStatusFilter" class="input input-sm">
               <option value="">All statuses</option>
               <option value="queued">queued</option>
@@ -332,6 +333,10 @@
               <option value="failed">failed</option>
               <option value="partial">partial</option>
             </select>
+            <div class="flex items-center gap-2">
+              <input id="hideFailedRunsAdmin" v-model="hideFailedRuns" type="checkbox" class="rounded" />
+              <label for="hideFailedRunsAdmin" class="text-sm cursor-pointer text-slate-700 m-0">Hide failed runs</label>
+            </div>
             <button class="btn-sm btn-primary" @click="createRunFormOpen = !createRunFormOpen">+ New Run</button>
             <button class="btn-sm btn-secondary" @click="loadRuns">Refresh</button>
           </div>
@@ -389,12 +394,17 @@
         <div v-else-if="!filteredRuns.length" class="py-6 text-center muted text-sm">
           No runs found{{ runsStatusFilter ? ' with status "' + runsStatusFilter + '"' : '' }}.
         </div>
+        <div v-else-if="!runsTableRows.length" class="py-6 text-center muted text-sm">
+          No runs to show with <strong>Hide failed runs</strong> on{{ runsStatusFilter ? ' and status "' + runsStatusFilter + '"' : '' }}.
+          Uncheck the box or adjust the status filter.
+        </div>
         <table v-else class="admin-table">
           <thead>
             <tr>
               <th>ID</th>
               <th>Inference Date</th>
               <th>Status</th>
+              <th class="whitespace-nowrap">Fail note</th>
               <th>Type</th>
               <th>Horizon</th>
               <th>Created By</th>
@@ -404,7 +414,7 @@
             </tr>
           </thead>
           <tbody>
-            <template v-for="run in filteredRuns" :key="run.id">
+            <template v-for="run in runsTableRows" :key="run.id">
               <tr
                 class="cursor-pointer hover:bg-slate-50"
                 :class="{ 'bg-blue-50': selectedRunId === run.id }"
@@ -412,7 +422,18 @@
               >
                 <td class="font-mono text-sm">#{{ run.id }}</td>
                 <td>{{ run.inference_date }}</td>
-                <td><span class="run-status-badge" :class="'run-status--' + run.run_status">{{ run.run_status }}</span></td>
+                <td><span class="run-status-badge" :class="'run-status--' + runStatusCssKey(run.run_status)">{{ run.run_status }}</span></td>
+                <td class="text-xs align-top">
+                  <template v-if="isFailedRunStatus(run.run_status)">
+                    <span
+                      v-if="run.error_message && String(run.error_message).trim()"
+                      class="fail-note-pill fail-note-pill--ok"
+                      :title="String(run.error_message).trim()"
+                    >Has reason</span>
+                    <span v-else class="fail-note-pill fail-note-pill--warn">No reason</span>
+                  </template>
+                  <span v-else class="muted">—</span>
+                </td>
                 <td class="muted text-sm">{{ run.run_type }}</td>
                 <td class="muted text-sm">{{ run.horizon_weeks }}w</td>
                 <td class="muted text-sm">{{ run.created_by || '—' }}</td>
@@ -425,7 +446,7 @@
 
               <!-- Inline Run Detail -->
               <tr v-if="selectedRunId === run.id" :key="'detail-' + run.id">
-                <td colspan="9" class="run-detail-cell">
+                <td colspan="10" class="run-detail-cell">
                   <div class="run-detail-panel">
 
                     <!-- Detail sub-tabs -->
@@ -455,7 +476,7 @@
                       <dl class="meta-grid">
                         <dt>Run ID</dt><dd>#{{ run.id }}</dd>
                         <dt>UUID</dt><dd class="font-mono text-xs break-all">{{ run.run_uuid }}</dd>
-                        <dt>Status</dt><dd><span class="run-status-badge" :class="'run-status--' + run.run_status">{{ run.run_status }}</span></dd>
+                        <dt>Status</dt><dd><span class="run-status-badge" :class="'run-status--' + runStatusCssKey(run.run_status)">{{ run.run_status }}</span></dd>
                         <dt>Inference Date</dt><dd>{{ run.inference_date }}</dd>
                         <dt>Horizon</dt><dd>{{ run.horizon_weeks }} weeks</dd>
                         <dt>Source Config</dt><dd>{{ sourceConfigName(run.source_config_id) }}</dd>
@@ -463,17 +484,50 @@
                         <dt>Created By</dt><dd>{{ run.created_by || '—' }}</dd>
                         <dt>Started At</dt><dd>{{ run.started_at || '—' }}</dd>
                         <dt>Completed At</dt><dd>{{ run.completed_at || '—' }}</dd>
-                        <dt v-if="run.error_message">Error</dt>
-                        <dd v-if="run.error_message" class="error-msg-inline">{{ run.error_message }}</dd>
+                        <template v-if="isFailedRunStatus(run.run_status)">
+                          <dt>Error</dt>
+                          <dd
+                            v-if="run.error_message && String(run.error_message).trim()"
+                            class="error-msg-inline"
+                          >{{ String(run.error_message).trim() }}</dd>
+                          <dd v-else class="text-slate-500 italic text-sm">No reason recorded</dd>
+                        </template>
                       </dl>
 
                       <!-- Execute panel -->
                       <div class="mt-4 p-3 bg-slate-50 rounded border border-slate-200">
-                        <p class="text-sm font-medium text-slate-700 mb-2">Execute this run</p>
+                        <p class="text-sm font-medium text-slate-700 mb-1">Execute this run</p>
+                        <p class="text-xs text-slate-500 mb-2">
+                          New runs stay <strong>queued</strong> until you run the pipeline here (not automatic).
+                          Use a <strong>Source config</strong> (MySQL sales connection) — not the same as <strong>Runtime config</strong> (e.g. «std»).
+                        </p>
                         <div class="form-grid-3">
                           <div>
-                            <label class="form-label">Source Config Name</label>
-                            <input v-model="executeForm.source_config_name" type="text" class="input input-sm" placeholder="e.g. live_aymes" />
+                            <label class="form-label">Source config (sales data)</label>
+                            <select
+                              v-if="allSourceConfigs.length"
+                              v-model="executeForm.source_config_name"
+                              class="input input-sm"
+                            >
+                              <option value="" disabled>— Choose source —</option>
+                              <option
+                                v-for="sc in allSourceConfigs"
+                                :key="sc.id"
+                                :value="sc.source_name"
+                              >
+                                {{ sc.source_name }}{{ sc.is_active ? '' : ' (inactive)' }}
+                              </option>
+                            </select>
+                            <input
+                              v-else
+                              v-model="executeForm.source_config_name"
+                              type="text"
+                              class="input input-sm"
+                              placeholder="Add a Source config under Configuration first"
+                            />
+                            <p v-if="!allSourceConfigs.length && !sourceLoading" class="text-xs text-amber-800 mt-1">
+                              No source configs. Switch to the <strong>Configuration</strong> section and create <strong>Source Configs</strong> (separate from Runtime).
+                            </p>
                           </div>
                           <div>
                             <label class="form-label">From Date</label>
@@ -490,10 +544,7 @@
                             :disabled="executeLoading || !executeForm.source_config_name || !executeForm.from_date || !executeForm.to_date"
                             @click="executeRun(run.id)"
                           >{{ executeLoading ? 'Running…' : 'Execute' }}</button>
-                          <span v-if="executeResult" class="text-xs text-green-700">
-                            Done — {{ executeResult.rows_results }} result rows, {{ executeResult.skus_forecast }} SKUs
-                          </span>
-                          <span v-if="executeError" class="text-xs text-red-600">{{ executeError }}</span>
+                          <OperationStatusPanel :operation="executeOperation.operation" class="w-full mt-2" />
                         </div>
                       </div>
                     </div>
@@ -521,7 +572,7 @@
                             <td class="font-medium">{{ m.model_code }}</td>
                             <td>{{ m.model_family }}</td>
                             <td><code class="code-pill">{{ m.series_variant }}</code></td>
-                            <td><span class="run-status-badge" :class="'run-status--' + m.run_status">{{ m.run_status }}</span></td>
+                            <td><span class="run-status-badge" :class="'run-status--' + runStatusCssKey(m.run_status)">{{ m.run_status }}</span></td>
                             <td>{{ m.products_attempted }}</td>
                             <td class="text-green-700">{{ m.products_succeeded }}</td>
                             <td :class="m.products_failed > 0 ? 'text-red-600' : ''">{{ m.products_failed }}</td>
@@ -544,6 +595,60 @@
                         </label>
                         <button class="btn-sm btn-secondary" @click="loadResults(run.id)">Load / Refresh</button>
                         <span v-if="allResults.length" class="text-xs muted self-center">{{ filteredResults.length }} rows</span>
+                      </div>
+                      <p v-if="allResults.length && !resultsLoading" class="text-xs text-amber-800 bg-amber-50 border border-amber-200 rounded-md px-2 py-1.5 mb-3">
+                        Horizon totals sum <strong>all visible rows</strong>. Turn on <strong>Best model only</strong> if you see double-counting across models for the same week.
+                      </p>
+                      <!-- Evidence: stats + charts (same data as table — review before export) -->
+                      <div v-if="allResults.length && !resultsLoading && filteredResults.length" class="results-evidence space-y-4 mb-4">
+                        <div class="results-evidence__stats">
+                          <div class="evidence-stat">
+                            <span class="evidence-stat__label">Rows (filtered)</span>
+                            <span class="evidence-stat__val">{{ resultsStats.rowCount.toLocaleString() }}</span>
+                          </div>
+                          <div class="evidence-stat">
+                            <span class="evidence-stat__label">Distinct products</span>
+                            <span class="evidence-stat__val">{{ resultsStats.skuCount.toLocaleString() }}</span>
+                          </div>
+                          <div class="evidence-stat">
+                            <span class="evidence-stat__label">Forecast horizon</span>
+                            <span class="evidence-stat__val text-sm leading-tight">{{ resultsStats.weekMin }} → {{ resultsStats.weekMax }}</span>
+                          </div>
+                          <div class="evidence-stat">
+                            <span class="evidence-stat__label">Σ forecast units (filtered)</span>
+                            <span class="evidence-stat__val">{{ resultsStats.totalForecast.toLocaleString(undefined, { maximumFractionDigits: 0 }) }}</span>
+                          </div>
+                        </div>
+                        <div class="results-chart-card">
+                          <p class="text-sm font-medium text-slate-800 mb-1">Total forecast units by week</p>
+                          <p class="text-xs text-slate-500 mb-2">Sum of <code>forecast_units</code> in the table below (after filters).</p>
+                          <div class="results-chart-canvas">
+                            <canvas ref="horizonChartCanvas" />
+                          </div>
+                        </div>
+                        <div class="results-chart-card">
+                          <div class="flex flex-wrap gap-2 items-end mb-2">
+                            <div>
+                              <label class="form-label text-xs mb-0.5">Weekly series — one product</label>
+                              <select v-model="resultsChartSku" class="input input-sm min-w-56 max-w-md">
+                                <option value="">— Select SKU —</option>
+                                <option v-for="opt in resultsChartSkuOptions" :key="opt.code" :value="opt.code">
+                                  {{ opt.code }} (Σ {{ opt.total.toLocaleString(undefined, { maximumFractionDigits: 0 }) }})
+                                </option>
+                              </select>
+                            </div>
+                          </div>
+                          <p class="text-xs text-slate-500 mb-2">Forecast vs actual (if the engine stored actuals) for the selected row set.</p>
+                          <div v-show="!resultsChartSku" class="text-sm text-slate-500 py-6 text-center border border-dashed border-slate-200 rounded-md">
+                            Choose a SKU to plot a weekly line chart.
+                          </div>
+                          <div v-show="resultsChartSku" class="results-chart-canvas">
+                            <canvas ref="skuChartCanvas" />
+                          </div>
+                        </div>
+                        <p class="text-xs text-slate-500">
+                          Use these views to sanity-check output, then <strong>Actions → Export Files</strong> (CSV + manifest) or legacy export when ready.
+                        </p>
                       </div>
                       <div v-if="resultsLoading" class="py-4 text-center muted text-sm">Loading…</div>
                       <div v-else-if="!allResults.length && !resultsLoading" class="py-8 text-center muted text-sm">
@@ -638,7 +743,7 @@
                         <div v-if="actionResults['export-legacy']" class="action-result mt-2">
                           <pre class="result-json">{{ JSON.stringify(actionResults['export-legacy'], null, 2) }}</pre>
                         </div>
-                        <div v-if="actionErrors['export-legacy']" class="error-msg mt-2">{{ actionErrors['export-legacy'] }}</div>
+                        <OperationStatusPanel v-if="actionOperation.operation.id === 'export-legacy'" :operation="actionOperation.operation" class="mt-2" />
                       </div>
 
                       <!-- Export Files -->
@@ -656,7 +761,7 @@
                           <p class="text-sm text-slate-700">Output path: <code>{{ (actionResults['export-files'] as any).output_path }}</code></p>
                           <p class="text-sm muted mt-1">Files generated: {{ ((actionResults['export-files'] as any).files_generated || []).join(', ') }}</p>
                         </div>
-                        <div v-if="actionErrors['export-files']" class="error-msg mt-2">{{ actionErrors['export-files'] }}</div>
+                        <OperationStatusPanel v-if="actionOperation.operation.id === 'export-files'" :operation="actionOperation.operation" class="mt-2" />
                       </div>
 
                       <!-- Parity Validation -->
@@ -684,7 +789,7 @@
                         <div v-if="actionResults['validate-parity']" class="action-result mt-2">
                           <pre class="result-json">{{ JSON.stringify(actionResults['validate-parity'], null, 2) }}</pre>
                         </div>
-                        <div v-if="actionErrors['validate-parity']" class="error-msg mt-2">{{ actionErrors['validate-parity'] }}</div>
+                        <OperationStatusPanel v-if="actionOperation.operation.id === 'validate-parity'" :operation="actionOperation.operation" class="mt-2" />
                       </div>
 
                       <!-- Manual Status Override -->
@@ -708,8 +813,16 @@
                             @click="doStatusOverride(run.id)"
                           >{{ statusOverrideLoading ? 'Updating…' : 'Set Status' }}</button>
                         </div>
-                        <p v-if="statusOverrideSuccess" class="text-xs text-green-700 mt-2">{{ statusOverrideSuccess }}</p>
-                        <p v-if="statusOverrideError" class="error-msg mt-2">{{ statusOverrideError }}</p>
+                        <div v-if="statusOverrideValue === 'failed'" class="mt-2 max-w-lg">
+                          <label class="form-label text-xs">Error message (optional)</label>
+                          <textarea
+                            v-model="statusOverrideErrorMessage"
+                            class="input input-sm w-full resize-y"
+                            placeholder="Reason for marking failed (audit / test-bed cleanup)"
+                            rows="3"
+                          />
+                        </div>
+                        <OperationStatusPanel :operation="statusOverrideOperation.operation" class="mt-2" />
                       </div>
                     </div>
 
@@ -743,7 +856,7 @@
                         </div>
                       </div>
 
-                      <div v-if="supplyComputeError" class="error-msg mt-2">{{ supplyComputeError }}</div>
+                      <OperationStatusPanel :operation="supplyComputeOperation.operation" class="mt-2" />
 
                       <!-- Filters -->
                       <div v-if="supplyRows.length || supplyLoading" class="flex gap-3 mt-3 flex-wrap items-center">
@@ -898,8 +1011,13 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted, watch } from 'vue'
+import { ref, computed, onMounted, onUnmounted, watch, nextTick } from 'vue'
+import { Chart, registerables } from 'chart.js'
 import api from '../../api/client'
+import OperationStatusPanel from '@/components/common/OperationStatusPanel.vue'
+import { useOperation } from '@/composables/useOperation'
+
+Chart.register(...registerables)
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
@@ -1029,6 +1147,8 @@ const runtimeForm = ref({
 const allRuns = ref<ForecastRun[]>([])
 const runsLoading = ref(false)
 const runsStatusFilter = ref('')
+/** Client-side only after status filter; does not change API requests. */
+const hideFailedRuns = ref(false)
 const createRunFormOpen = ref(false)
 const createRunSaving = ref(false)
 const createRunError = ref('')
@@ -1052,25 +1172,33 @@ const resultsLoading = ref(false)
 const resultsProductFilter = ref('')
 const resultsModelFilter = ref('')
 const resultsBestOnly = ref(false)
+const resultsChartSku = ref('')
+const horizonChartCanvas = ref<HTMLCanvasElement | null>(null)
+const skuChartCanvas = ref<HTMLCanvasElement | null>(null)
+let horizonChart: Chart | null = null
+let skuChart: Chart | null = null
 
 // Execute
 const executeForm = ref({ source_config_name: '', from_date: '', to_date: '' })
-const executeLoading = ref(false)
-const executeResult = ref<Record<string, unknown> | null>(null)
-const executeError = ref('')
+const executeOperation = useOperation('Execute forecast run')
+const executeLoading = executeOperation.isRunning
 
 // Actions
 const exportLegacySafeReplace = ref(false)
 const paritySampleSize = ref(100)
-const actionLoading = ref('')
+const actionOperation = useOperation('Forecast run action')
+const actionLoading = computed(() => actionOperation.isRunning.value ? actionOperation.operation.id || '' : '')
 const actionResults = ref<Record<string, unknown>>({})
-const actionErrors = ref<Record<string, string>>({})
 
 // Status override
 const statusOverrideValue = ref('')
-const statusOverrideLoading = ref(false)
-const statusOverrideError = ref('')
-const statusOverrideSuccess = ref('')
+const statusOverrideErrorMessage = ref('')
+const statusOverrideOperation = useOperation('Override forecast run status')
+const statusOverrideLoading = statusOverrideOperation.isRunning
+
+watch(statusOverrideValue, (v) => {
+  if (v !== 'failed') statusOverrideErrorMessage.value = ''
+})
 
 // Supply-aware forecast
 interface SupplyRow {
@@ -1090,8 +1218,8 @@ interface SupplyRow {
 }
 const supplyRows = ref<SupplyRow[]>([])
 const supplyLoading = ref(false)
-const supplyComputeLoading = ref(false)
-const supplyComputeError = ref('')
+const supplyComputeOperation = useOperation('Compute supply-adjusted forecast')
+const supplyComputeLoading = supplyComputeOperation.isRunning
 const supplyUseMock = ref(false)
 const supplyProductFilter = ref('')
 const supplyStockoutFilter = ref(false)
@@ -1106,6 +1234,16 @@ const debugTrainingData = ref<unknown>(null)
 const debugTrainingLoading = ref(false)
 const debugTrainingError = ref('')
 
+// ─── Run status helpers (API may vary casing) ────────────────────────────────
+
+function runStatusCssKey(status: string | null | undefined): string {
+  return String(status ?? '').trim().toLowerCase()
+}
+
+function isFailedRunStatus(status: string | null | undefined): boolean {
+  return runStatusCssKey(status) === 'failed'
+}
+
 // ─── Computed ────────────────────────────────────────────────────────────────
 
 const filteredSourceConfigs = computed(() =>
@@ -1116,11 +1254,17 @@ const filteredRuntimeConfigs = computed(() =>
   showAllRuntimeConfigs.value ? allRuntimeConfigs.value : allRuntimeConfigs.value.filter(rc => rc.is_active)
 )
 
-const filteredRuns = computed(() =>
-  runsStatusFilter.value
-    ? allRuns.value.filter(r => r.run_status === runsStatusFilter.value)
-    : allRuns.value
-)
+const filteredRuns = computed(() => {
+  const f = runsStatusFilter.value?.trim().toLowerCase()
+  if (!f) return allRuns.value
+  return allRuns.value.filter((r) => runStatusCssKey(r.run_status) === f)
+})
+
+const runsTableRows = computed(() => {
+  const rows = filteredRuns.value
+  if (!hideFailedRuns.value) return rows
+  return rows.filter((r) => !isFailedRunStatus(r.run_status))
+})
 
 const filteredResults = computed(() => {
   let rows = allResults.value
@@ -1130,6 +1274,42 @@ const filteredResults = computed(() => {
   if (mf) rows = rows.filter(r => r.model_details.toLowerCase().includes(mf) || r.model_name.toLowerCase().includes(mf))
   if (resultsBestOnly.value) rows = rows.filter(r => r.is_best_model === true)
   return rows
+})
+
+const resultsStats = computed(() => {
+  const rows = filteredResults.value
+  const rowCount = rows.length
+  const skuCount = new Set(rows.map((r) => r.product_code)).size
+  const weeks = [...new Set(rows.map((r) => r.forecast_week))].filter(Boolean).sort()
+  const weekMin = weeks[0] ?? '—'
+  const weekMax = weeks.length ? weeks[weeks.length - 1] : '—'
+  const totalForecast = rows.reduce((s, r) => s + (r.forecast_units ?? 0), 0)
+  return { rowCount, skuCount, weekMin, weekMax, totalForecast }
+})
+
+/** Top products by sum of forecast in current filter (for chart SKU picker). */
+const resultsChartSkuOptions = computed(() => {
+  const m = new Map<string, { code: string; total: number }>()
+  for (const r of filteredResults.value) {
+    const t = (m.get(r.product_code)?.total ?? 0) + (r.forecast_units ?? 0)
+    m.set(r.product_code, { code: r.product_code, total: t })
+  }
+  return [...m.values()].sort((a, b) => b.total - a.total).slice(0, 120)
+})
+
+watch(
+  resultsChartSkuOptions,
+  (opts) => {
+    if (resultsChartSku.value && !opts.some((o) => o.code === resultsChartSku.value)) {
+      resultsChartSku.value = ''
+    }
+  },
+  { deep: true },
+)
+
+watch(runsTableRows, (rows) => {
+  const id = selectedRunId.value
+  if (id != null && !rows.some((r) => r.id === id)) selectedRunId.value = null
 })
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
@@ -1329,13 +1509,23 @@ async function submitSourceForm() {
   sourceFormError.value = ''
   try {
     if (sourceFormMode.value === 'create') {
-      const body = { ...sourceForm.value }
-      if (!body.mysql_host) delete (body as Partial<typeof body>).mysql_host
-      if (!body.mysql_port) delete (body as Partial<typeof body>).mysql_port
+      const h = String(sourceForm.value.mysql_host ?? '').trim()
+      const body: Record<string, unknown> = {
+        ...sourceForm.value,
+        mysql_host: h || null,
+        mysql_port:
+          sourceForm.value.mysql_port === null || sourceForm.value.mysql_port === undefined
+            ? null
+            : sourceForm.value.mysql_port,
+      }
       await api.post('/v1/forecast/source-configs', body)
     } else {
-      const { source_name: _, ...updates } = sourceForm.value
-      if (!updates.mysql_host) updates.mysql_host = ''
+      const { source_name: _, ...rest } = sourceForm.value
+      const h = String(rest.mysql_host ?? '').trim()
+      const updates: Record<string, unknown> = { ...rest, mysql_host: h || null }
+      if (rest.mysql_port === null || rest.mysql_port === undefined || rest.mysql_port === ('' as unknown)) {
+        updates.mysql_port = null
+      }
       await api.patch(`/v1/forecast/source-configs/${editingSourceId.value}`, updates)
     }
     closeSourceForm()
@@ -1380,6 +1570,18 @@ async function submitCreateRun() {
 
 // ─── Run detail ───────────────────────────────────────────────────────────────
 
+/** Default sales-ingest window for Execute: 2 years up to inference_date (W-TUE training window is usually longer in config). */
+function defaultExecuteDates(inferenceDateStr: string | undefined): { from_date: string; to_date: string } {
+  if (!inferenceDateStr || typeof inferenceDateStr !== 'string') return { from_date: '', to_date: '' }
+  const inf = new Date(inferenceDateStr.includes('T') ? inferenceDateStr : `${inferenceDateStr}T12:00:00`)
+  if (Number.isNaN(inf.getTime())) return { from_date: '', to_date: '' }
+  const from = new Date(inf)
+  from.setFullYear(from.getFullYear() - 2)
+  const pad = (n: number) => String(n).padStart(2, '0')
+  const iso = (d: Date) => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`
+  return { from_date: iso(from), to_date: iso(inf) }
+}
+
 async function toggleRunDetail(run: ForecastRun) {
   if (selectedRunId.value === run.id) {
     selectedRunId.value = null
@@ -1390,25 +1592,31 @@ async function toggleRunDetail(run: ForecastRun) {
   runModels.value = []
   runDiagnostics.value = []
   allResults.value = []
-  executeResult.value = null
-  executeError.value = ''
+  executeOperation.resetOperation('Execute forecast run')
   actionResults.value = {}
-  actionErrors.value = {}
+  actionOperation.resetOperation('Forecast run action')
   supplyRows.value = []
   supplyMeta.value = null
-  supplyComputeError.value = ''
+  supplyComputeOperation.resetOperation('Compute supply-adjusted forecast')
   supplyProductFilter.value = ''
   supplyStockoutFilter.value = false
   supplyExcessFilter.value = false
   resultsProductFilter.value = ''
   resultsModelFilter.value = ''
   resultsBestOnly.value = false
+  resultsChartSku.value = ''
+  destroyResultCharts()
   statusOverrideValue.value = ''
-  statusOverrideError.value = ''
-  statusOverrideSuccess.value = ''
-  // Pre-fill execute source name from config
-  const srcName = allSourceConfigs.value.find(sc => sc.id === run.source_config_id)?.source_name ?? ''
-  executeForm.value.source_config_name = srcName
+  statusOverrideErrorMessage.value = ''
+  statusOverrideOperation.resetOperation('Override forecast run status')
+  let srcName = allSourceConfigs.value.find(sc => sc.id === run.source_config_id)?.source_name ?? ''
+  if (!srcName) {
+    const active = allSourceConfigs.value.filter((sc) => sc.is_active)
+    if (active.length === 1) srcName = active[0].source_name
+    else if (active.length > 1) srcName = active[0].source_name
+  }
+  const { from_date, to_date } = defaultExecuteDates(run.inference_date)
+  executeForm.value = { source_config_name: srcName, from_date, to_date }
 }
 
 async function switchDetailTab(tab: typeof detailTab.value, runId: number) {
@@ -1422,62 +1630,102 @@ async function switchDetailTab(tab: typeof detailTab.value, runId: number) {
 // ─── Execute ─────────────────────────────────────────────────────────────────
 
 async function executeRun(runId: number) {
-  executeLoading.value = true
-  executeResult.value = null
-  executeError.value = ''
-  try {
-    const { data } = await api.post(`/v1/forecast/runs/${runId}/execute`, executeForm.value)
-    executeResult.value = data
-    await loadRuns()
-    // Refresh the selected run
-    const updated = allRuns.value.find(r => r.id === runId)
-    if (updated) Object.assign(allRuns.value.find(r => r.id === runId)!, updated)
-  } catch (err) {
-    executeError.value = apiError(err)
-  } finally {
-    executeLoading.value = false
-  }
+  const data = await executeOperation.runWithOperation(
+    'Execute forecast run',
+    async () => {
+      try {
+        const response = await api.post<Record<string, unknown>>(`/v1/forecast/runs/${runId}/execute`, executeForm.value)
+        return response.data
+      } catch (err: unknown) {
+        throw new Error(apiError(err))
+      }
+    },
+    {
+      runningMessage: `Executing forecast run #${runId}...`,
+      timeoutMessage: 'The request did not return in time. The server may still be processing. Refresh forecast runs before retrying.',
+      nextActions: ['Refresh forecast runs before retrying.', 'Check run status before executing again.'],
+    },
+  )
+  if (!data) return
+  await loadRuns()
+  // Refresh the selected run
+  const updated = allRuns.value.find(r => r.id === runId)
+  if (updated) Object.assign(allRuns.value.find(r => r.id === runId)!, updated)
+  executeOperation.completeOperation({
+    message: `Done - ${String(data.rows_results ?? '0')} result rows, ${String(data.skus_forecast ?? '0')} SKUs.`,
+    technicalDetails: data,
+  })
 }
 
 // ─── Actions ──────────────────────────────────────────────────────────────────
 
 async function doExportLegacy(runId: number) {
-  actionLoading.value = 'export-legacy'
-  actionErrors.value['export-legacy'] = ''
-  try {
-    const { data } = await api.post(`/v1/forecast/runs/${runId}/export-legacy?safe_replace=${exportLegacySafeReplace.value}`)
-    actionResults.value['export-legacy'] = data
-  } catch (err) {
-    actionErrors.value['export-legacy'] = apiError(err)
-  } finally {
-    actionLoading.value = ''
-  }
+  const data = await actionOperation.runWithOperation(
+    'Export legacy forecast',
+    async () => {
+      try {
+        const response = await api.post(`/v1/forecast/runs/${runId}/export-legacy?safe_replace=${exportLegacySafeReplace.value}`)
+        return response.data as Record<string, unknown>
+      } catch (err: unknown) {
+        throw new Error(apiError(err))
+      }
+    },
+    {
+      id: 'export-legacy',
+      runningMessage: `Exporting legacy tables for run #${runId}...`,
+      timeoutMessage: 'The request did not return in time. The server may still be processing. Refresh run status before retrying.',
+      nextActions: ['Refresh run status before retrying.', 'Check legacy output before exporting again.'],
+    },
+  )
+  if (!data) return
+  actionResults.value['export-legacy'] = data
+  actionOperation.completeOperation({ id: 'export-legacy', message: 'Legacy export completed.', technicalDetails: data })
 }
 
 async function doExportFiles(runId: number) {
-  actionLoading.value = 'export-files'
-  actionErrors.value['export-files'] = ''
-  try {
-    const { data } = await api.post(`/v1/forecast/runs/${runId}/export-files`)
-    actionResults.value['export-files'] = data
-  } catch (err) {
-    actionErrors.value['export-files'] = apiError(err)
-  } finally {
-    actionLoading.value = ''
-  }
+  const data = await actionOperation.runWithOperation(
+    'Export forecast files',
+    async () => {
+      try {
+        const response = await api.post(`/v1/forecast/runs/${runId}/export-files`)
+        return response.data as Record<string, unknown>
+      } catch (err: unknown) {
+        throw new Error(apiError(err))
+      }
+    },
+    {
+      id: 'export-files',
+      runningMessage: `Generating forecast files for run #${runId}...`,
+      timeoutMessage: 'The request did not return in time. The server may still be processing. Refresh run status before retrying.',
+      nextActions: ['Refresh run status before retrying.', 'Check the forecast output folder before exporting again.'],
+    },
+  )
+  if (!data) return
+  actionResults.value['export-files'] = data
+  actionOperation.completeOperation({ id: 'export-files', message: 'Forecast files exported.', technicalDetails: data })
 }
 
 async function doValidateParity(runId: number) {
-  actionLoading.value = 'validate-parity'
-  actionErrors.value['validate-parity'] = ''
-  try {
-    const { data } = await api.post(`/v1/forecast/runs/${runId}/validate-parity?sample_size=${paritySampleSize.value}`)
-    actionResults.value['validate-parity'] = data
-  } catch (err) {
-    actionErrors.value['validate-parity'] = apiError(err)
-  } finally {
-    actionLoading.value = ''
-  }
+  const data = await actionOperation.runWithOperation(
+    'Validate forecast parity',
+    async () => {
+      try {
+        const response = await api.post(`/v1/forecast/runs/${runId}/validate-parity?sample_size=${paritySampleSize.value}`)
+        return response.data as Record<string, unknown>
+      } catch (err: unknown) {
+        throw new Error(apiError(err))
+      }
+    },
+    {
+      id: 'validate-parity',
+      runningMessage: `Validating parity for run #${runId}...`,
+      timeoutMessage: 'The request did not return in time. The server may still be processing. Refresh run status before retrying.',
+      nextActions: ['Refresh run status before retrying.', 'Check diagnostics before validating again.'],
+    },
+  )
+  if (!data) return
+  actionResults.value['validate-parity'] = data
+  actionOperation.completeOperation({ id: 'validate-parity', message: 'Parity validation completed.', technicalDetails: data })
 }
 
 // ─── Supply-aware forecast ────────────────────────────────────────────────────
@@ -1499,20 +1747,151 @@ async function loadSupplyRows(runId: number) {
 }
 
 async function doComputeSupply(runId: number) {
-  supplyComputeLoading.value = true
-  supplyComputeError.value = ''
-  try {
-    const { data } = await api.post(`/v1/forecast/runs/${runId}/compute-supply-adjusted?use_mock_data=${supplyUseMock.value}`)
-    supplyMeta.value = data
-    await loadSupplyRows(runId)
-  } catch (err) {
-    supplyComputeError.value = apiError(err)
-  } finally {
-    supplyComputeLoading.value = false
-  }
+  const data = await supplyComputeOperation.runWithOperation(
+    'Compute supply-adjusted forecast',
+    async () => {
+      try {
+        const response = await api.post<Record<string, unknown>>(`/v1/forecast/runs/${runId}/compute-supply-adjusted?use_mock_data=${supplyUseMock.value}`)
+        return response.data
+      } catch (err: unknown) {
+        throw new Error(apiError(err))
+      }
+    },
+    {
+      runningMessage: `Computing supply-adjusted forecast for run #${runId}...`,
+      timeoutMessage: 'The request did not return in time. The server may still be processing. Refresh supply-adjusted rows before retrying.',
+      nextActions: ['Refresh supply-adjusted rows before retrying.', 'Check diagnostics before computing again.'],
+    },
+  )
+  if (!data) return
+  supplyMeta.value = data
+  await loadSupplyRows(runId)
+  supplyComputeOperation.completeOperation({
+    message: 'Supply-adjusted forecast computed.',
+    technicalDetails: data,
+  })
 }
 
 // ─── Results ──────────────────────────────────────────────────────────────────
+
+function destroyResultCharts() {
+  horizonChart?.destroy()
+  horizonChart = null
+  skuChart?.destroy()
+  skuChart = null
+}
+
+function buildHorizonSeries(rows: ResultRow[]) {
+  const m = new Map<string, number>()
+  for (const r of rows) {
+    m.set(r.forecast_week, (m.get(r.forecast_week) ?? 0) + (r.forecast_units ?? 0))
+  }
+  const labels = [...m.keys()].sort()
+  return { labels, data: labels.map((l) => m.get(l) ?? 0) }
+}
+
+function buildSkuSeries(rows: ResultRow[], sku: string) {
+  const sub = rows.filter((r) => r.product_code === sku)
+  const wk = new Map<string, { fc: number; act: number | null }>()
+  for (const r of sub) {
+    const w = r.forecast_week
+    const cur = wk.get(w) ?? { fc: 0, act: null as number | null }
+    cur.fc += r.forecast_units ?? 0
+    if (r.actual_units != null && cur.act === null) cur.act = r.actual_units
+    wk.set(w, cur)
+  }
+  const labels = [...wk.keys()].sort()
+  return {
+    labels,
+    forecast: labels.map((l) => wk.get(l)!.fc),
+    actual: labels.map((l) => wk.get(l)!.act),
+  }
+}
+
+function updateResultCharts() {
+  const rows = filteredResults.value
+  if (!rows.length) {
+    destroyResultCharts()
+    return
+  }
+  if (!horizonChartCanvas.value) return
+  const { labels, data: horizonData } = buildHorizonSeries(rows)
+  horizonChart?.destroy()
+  horizonChart = new Chart(horizonChartCanvas.value, {
+    type: 'line',
+    data: {
+      labels,
+      datasets: [
+        {
+          label: 'Σ forecast units (filtered)',
+          data: horizonData,
+          borderColor: '#2563eb',
+          backgroundColor: 'rgba(37, 99, 235, 0.12)',
+          fill: true,
+          tension: 0.15,
+        },
+      ],
+    },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      plugins: { legend: { display: true } },
+      scales: {
+        x: { ticks: { maxRotation: 50, minRotation: 0, autoSkip: true, maxTicksLimit: 20 } },
+        y: { beginAtZero: true },
+      },
+    },
+  })
+
+  skuChart?.destroy()
+  skuChart = null
+  const pick = resultsChartSku.value
+  if (!pick || !skuChartCanvas.value) return
+  const { labels: sl, forecast, actual } = buildSkuSeries(rows, pick)
+  const hasActual = actual.some((v) => v != null)
+  const ds: Array<{
+    label: string
+    data: (number | null)[]
+    borderColor: string
+    backgroundColor: string
+    fill: boolean
+    tension: number
+    spanGaps?: boolean
+  }> = [
+    {
+      label: 'Forecast',
+      data: forecast,
+      borderColor: '#1d4ed8',
+      backgroundColor: 'rgba(29, 78, 216, 0.08)',
+      fill: false,
+      tension: 0.15,
+    },
+  ]
+  if (hasActual) {
+    ds.push({
+      label: 'Actual',
+      data: actual,
+      borderColor: '#059669',
+      backgroundColor: 'transparent',
+      fill: false,
+      tension: 0.15,
+      spanGaps: true,
+    })
+  }
+  skuChart = new Chart(skuChartCanvas.value, {
+    type: 'line',
+    data: { labels: sl, datasets: ds },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      plugins: { legend: { display: true } },
+      scales: {
+        x: { ticks: { maxRotation: 50, minRotation: 0, autoSkip: true, maxTicksLimit: 24 } },
+        y: { beginAtZero: true },
+      },
+    },
+  })
+}
 
 async function loadResults(runId: number) {
   resultsLoading.value = true
@@ -1526,6 +1905,17 @@ async function loadResults(runId: number) {
   }
 }
 
+watch([filteredResults, resultsChartSku, resultsLoading], async () => {
+  if (resultsLoading.value) return
+  await nextTick()
+  await nextTick()
+  updateResultCharts()
+}, { deep: true })
+
+onUnmounted(() => {
+  destroyResultCharts()
+})
+
 // ─── Status override ──────────────────────────────────────────────────────────
 
 async function doStatusOverride(runId: number) {
@@ -1534,18 +1924,38 @@ async function doStatusOverride(runId: number) {
     `Set run #${runId} status to "${statusOverrideValue.value}"?\n\nThis bypasses normal lifecycle transitions.`
   )
   if (!confirmed) return
-  statusOverrideLoading.value = true
-  statusOverrideError.value = ''
-  statusOverrideSuccess.value = ''
-  try {
-    await api.patch(`/v1/forecast/runs/${runId}/status`, { run_status: statusOverrideValue.value })
-    statusOverrideSuccess.value = `Status updated to "${statusOverrideValue.value}".`
-    await loadRuns()
-  } catch (err) {
-    statusOverrideError.value = apiError(err)
-  } finally {
-    statusOverrideLoading.value = false
-  }
+  const data = await statusOverrideOperation.runWithOperation(
+    'Override forecast run status',
+    async () => {
+      try {
+        const params: Record<string, string> = { new_status: statusOverrideValue.value }
+        if (statusOverrideValue.value === 'failed') {
+          const msg = statusOverrideErrorMessage.value.trim()
+          if (msg) params.error_message = msg
+        }
+        const response = await api.patch<ForecastRun>(
+          `/v1/forecast/runs/${runId}/status`,
+          {},
+          { params },
+        )
+        return response.data
+      } catch (err: unknown) {
+        throw new Error(apiError(err))
+      }
+    },
+    {
+      runningMessage: `Updating run #${runId} status...`,
+      timeoutMessage: 'The request did not return in time. The server may still be processing. Refresh run status before retrying.',
+      nextActions: ['Refresh run status before retrying.', 'Check the run table before updating again.'],
+    },
+  )
+  if (!data) return
+  const errNote = data.error_message ? ` Message: ${data.error_message}` : ''
+  statusOverrideOperation.completeOperation({
+    message: `Status updated to "${data.run_status}".${errNote}`,
+    technicalDetails: data,
+  })
+  await loadRuns()
 }
 
 // ─── Debug panel ──────────────────────────────────────────────────────────────
@@ -1691,6 +2101,24 @@ onMounted(async () => {
 .run-status--success  { background: #dcfce7; color: #166534; }
 .run-status--partial  { background: #fef9c3; color: #854d0e; }
 .run-status--failed   { background: #fee2e2; color: #991b1b; }
+
+.fail-note-pill {
+  display: inline-block;
+  padding: 1px 6px;
+  border-radius: 4px;
+  font-size: 0.65rem;
+  font-weight: 600;
+  white-space: nowrap;
+  cursor: default;
+}
+.fail-note-pill--ok {
+  background: #e0f2fe;
+  color: #0369a1;
+}
+.fail-note-pill--warn {
+  background: #ffedd5;
+  color: #c2410c;
+}
 
 /* ── Form pieces ──────────────────────────────────────────────────────────── */
 .form-panel {
@@ -1885,6 +2313,49 @@ onMounted(async () => {
   flex-shrink: 0;
 }
 .engine-note-icon { color: #3b82f6; font-size: 0.9rem; flex-shrink: 0; margin-top: 1px; }
+
+/* ── Results + evidence charts ─────────────────────────────────────────────── */
+.results-evidence__stats {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.5rem;
+}
+@media (min-width: 768px) {
+  .results-evidence__stats {
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+  }
+}
+.evidence-stat {
+  border: 1px solid #e2e8f0;
+  border-radius: 6px;
+  padding: 0.5rem 0.65rem;
+  background: #f8fafc;
+}
+.evidence-stat__label {
+  display: block;
+  font-size: 0.65rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: #64748b;
+  margin-bottom: 0.2rem;
+}
+.evidence-stat__val {
+  font-weight: 600;
+  font-size: 1rem;
+  color: #0f172a;
+  font-variant-numeric: tabular-nums;
+}
+.results-chart-card {
+  border: 1px solid #e2e8f0;
+  border-radius: 8px;
+  padding: 0.75rem 1rem;
+  background: #fff;
+}
+.results-chart-canvas {
+  position: relative;
+  height: 14rem;
+  width: 100%;
+}
 
 /* ── Results table ────────────────────────────────────────────────────────── */
 .results-table-wrap {

@@ -68,6 +68,10 @@ class ForecastSourceConfigService:
         soh_source_mode: str = "external_current_source",
         is_active: bool = True,
     ) -> ForecastSourceConfig:
+        if mysql_host is not None and str(mysql_host).strip() == "":
+            mysql_host = None
+        if mysql_port is not None and str(mysql_port).strip() == "":
+            mysql_port = None
         obj = ForecastSourceConfig(
             source_name=source_name,
             mysql_database=mysql_database,
@@ -99,8 +103,13 @@ class ForecastSourceConfigService:
             "mysql_host", "mysql_port", "mysql_database", "mysql_schema_name",
             "mysql_sales_table", "soh_source_mode", "is_active",
         }
+        nullable = {"mysql_host", "mysql_port"}
         for k, v in kwargs.items():
-            if k in allowed and v is not None:
+            if k not in allowed:
+                continue
+            if k in nullable:
+                setattr(obj, k, v)
+            elif v is not None:
                 setattr(obj, k, v)
         self._db.flush()
         return obj

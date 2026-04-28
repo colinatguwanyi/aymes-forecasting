@@ -832,19 +832,6 @@ Product.warehouse_products = relationship("WarehouseProduct", back_populates="pr
 Supplier.supplier_products = relationship("SupplierProduct", back_populates="supplier")
 Warehouse.warehouse_products = relationship("WarehouseProduct", back_populates="warehouse")
 
-# Forecasting subsystem models — kept in a separate module to isolate scope.
-# Importing here ensures they are registered with Base.metadata for Alembic.
-from app.forecast_models import (  # noqa: E402, F401
-    ForecastSourceConfig,
-    ForecastModelConfig,
-    ForecastRuntimeConfig,
-    ForecastSkuHistoryRule,
-    ForecastProductProfile,
-    ForecastSalesWeekly,
-    ForecastStockWeekly,
-    ForecastRun,
-    ForecastRunModel,
-    ForecastResultWeekly,
-    ForecastTrainingSeriesWeekly,
-    ForecastRunDiagnostic,
-)
+# Legacy app.forecast_models is no longer registered on this Base: those tables
+# collided in name with app.forecast_mysql_models but had incompatible columns.
+# Forecast engine MySQL schema is applied by Alembic revision 002_forecast_engine_mysql.

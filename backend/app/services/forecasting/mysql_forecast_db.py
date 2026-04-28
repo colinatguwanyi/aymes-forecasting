@@ -2,20 +2,20 @@
 MySQL forecast database session factory.
 
 All forecast tables (forecast_runs, forecast_results_weekly, etc.) live in a
-dedicated MySQL database (default: aymes_forecasting).  This module provides
-the SQLAlchemy engine and the FastAPI dependency used to inject a MySQL session
-into routers and services.
+MySQL database.  This module provides the engine and the FastAPI dependency
+``get_forecast_db``.
 
-Configuration (via .env / environment variables):
-    MYSQL_HOST          — MySQL server host  (default: localhost)
-    MYSQL_PORT          — MySQL server port  (default: 3306)
-    MYSQL_USER          — MySQL username
-    MYSQL_PASSWORD      — MySQL password
-    MYSQL_FORECAST_DATABASE — database that holds forecast tables
-                              (default: aymes_forecasting)
+The forecast engine MySQL connection is built from the same URL as
+``DATABASE_URL`` (host, port, user, password, query params) with the database
+name taken from ``MYSQL_FORECAST_DATABASE`` when set; **when unset**, the
+database name in ``DATABASE_URL`` is reused (e.g. ``supply_planning``) so one
+set of user privileges is enough for local dev.  Optional separate
+``aymes_forecasting`` database: set ``MYSQL_FORECAST_DATABASE=aymes_forecasting`` and
+``GRANT`` the user on that database.
 
-The MySQL credentials are shared with the existing sales-source connection
-(they are assumed to run on the same server).  Only the database name differs.
+If ``DATABASE_URL`` is not a MySQL URL, the code falls back to
+``MYSQL_HOST`` / ``MYSQL_PORT`` / ``MYSQL_USER`` / ``MYSQL_PASSWORD`` and
+``MYSQL_FORECAST_DATABASE``.
 """
 from __future__ import annotations
 
@@ -30,27 +30,76 @@ from sqlalchemy.orm import Session, sessionmaker
 logger = logging.getLogger(__name__)
 
 
-@lru_cache(maxsize=1)
-def _build_engine() -> Engine:
+def _resolve_forecast_database_name() -> str:
+    """
+    Return the schema/database that holds app.forecast_mysql_models tables.
+
+    If ``MYSQL_FORECAST_DATABASE`` is set, use it. Otherwise use the same
+    database as ``DATABASE_URL`` (platform DB), or fall back to ``aymes_forecasting``.
+    """
+    from sqlalchemy.engine.url import make_url
+
     from app.config import settings
 
-    db_name = getattr(settings, "mysql_forecast_database", "aymes_forecasting")
-    url = (
-        f"mysql+pymysql://{settings.mysql_user}:{settings.mysql_password}"
-        f"@{settings.mysql_host}:{settings.mysql_port}/{db_name}"
-        "?charset=utf8mb4"
-    )
-    engine = create_engine(
-        url,
-        connect_args={"connect_timeout": 3600},
+    override = (getattr(settings, "mysql_forecast_database", None) or "").strip()
+    if override:
+        return override
+    try:
+        u = make_url(settings.database_url)
+        if u.database:
+            return str(u.database)
+    except Exception as exc:
+        logger.debug("Could not read database from DATABASE_URL: %s", exc)
+    return "aymes_forecasting"
+
+
+@lru_cache(maxsize=1)
+def _build_engine() -> Engine:
+    from sqlalchemy.engine.url import make_url
+
+    from app.config import settings
+
+    db_name = _resolve_forecast_database_name()
+    connect_args: dict[str, object] = {"connect_timeout": 3600}
+    if settings.database_ssl_disabled:
+        connect_args["ssl_disabled"] = True
+
+    use_url: object = None
+    try:
+        parsed = make_url(settings.database_url)
+    except Exception as exc:
+        logger.warning("Could not parse DATABASE_URL; using MYSQL_* for forecast: %s", exc)
+        parsed = None
+
+    if parsed is not None and "mysql" in (parsed.drivername or "").lower():
+        use_url = parsed.set(database=db_name)
+        logger.info(
+            "MySQL forecast engine (from DATABASE_URL): %s:%s/%s",
+            use_url.host,
+            use_url.port,
+            db_name,
+        )
+    else:
+        use_url = (
+            f"mysql+pymysql://{settings.mysql_user}:{settings.mysql_password}"
+            f"@{settings.mysql_host}:{settings.mysql_port}/{db_name}"
+            "?charset=utf8mb4"
+        )
+        logger.info(
+            "MySQL forecast engine (from MYSQL_*): %s:%s/%s",
+            settings.mysql_host,
+            settings.mysql_port,
+            db_name,
+        )
+    return create_engine(
+        use_url,
+        connect_args=connect_args,
         pool_pre_ping=True,
         pool_size=5,
         max_overflow=10,
         pool_recycle=3600,
         pool_timeout=3600,
     )
-    logger.info("MySQL forecast engine created: %s:%d/%s", settings.mysql_host, settings.mysql_port, db_name)
-    return engine
 
 
 def get_forecast_engine() -> Engine:

@@ -3,6 +3,8 @@
     <h1 class="text-xl font-semibold text-slate-800 mb-1">Scenario Manager</h1>
     <p class="muted mb-6">Freeze runs, recalculate demand, pin forecast runs, compare scenarios, and view forecast health (WAPE).</p>
 
+    <PageHelpPanel page-key="ScenarioManager" />
+
     <section v-if="loading" class="content-section">Loading…</section>
     <template v-else>
       <section class="content-section">
@@ -12,15 +14,17 @@
           <option :value="null">Select scenario</option>
           <option v-for="r in planRuns" :key="r.id" :value="r.id">{{ formatPlanRunLabel(r) }}</option>
         </select>
+        <div v-if="selectedRunId && selectedRunIsDemandOnly" class="scenario-demand-note mb-3">
+          <strong>Demand-only run selected.</strong> Coverage-based exceptions (e.g. stockout/low cover lists) are not used for this mode. Use the planning grid and SKU detail for modeled position — do not read “no exceptions” as proof of physical stock health.
+        </div>
         <div v-if="selectedRunId" class="actions-row">
-          <div v-if="actionMessage" class="action-message">{{ actionMessage }}</div>
-          <button type="button" @click="doFreeze" class="app-btn app-btn-secondary" title="Lock demand and/or orders for the freeze window.">Freeze now</button>
+          <button type="button" @click="doFreeze" class="app-btn app-btn-secondary" :disabled="planActionBusy" title="Lock demand and/or orders for the freeze window.">Freeze now</button>
           <select v-model="freezeScope" class="app-select" style="max-width: 8rem;" title="What to freeze: both, demand only, or orders only.">
             <option value="both">Demand &amp; orders</option>
             <option value="demand">Demand only</option>
             <option value="orders">Orders only</option>
           </select>
-          <button type="button" @click="doRecalculateDemand" class="app-btn app-btn-secondary" title="Recompute demand for weeks outside the freeze window.">Recalculate (non-frozen demand)</button>
+          <button type="button" @click="doRecalculateDemand" class="app-btn app-btn-secondary" :disabled="planActionBusy" title="Recompute demand for weeks outside the freeze window.">Recalculate (non-frozen demand)</button>
           <template v-if="selectedRun && (selectedRun.demand_source === 'baseline' || selectedRun.demand_source === 'blended')">
             <label class="form-label">Forecast run (optional)</label>
             <select
@@ -42,10 +46,11 @@
               class="app-btn app-btn-secondary"
               :disabled="resetForecastRunLoading"
             >
-              Reset to latest
+              {{ resetForecastRunLoading ? 'Resetting…' : 'Reset to latest' }}
             </button>
           </template>
         </div>
+        <OperationStatusPanel :operation="planActionOperation.operation" class="mt-3" />
         <p v-if="selectedRun && (selectedRun.demand_source === 'baseline' || selectedRun.demand_source === 'blended')" class="muted helper-text mt-2">
           If unset, the next recalc uses the latest available run and pins it.
         </p>
@@ -53,7 +58,10 @@
 
       <section class="content-section">
         <h2>Compare scenarios</h2>
-        <p class="muted mb-3">Compare exception counts between two runs (within 26 weeks).</p>
+        <p class="muted mb-3">
+          Compare exception counts between two runs (within 26 weeks). Counts reflect <strong>stock-aware</strong> coverage rules only.
+          For <strong>demand-only</strong> runs, counts are shown as N/A — that means exceptions are <strong>not used</strong> for that mode, <strong>not</strong> that the scenario has zero risk or “better” coverage outcomes.
+        </p>
         <div class="compare-controls">
           <div class="form-row">
             <label class="form-label">Scenario A</label>
@@ -70,17 +78,29 @@
             </select>
           </div>
         </div>
+        <div v-if="compareRunA && compareRunB && compareHasAnyDemandOnly" class="scenario-demand-note mb-3">
+          <strong>Demand-only in this comparison.</strong> N/A for stockouts/low cover does <strong>not</strong> mean a safer plan — those exception types are suppressed for demand-only runs, not demonstrated to be absent.
+        </div>
+        <div v-if="compareRunA && compareRunB && crossModeCompareWarning" class="compare-mode-warning">
+          <strong>Mixed planning modes.</strong> These two runs use different rules (stock-aware vs demand-only). Exception counts and grid behavior are not directly comparable; do not rank scenarios using N/A as if it were zero.
+        </div>
         <div v-if="compareRunA && compareRunB" class="compare-summary">
           <div class="compare-card">
             <h3>{{ runAName }}</h3>
-            <p>Stockouts: {{ exceptionsA.filter(e => e.type === 'stockout').length }}</p>
-            <p>Low cover: {{ exceptionsA.filter(e => e.type === 'low_cover').length }}</p>
+            <p v-if="compareModeA === 'demand_only'" class="compare-exception-na">Stockouts: N/A — exceptions not used for demand-only</p>
+            <p v-else>Stockouts: {{ exceptionsA.filter(e => e.type === 'stockout').length }}</p>
+            <p v-if="compareModeA === 'demand_only'" class="compare-exception-na">Low cover: N/A — exceptions not used for demand-only</p>
+            <p v-else>Low cover: {{ exceptionsA.filter(e => e.type === 'low_cover').length }}</p>
+            <p v-if="compareModeA === 'demand_only'" class="compare-exception-footnote">N/A is not “zero issues”; use the grid for modeled signals.</p>
             <router-link :to="{ path: '/planning-grid', query: { plan_run_id: String(compareRunA) } }" class="app-btn">View in Planning Grid</router-link>
           </div>
           <div class="compare-card">
             <h3>{{ runBName }}</h3>
-            <p>Stockouts: {{ exceptionsB.filter(e => e.type === 'stockout').length }}</p>
-            <p>Low cover: {{ exceptionsB.filter(e => e.type === 'low_cover').length }}</p>
+            <p v-if="compareModeB === 'demand_only'" class="compare-exception-na">Stockouts: N/A — exceptions not used for demand-only</p>
+            <p v-else>Stockouts: {{ exceptionsB.filter(e => e.type === 'stockout').length }}</p>
+            <p v-if="compareModeB === 'demand_only'" class="compare-exception-na">Low cover: N/A — exceptions not used for demand-only</p>
+            <p v-else>Low cover: {{ exceptionsB.filter(e => e.type === 'low_cover').length }}</p>
+            <p v-if="compareModeB === 'demand_only'" class="compare-exception-footnote">N/A is not “zero issues”; use the grid for modeled signals.</p>
             <router-link :to="{ path: '/planning-grid', query: { plan_run_id: String(compareRunB) } }" class="app-btn">View in Planning Grid</router-link>
           </div>
         </div>
@@ -170,7 +190,10 @@ import { ref, computed, onMounted, watch } from 'vue'
 import api from '@/api/client'
 import { usePlanningStore } from '@/stores/planning'
 import type { ForecastRunOption, PlanningException } from '@/api/client'
-import { formatPlanRunLabel } from '@/api/client'
+import { formatPlanRunLabel, planRunPlanningMode } from '@/api/client'
+import PageHelpPanel from '@/components/console/PageHelpPanel.vue'
+import OperationStatusPanel from '@/components/common/OperationStatusPanel.vue'
+import { useOperation } from '@/composables/useOperation'
 
 interface ForecastMetric {
   model_name: string
@@ -200,8 +223,9 @@ const exceptionsB = ref<PlanningException[]>([])
 const freezeScope = ref<'demand' | 'orders' | 'both'>('both')
 const forecastRunOptions = ref<ForecastRunOption[]>([])
 const forecastRunsLoading = ref(false)
-const resetForecastRunLoading = ref(false)
-const actionMessage = ref('')
+const planActionOperation = useOperation('Scenario action')
+const planActionBusy = planActionOperation.isRunning
+const resetForecastRunLoading = planActionOperation.isRunning
 const methodVersion = ref('—')
 const methodAcknowledgements = ref<{ method_version: string }[]>([])
 const forecastMetrics = ref<ForecastMetric[]>([])
@@ -224,6 +248,27 @@ const runBName = computed(() => {
   const r = planRuns.value.find((r) => r.id === compareRunB.value)
   return r ? formatPlanRunLabel(r) : '—'
 })
+const compareRunAData = computed(() => planRuns.value.find((r) => r.id === compareRunA.value) ?? null)
+const compareRunBData = computed(() => planRuns.value.find((r) => r.id === compareRunB.value) ?? null)
+const compareModeA = computed(() => (compareRunAData.value ? planRunPlanningMode(compareRunAData.value) : null))
+const compareModeB = computed(() => (compareRunBData.value ? planRunPlanningMode(compareRunBData.value) : null))
+const crossModeCompareWarning = computed(
+  () =>
+    compareRunA.value != null &&
+    compareRunB.value != null &&
+    compareModeA.value != null &&
+    compareModeB.value != null &&
+    compareModeA.value !== compareModeB.value,
+)
+const selectedRunIsDemandOnly = computed(
+  () => selectedRun.value != null && planRunPlanningMode(selectedRun.value) === 'demand_only',
+)
+const compareHasAnyDemandOnly = computed(
+  () =>
+    compareRunA.value != null &&
+    compareRunB.value != null &&
+    (compareModeA.value === 'demand_only' || compareModeB.value === 'demand_only'),
+)
 const summary = computed(() => forecastSummary.value)
 const top5WorstByWape = computed(() =>
   forecastMetrics.value
@@ -231,11 +276,6 @@ const top5WorstByWape = computed(() =>
     .sort((a, b) => (b.wape ?? 0) - (a.wape ?? 0))
     .slice(0, 5)
 )
-
-function setActionMessage(msg: string) {
-  actionMessage.value = msg
-  setTimeout(() => { actionMessage.value = '' }, 4000)
-}
 
 function needsAcknowledgement(r: { demand_source?: string }) {
   if (r.demand_source !== 'baseline' && r.demand_source !== 'blended') return false
@@ -275,43 +315,86 @@ async function loadForecastMetrics() {
 
 async function doFreeze() {
   if (!selectedRunId.value) return
-  await store.freezePlanRun(selectedRunId.value, freezeScope.value)
+  const result = await planActionOperation.runWithOperation(
+    'Freeze plan run',
+    async () => {
+      await store.freezePlanRun(selectedRunId.value!, freezeScope.value)
+      return true
+    },
+    {
+      runningMessage: 'Applying freeze...',
+      successMessage: 'Freeze applied.',
+      timeoutMessage: 'The request did not return in time. The server may still be processing. Refresh plan runs before retrying.',
+      nextActions: ['Refresh plan runs before retrying.'],
+    },
+  )
+  if (!result) return
   await store.fetchPlanRuns()
-  setActionMessage('Freeze applied.')
 }
 
 async function doRecalculateDemand() {
   if (!selectedRunId.value) return
-  await store.recalculateDemand(selectedRunId.value)
+  const result = await planActionOperation.runWithOperation(
+    'Recalculate demand',
+    async () => {
+      await store.recalculateDemand(selectedRunId.value!)
+      return true
+    },
+    {
+      runningMessage: 'Recalculating non-frozen demand...',
+      successMessage: 'Demand recalculated.',
+      timeoutMessage: 'The request did not return in time. The server may still be processing. Refresh plan runs before retrying.',
+      nextActions: ['Refresh plan runs before retrying.'],
+    },
+  )
+  if (!result) return
   await store.fetchPlanRuns()
-  setActionMessage('Demand recalculated.')
 }
 
 async function onForecastRunChange(value: string) {
   if (!selectedRunId.value) return
   const val = value.trim() || null
-  try {
-    await store.updatePlanRunBaseline(selectedRunId.value, val)
-    await store.fetchPlanRuns()
-    setActionMessage('Forecast run updated.')
-  } catch (err: unknown) {
-    const msg = err && typeof err === 'object' && 'response' in err && typeof (err as { response?: { data?: { detail?: string } } }).response?.data?.detail === 'string'
-      ? (err as { response: { data: { detail: string } } }).response.data.detail
-      : 'Failed to update forecast run.'
-    setActionMessage(msg)
-  }
+  const result = await planActionOperation.runWithOperation(
+    'Update forecast run',
+    async () => {
+      try {
+        await store.updatePlanRunBaseline(selectedRunId.value!, val)
+        return true
+      } catch (err: unknown) {
+        const msg = err && typeof err === 'object' && 'response' in err && typeof (err as { response?: { data?: { detail?: string } } }).response?.data?.detail === 'string'
+          ? (err as { response: { data: { detail: string } } }).response.data.detail
+          : 'Failed to update forecast run.'
+        throw new Error(msg)
+      }
+    },
+    {
+      runningMessage: 'Updating forecast run selection...',
+      successMessage: 'Forecast run updated.',
+      timeoutMessage: 'The request did not return in time. The server may still be processing. Refresh plan runs before retrying.',
+      nextActions: ['Refresh plan runs before retrying.'],
+    },
+  )
+  if (!result) return
+  await store.fetchPlanRuns()
 }
 
 async function doResetForecastRun() {
   if (!selectedRunId.value) return
-  resetForecastRunLoading.value = true
-  try {
-    await store.resetForecastRun(selectedRunId.value, false)
-    await store.fetchPlanRuns()
-    setActionMessage('Pinned forecast run cleared. Next recalc will use the latest available.')
-  } finally {
-    resetForecastRunLoading.value = false
-  }
+  const result = await planActionOperation.runWithOperation(
+    'Reset forecast run',
+    async () => {
+      await store.resetForecastRun(selectedRunId.value!, false)
+      return true
+    },
+    {
+      runningMessage: 'Clearing pinned forecast run...',
+      successMessage: 'Pinned forecast run cleared. Next recalc will use the latest available.',
+      timeoutMessage: 'The request did not return in time. The server may still be processing. Refresh plan runs before retrying.',
+      nextActions: ['Refresh plan runs before retrying.'],
+    },
+  )
+  if (!result) return
+  await store.fetchPlanRuns()
 }
 
 onMounted(async () => {
@@ -364,6 +447,25 @@ watch(compareRunB, async (id) => {
 .compare-card h3 { font-size: 0.9375rem; margin-bottom: 0.5rem; }
 .compare-card p { margin: 0.25rem 0; font-size: 0.875rem; }
 .compare-card .app-btn { margin-top: 0.5rem; text-decoration: none; display: inline-block; }
+.compare-mode-warning {
+  margin-bottom: 0.75rem;
+  padding: 0.75rem 1rem;
+  font-size: 0.875rem;
+  border: 1px solid rgb(253 230 138);
+  background: rgb(255 251 235);
+  color: rgb(120 53 15);
+}
+.compare-exception-na { color: var(--text-muted, #64748b); font-style: italic; }
+.compare-exception-footnote { font-size: 0.75rem; color: var(--text-muted, #64748b); margin: 0.35rem 0 0; line-height: 1.35; }
+.scenario-demand-note {
+  padding: 0.75rem 1rem;
+  font-size: 0.875rem;
+  line-height: 1.45;
+  border: 1px solid rgb(186 230 253);
+  background: rgb(240 249 255);
+  color: rgb(12 74 110);
+  border-radius: 6px;
+}
 .forecast-health-card .health-summary { display: flex; gap: 1.5rem; margin-bottom: 0.75rem; font-size: 0.875rem; }
 .forecast-health-card .subsection { font-size: 0.9375rem; margin: 0.75rem 0 0.25rem; }
 .action-message { font-size: 0.875rem; margin-bottom: 0.5rem; color: var(--success, green); }

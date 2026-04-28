@@ -28,8 +28,10 @@ import BannerBar from './BannerBar.vue'
   flex: 1;
   overflow: auto;
   background: rgb(248 250 252);
-  max-width: 80rem;
+  width: 100%;
+  max-width: 1600px;
   margin: 0 auto;
-  padding: 1.5rem;
+  padding: 1.5rem 24px;
+  box-sizing: border-box;
 }
 </style>

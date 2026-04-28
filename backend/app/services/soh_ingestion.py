@@ -26,6 +26,7 @@ from app.models import (
     Warehouse,
     WarehouseBranchMapping,
 )
+from app.ingestion_progress import merge_ingest_progress
 from app.services.time_bucketing import week_start_for_date
 
 logger = logging.getLogger(__name__)
@@ -35,9 +36,6 @@ SOH_SOURCE_TYPE = "soh"
 CHUNK_SIZE = 5000
 NATURAL_KEY_DELETE_CHUNK = 400
 HISTORICAL_BATCH_DAYS = 60
-DEFAULT_AAH_WAREHOUSE = "AAH"
-
-
 def _get(row: dict[str, Any], *keys: str) -> Any:
     def _norm(k: str) -> str:
         return str(k).strip().lower().replace(" ", "_")
@@ -132,9 +130,8 @@ def validate_and_stage_soh_row(
             if warehouse_code_override:
                 warehouse_code = warehouse_code_override.strip().upper()
             else:
-                # AAH format: roll all branches to ONE warehouse (AAH); branch read but not persisted
-                warehouse_code = DEFAULT_AAH_WAREHOUSE
-            if not warehouse_code:
+                reject_reason = "warehouse_code required"
+            if not reject_reason and not warehouse_code:
                 reject_reason = "unknown branch mapping" if not warehouse_code_override else "warehouse_code required"
             else:
                 stock_ok, stock_val, stock_err = _parse_int_soh(stock_raw, 0)
@@ -232,12 +229,14 @@ def stage_blp_soh(
             if ext_code:
                 codes_missing.add(ext_code)
             units_missing += qty
+            reason = f"Unmapped SKU: {ext_code} in soh_blp_ingestion"
+            logger.error(reason)
             db.add(
                 IngestionRejection(
                     ingestion_run_id=run_id,
                     row_number=i,
                     raw_payload=dict(row),
-                    reason="product_not_found",
+                    reason=reason,
                 )
             )
             continue
@@ -321,6 +320,13 @@ def build_daily_from_stage(db: Session, run_id: UUID) -> tuple[int, int]:
 
     run.status = IngestionStatus.RUNNING
     db.flush()
+    merge_ingest_progress(
+        db,
+        run,
+        import_phase="soh_daily",
+        import_message="Reading and aggregating SOH from staged rows…",
+        import_percent=3.0,
+    )
 
     mode = getattr(run, "mode", None)
     is_historical = mode == IngestionMode.HISTORICAL
@@ -398,7 +404,9 @@ def build_daily_from_stage(db: Session, run_id: UUID) -> tuple[int, int]:
     if is_historical and len(items) > 100:
         # Chunk by date range
         dates_sorted = sorted({k[2] for k in aggregated.keys()})
+        num_date_batches = max(1, (len(dates_sorted) + HISTORICAL_BATCH_DAYS - 1) // HISTORICAL_BATCH_DAYS)
         for i in range(0, len(dates_sorted), HISTORICAL_BATCH_DAYS):
+            batch_num = (i // HISTORICAL_BATCH_DAYS) + 1
             batch_dates = set(dates_sorted[i : i + HISTORICAL_BATCH_DAYS])
             batch_items = [(k, v) for k, v in items if k[2] in batch_dates]
             for (warehouse_code, sku, as_of_date), (on_hand_units, on_order_units) in batch_items:
@@ -414,10 +422,16 @@ def build_daily_from_stage(db: Session, run_id: UUID) -> tuple[int, int]:
                     )
                 )
                 inserted += 1
-            db.flush()
-            _pm = getattr(run, "progress_meta", None)
-            _run_pm = _pm if isinstance(_pm, dict) else {}
-            run.progress_meta = {**_run_pm, "daily_batches_done": (i // HISTORICAL_BATCH_DAYS) + 1}
+            pct = min(92.0, 8.0 + (84.0 * batch_num) / num_date_batches)
+            merge_ingest_progress(
+                db,
+                run,
+                import_phase="soh_daily",
+                import_message=f"Writing daily SOH ({batch_num}/{num_date_batches} date range batches)…",
+                import_percent=pct,
+                import_detail=f"Rows inserted (this run): {inserted}",
+                daily_batches_done=batch_num,
+            )
     else:
         for (warehouse_code, sku, as_of_date), (on_hand_units, on_order_units) in items:
             db.add(
@@ -454,6 +468,13 @@ def build_weekly_from_daily(db: Session, run_id: UUID) -> int:
     run = db.query(IngestionRun).filter(IngestionRun.id == run_id).first()
     if not run:
         raise ValueError(f"Ingestion run not found: {run_id}")
+    merge_ingest_progress(
+        db,
+        run,
+        import_phase="soh_weekly",
+        import_message="Rolling up daily SOH to W-TUE weekly inventory…",
+        import_percent=94.0,
+    )
 
     # Drop prior weekly rows produced by this run (cells no longer present after a re-upload).
     db.query(InventorySnapshotWeekly).filter(

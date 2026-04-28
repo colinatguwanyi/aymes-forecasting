@@ -4,8 +4,22 @@
       <PageHeader title="Stock Position Breakdown" :breadcrumbs="[{ label: 'Planning', path: '/' }]" />
     </header>
 
+    <PageHelpPanel page-key="StockPosition" />
+
     <section v-if="selectedRunSkippedWarehouses.length" class="mb-4 p-3 rounded-lg bg-amber-50 border border-amber-200 text-amber-800 text-sm">
       Some warehouses were skipped: {{ selectedRunSkippedWarehouses.join(', ') }}.
+    </section>
+
+    <section v-if="planRunId && selectedRun" class="mb-3 flex flex-wrap items-center gap-2 text-sm">
+      <span
+        class="inline-flex items-center rounded-md px-2 py-1 text-xs font-medium border"
+        :class="isDemandOnlyRun ? 'bg-sky-50 text-sky-900 border-sky-200' : 'bg-emerald-50 text-emerald-900 border-emerald-200'"
+      >{{ planningModeLabel }}</span>
+      <span v-if="isDemandOnlyRun && syntheticStartingInventory" class="text-xs text-slate-600">This run used synthetic starting inventory where SOH was missing.</span>
+    </section>
+
+    <section v-if="planRunId && isDemandOnlyRun" class="mb-4 p-3 rounded-lg bg-sky-50 border border-sky-200 text-sky-900 text-sm">
+      <strong>Demand-only run.</strong> Projected inventory and the rolling-week view (when you open a row) are a modeled ledger, not warehouse on-hand. <strong>On hand</strong> in the table and detail panel still comes from stock snapshots where available. Treat target, ROP, and breach signals as planning views, not physical stock truth.
     </section>
 
     <section class="card card-body">
@@ -18,7 +32,7 @@
         <template #filters>
           <select v-model="planRunId" class="select min-w-48">
             <option :value="null">Plan run</option>
-            <option v-for="r in planRuns" :key="r.id" :value="r.id">{{ r.scenario_name }}</option>
+            <option v-for="r in planRuns" :key="r.id" :value="r.id">{{ formatPlanRunLabel(r) }}</option>
           </select>
           <select v-model="warehouseFilter" class="select min-w-40">
             <option value="">All warehouses</option>
@@ -37,7 +51,12 @@
     </section>
 
     <section class="card">
-      <p class="card-header text-sm text-slate-500">Click a row to open the calculation breakdown and 12-week rolling view.</p>
+      <p class="card-header text-sm text-slate-500">
+        Click a row to open the calculation breakdown and 12-week rolling view.
+        <span class="block mt-1.5 text-xs text-slate-500 leading-snug">
+          Target and ROP (units) come from <strong>stock position breakdown</strong> logic. Lead time and safety stock used here may differ from the weekly planning engine.
+        </span>
+      </p>
       <div v-if="loading" class="px-5 py-8 text-sm text-slate-500">Loading…</div>
       <div v-else-if="displayRows.length" class="overflow-x-auto max-h-[60vh] overflow-y-auto">
         <table class="w-full text-sm border-collapse">
@@ -156,6 +175,9 @@
 
           <section class="mb-4">
             <h4 class="text-xs font-medium text-neutral-600 uppercase tracking-wide mb-1">Derived</h4>
+            <p class="text-xs text-neutral-500 mb-2 leading-snug">
+              Target and ROP below are from stock position breakdown rules. Lead time and safety stock here may differ from the weekly planning engine.
+            </p>
             <dl class="grid grid-cols-[auto_1fr] gap-x-3 gap-y-0.5 text-sm">
               <dt class="text-neutral-500">Reorder point</dt><dd>{{ detailRow.reorder_point_units }}</dd>
               <dt class="text-neutral-500">Target stock</dt><dd>{{ detailRow.target_stock_units }}</dd>
@@ -213,10 +235,11 @@ import { usePlanningStore } from '@/stores/planning'
 import { useAdminStore } from '@/stores/admin'
 import { useLayoutStore } from '@/stores/layout'
 import type { StockPositionBreakdown } from '@/api/client'
-import { fetchPlanningReadiness } from '@/api/client'
+import { fetchPlanningReadiness, formatPlanRunLabel, planRunPlanningMode } from '@/api/client'
 import PageHeader from '@/components/console/PageHeader.vue'
 import FilterBar from '@/components/console/FilterBar.vue'
 import NoDataWithReason from '@/components/console/NoDataWithReason.vue'
+import PageHelpPanel from '@/components/console/PageHelpPanel.vue'
 
 const route = useRoute()
 const router = useRouter()
@@ -237,6 +260,14 @@ const demandInputsForDetail = ref<{ week_start: string; sku: string; warehouse_c
 
 const planRuns = computed(() => store.planRuns)
 const selectedRun = computed(() => planRunId.value ? planRuns.value.find((r) => r.id === planRunId.value) : null)
+const isDemandOnlyRun = computed(
+  () => selectedRun.value != null && planRunPlanningMode(selectedRun.value) === 'demand_only'
+)
+const planningModeLabel = computed(() => (isDemandOnlyRun.value ? 'Demand-only' : 'Stock-aware'))
+const syntheticStartingInventory = computed(() => {
+  const meta = selectedRun.value?.progress_meta as { synthetic_starting_inventory?: boolean } | undefined
+  return meta?.synthetic_starting_inventory === true
+})
 const selectedRunSkippedWarehouses = computed(() => {
   const meta = selectedRun.value?.progress_meta as { warehouses_skipped?: string[] } | undefined
   return meta?.warehouses_skipped ?? []
@@ -288,8 +319,14 @@ const noDataReasons = computed(() => {
     }
   }
   const planned = meta?.warehouses_planned_detail ?? []
+  const runDemandOnly =
+    selectedRun.value != null && planRunPlanningMode(selectedRun.value) === 'demand_only'
   if (planned.length && planned.every((p) => (p.overlap_pairs_count ?? 0) === 0)) {
-    reasons.push('No overlapping SKUs in SOH, demand, and policies for planned warehouses.')
+    reasons.push(
+      runDemandOnly
+        ? 'No overlapping SKUs across demand and policies for planned warehouses (SOH overlap not required for demand-only).'
+        : 'No overlapping SKUs in SOH, demand, and policies for planned warehouses.'
+    )
   }
   return reasons
 })
@@ -360,13 +397,19 @@ function openDetail(row: StockPositionBreakdown) {
     })
 }
 
+function planningReadinessParam(runId: number | null | undefined): 'stock_aware' | 'demand_only' {
+  if (runId == null) return 'stock_aware'
+  const r = store.planRuns.find((x) => x.id === runId)
+  return r != null && planRunPlanningMode(r) === 'demand_only' ? 'demand_only' : 'stock_aware'
+}
+
 watch([planRunId, warehouseFilter, productFamilyFilter, breachOnly], load, { immediate: true })
 
 watch(
   () => ({ loading: loading.value, rows: displayRows.value.length, runId: planRunId.value }),
   async ({ loading: ld, rows, runId }) => {
     if (!ld && rows === 0) {
-      diagnosticsData.value = await fetchPlanningReadiness(runId ?? undefined)
+      diagnosticsData.value = await fetchPlanningReadiness(runId ?? undefined, planningReadinessParam(runId ?? null))
     } else {
       diagnosticsData.value = null
     }

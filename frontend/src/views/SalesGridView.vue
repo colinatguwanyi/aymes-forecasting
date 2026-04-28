@@ -3,38 +3,42 @@
     <h1 class="text-xl font-semibold text-slate-800 mb-1">Sales Grid</h1>
     <p class="muted mb-6">Weekly customer sales (demand_facts_weekly CUSTOMER) by product. No SKU selection — table shows all products with week-by-week columns.</p>
 
-    <section class="content-section controls">
-      <div class="form-row">
-        <label class="form-label">Warehouse</label>
-        <select v-model="warehouseCode" class="app-select" style="max-width: 10rem;">
-          <option v-for="code in warehouseOptions" :key="code" :value="code">{{ code }}</option>
-        </select>
-      </div>
-      <div class="form-row">
-        <label class="form-label">Weeks</label>
-        <select v-model="weeks" class="app-select" style="max-width: 6rem;">
-          <option v-for="n in [4, 8, 12, 26]" :key="n" :value="n">{{ n }}</option>
-        </select>
-      </div>
-      <div class="form-row">
-        <label class="form-label">Search</label>
-        <input
-          v-model="searchText"
-          type="text"
-          class="app-input"
-          placeholder="SKU or name…"
-          style="max-width: 16rem;"
-        />
-      </div>
-      <div class="form-row">
-        <button
-          type="button"
-          class="app-btn app-btn-primary"
-          :disabled="loading"
-          @click="loadGrid"
-        >
-          {{ loading ? 'Loading…' : 'Load grid' }}
-        </button>
+    <section class="sales-grid-toolbar content-section">
+      <div class="sales-grid-toolbar__fields">
+        <div class="sales-grid-field">
+          <label class="sales-grid-field__label" for="sales-grid-wh">Warehouse</label>
+          <select id="sales-grid-wh" v-model="warehouseCode" class="sales-grid-field__control app-select">
+            <option v-for="code in warehouseOptions" :key="code" :value="code">{{ code }}</option>
+          </select>
+        </div>
+        <div class="sales-grid-field">
+          <label class="sales-grid-field__label" for="sales-grid-weeks">Weeks</label>
+          <select id="sales-grid-weeks" v-model="weeks" class="sales-grid-field__control app-select sales-grid-field__control--narrow">
+            <option v-for="n in [4, 8, 12, 26]" :key="n" :value="n">{{ n }}</option>
+          </select>
+        </div>
+        <div class="sales-grid-field sales-grid-field--grow">
+          <label class="sales-grid-field__label" for="sales-grid-search">Search</label>
+          <input
+            id="sales-grid-search"
+            v-model="searchText"
+            type="text"
+            class="sales-grid-field__control app-input"
+            placeholder="SKU or name…"
+            autocomplete="off"
+          />
+        </div>
+        <div class="sales-grid-field sales-grid-field--action">
+          <span class="sales-grid-field__label sales-grid-field__label--spacer" aria-hidden="true">Load</span>
+          <button
+            type="button"
+            class="sales-grid-toolbar__btn app-btn app-btn-primary"
+            :disabled="loading"
+            @click="loadGrid"
+          >
+            {{ loading ? 'Loading…' : 'Load grid' }}
+          </button>
+        </div>
       </div>
     </section>
 
@@ -44,7 +48,7 @@
         <p class="muted mb-2">
           Anchor week: {{ gridData.anchor_week_start }} · {{ gridData.total_products }} products
         </p>
-        <div class="grid-table-wrap">
+        <div class="grid-table-wrap sales-grid-table-shell">
           <table class="app-table sales-grid-table">
             <thead>
               <tr>
@@ -246,17 +250,66 @@ onMounted(async () => {
 </script>
 
 <style scoped>
-.controls .form-row {
-  margin-bottom: 0.75rem;
+.sales-grid-toolbar {
+  margin-bottom: 1.25rem;
+  padding: 1rem 1.1rem;
+  border-radius: 0.75rem;
+  border: 1px solid rgb(226 232 240);
+  background: rgb(248 250 252);
+  box-shadow: 0 1px 2px rgb(15 23 42 / 0.04);
 }
-.form-label {
-  display: inline-block;
-  min-width: 7rem;
-  margin-right: 0.5rem;
+.sales-grid-toolbar__fields {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 1rem 1.25rem;
+}
+.sales-grid-field {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+  min-width: 0;
+}
+.sales-grid-field--grow {
+  flex: 1 1 12rem;
+  min-width: 10rem;
+}
+.sales-grid-field--action {
+  flex: 0 0 auto;
+}
+.sales-grid-field__label {
+  font-size: 0.75rem;
+  font-weight: 600;
+  color: rgb(71 85 105);
+  letter-spacing: 0.02em;
+}
+.sales-grid-field__label--spacer {
+  visibility: hidden;
+  min-height: 1em;
+  margin: 0;
+}
+.sales-grid-field__control {
+  border-radius: 0.5rem;
+  min-height: 2.375rem;
+}
+.sales-grid-field__control--narrow {
+  max-width: 5.5rem;
+}
+.sales-grid-toolbar__btn {
+  border-radius: 0.5rem;
+  padding-left: 1.1rem;
+  padding-right: 1.1rem;
+  min-height: 2.375rem;
 }
 .grid-table-wrap {
   overflow-x: auto;
   max-width: 100%;
+}
+.sales-grid-table-shell {
+  border-radius: 0.75rem;
+  border: 1px solid rgb(226 232 240);
+  box-shadow: 0 1px 3px rgb(15 23 42 / 0.06);
+  background: white;
 }
 .sales-grid-table {
   min-width: 600px;

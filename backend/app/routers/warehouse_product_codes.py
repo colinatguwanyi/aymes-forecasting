@@ -227,7 +227,10 @@ def _fetch_unmapped_codes(
         db.query(IngestionRejection)
         .filter(
             IngestionRejection.ingestion_run_id == run.id,
-            IngestionRejection.reason == "product_not_found",
+            or_(
+                IngestionRejection.reason == "product_not_found",
+                IngestionRejection.reason.startswith("Unmapped SKU:"),
+            ),
         )
         .all()
     )

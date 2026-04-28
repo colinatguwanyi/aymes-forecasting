@@ -17,6 +17,20 @@ logger = logging.getLogger(__name__)
 router = APIRouter(dependencies=[Depends(require_any_auth)])
 
 
+def planning_mode_from_run(run: PlanRun) -> str:
+    """Effective planning mode from progress_meta. Legacy runs without key are stock_aware."""
+    meta = run.progress_meta if isinstance(run.progress_meta, dict) else {}
+    if meta.get("planning_mode") == "demand_only":
+        return "demand_only"
+    return "stock_aware"
+
+
+def _csv_filename(base: str, scenario_name: str, run: PlanRun) -> str:
+    """Filename unchanged for stock_aware; demand_only adds _demand_only before .csv for clarity."""
+    suffix = "_demand_only" if planning_mode_from_run(run) == "demand_only" else ""
+    return f"{base}_{scenario_name}{suffix}.csv"
+
+
 def _stream_csv(rows: list[dict[str, Any]], columns: list[str]) -> StringIO:
     buf = StringIO()
     w = csv.DictWriter(buf, fieldnames=columns, extrasaction="ignore")
@@ -62,10 +76,11 @@ def export_projected_inventory(
         "weeks_of_cover", "stockout",
     ]
     buf = _stream_csv(data, cols)
+    fn = _csv_filename("projected_inventory", cast(str, run.scenario_name), run)
     return StreamingResponse(
         iter([buf.getvalue()]),
         media_type="text/csv",
-        headers={"Content-Disposition": f"attachment; filename=projected_inventory_{run.scenario_name}.csv"},
+        headers={"Content-Disposition": f"attachment; filename={fn}"},
     )
 
 
@@ -95,10 +110,11 @@ def export_planned_orders(
     ]
     cols = ["scenario_name", "week_start", "sku", "warehouse_code", "order_qty"]
     buf = _stream_csv(data, cols)
+    fn = _csv_filename("planned_orders", cast(str, run.scenario_name), run)
     return StreamingResponse(
         iter([buf.getvalue()]),
         media_type="text/csv",
-        headers={"Content-Disposition": f"attachment; filename=planned_orders_{run.scenario_name}.csv"},
+        headers={"Content-Disposition": f"attachment; filename={fn}"},
     )
 
 
@@ -112,6 +128,16 @@ def export_exceptions(
     run = db.query(PlanRun).filter(PlanRun.id == plan_run_id).first()
     if not run:
         raise HTTPException(status_code=404, detail="Plan run not found")
+    # demand_only: ledger stockout/low-cover are not physical warehouse risk — do not export as exceptions.
+    if planning_mode_from_run(run) == "demand_only":
+        cols = ["type", "severity", "sku", "warehouse_code", "week_start", "message", "projected_qty", "weeks_of_cover"]
+        buf = _stream_csv([], cols)
+        fn = _csv_filename("exceptions", cast(str, run.scenario_name), run)
+        return StreamingResponse(
+            iter([buf.getvalue()]),
+            media_type="text/csv",
+            headers={"Content-Disposition": f"attachment; filename={fn}"},
+        )
     run_at: date = cast(date, run.run_at)
     cutoff = run_at + timedelta(weeks=within_weeks)
     rows = (
@@ -156,10 +182,11 @@ def export_exceptions(
                 pass
     cols = ["type", "severity", "sku", "warehouse_code", "week_start", "message", "projected_qty", "weeks_of_cover"]
     buf = _stream_csv(data, cols)
+    fn = _csv_filename("exceptions", cast(str, run.scenario_name), run)
     return StreamingResponse(
         iter([buf.getvalue()]),
         media_type="text/csv",
-        headers={"Content-Disposition": f"attachment; filename=exceptions_{run.scenario_name}.csv"},
+        headers={"Content-Disposition": f"attachment; filename={fn}"},
     )
 
 

@@ -5,6 +5,8 @@
       <p class="muted mt-1">CSV exports: projected inventory, planned orders, exception list, and SKU explanation report by scenario.</p>
     </header>
 
+    <PageHelpPanel page-key="Exports" />
+
     <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
       <section class="card card-body">
         <h3 class="section-title mb-2">Projected inventory</h3>
@@ -13,10 +15,16 @@
             <label class="form-label">Scenario</label>
             <select v-model="selectedRunId" class="select w-full max-w-xs">
               <option :value="null">Select scenario</option>
-              <option v-for="r in planRuns" :key="r.id" :value="r.id">{{ r.scenario_name }} ({{ r.created_at }})</option>
+              <option v-for="r in planRuns" :key="r.id" :value="r.id">{{ formatPlanRunLabel(r) }}</option>
             </select>
           </div>
         </div>
+        <p
+          v-if="isDemandOnlyRunId(selectedRunId)"
+          class="mt-2 mb-0 p-2 rounded-md bg-sky-50 border border-sky-200 text-sky-900 text-sm"
+        >
+          <strong>Demand-only run.</strong> The file may be named with <code class="text-xs bg-sky-100 px-1 rounded">_demand_only</code>. Numbers are modeled projections, not physical warehouse stock.
+        </p>
         <a v-if="selectedRunId" :href="projectedInventoryExportUrl" class="btn-primary inline-block mt-3" download>Download projected inventory CSV</a>
       </section>
 
@@ -27,10 +35,16 @@
             <label class="form-label">Scenario</label>
             <select v-model="selectedRunIdOrders" class="select w-full max-w-xs">
               <option :value="null">Select scenario</option>
-              <option v-for="r in planRuns" :key="r.id" :value="r.id">{{ r.scenario_name }} ({{ r.created_at }})</option>
+              <option v-for="r in planRuns" :key="r.id" :value="r.id">{{ formatPlanRunLabel(r) }}</option>
             </select>
           </div>
         </div>
+        <p
+          v-if="isDemandOnlyRunId(selectedRunIdOrders)"
+          class="mt-2 mb-0 p-2 rounded-md bg-sky-50 border border-sky-200 text-sky-900 text-sm"
+        >
+          <strong>Demand-only run.</strong> The file may use <code class="text-xs bg-sky-100 px-1 rounded">_demand_only</code> in the filename. Order quantities are policy-based on a modeled position, not net-of-physical-SOH.
+        </p>
         <a v-if="selectedRunIdOrders" :href="plannedOrdersExportUrl" class="btn-primary inline-block mt-3" download>Download planned orders CSV</a>
       </section>
 
@@ -42,7 +56,7 @@
             <label class="form-label">Scenario</label>
             <select v-model="selectedRunIdExceptions" class="select w-full max-w-xs">
               <option :value="null">Select scenario</option>
-              <option v-for="r in planRuns" :key="r.id" :value="r.id">{{ r.scenario_name }} ({{ r.created_at }})</option>
+              <option v-for="r in planRuns" :key="r.id" :value="r.id">{{ formatPlanRunLabel(r) }}</option>
             </select>
           </div>
           <div>
@@ -56,6 +70,12 @@
             </select>
           </div>
         </div>
+        <p
+          v-if="isDemandOnlyRunId(selectedRunIdExceptions)"
+          class="mt-2 mb-0 p-2 rounded-md bg-sky-50 border border-sky-200 text-sky-900 text-sm"
+        >
+          <strong>Demand-only run.</strong> Exception CSV is usually header-only (physical stock-risk rows are not exported). Filename may include <code class="text-xs bg-sky-100 px-1 rounded">_demand_only</code>.
+        </p>
         <a v-if="selectedRunIdExceptions" :href="exceptionsExportUrl" class="btn-primary inline-block mt-3" download>Download exception list CSV</a>
       </section>
 
@@ -67,7 +87,7 @@
             <label class="form-label">Scenario</label>
             <select v-model="selectedRunIdReport" class="select w-full max-w-xs">
               <option :value="null">Select scenario</option>
-              <option v-for="r in planRuns" :key="r.id" :value="r.id">{{ r.scenario_name }} ({{ r.created_at }})</option>
+              <option v-for="r in planRuns" :key="r.id" :value="r.id">{{ formatPlanRunLabel(r) }}</option>
             </select>
           </div>
           <div>
@@ -79,6 +99,12 @@
             <input v-model="reportWarehouse" class="input w-full max-w-xs" placeholder="All warehouses" />
           </div>
         </div>
+        <p
+          v-if="isDemandOnlyRunId(selectedRunIdReport)"
+          class="mt-2 mb-0 p-2 rounded-md bg-sky-50 border border-sky-200 text-sky-900 text-sm"
+        >
+          <strong>Demand-only run.</strong> This report still describes modeled projection rows, not physical SOH-backed stock.
+        </p>
         <a v-if="selectedRunIdReport" :href="skuExplanationReportUrl" class="btn-primary inline-block mt-3" download>Download SKU explanation report CSV</a>
       </section>
     </div>
@@ -88,9 +114,17 @@
 <script setup lang="ts">
 import { ref, computed, onMounted } from 'vue'
 import { usePlanningStore } from '@/stores/planning'
+import { formatPlanRunLabel, planRunPlanningMode } from '@/api/client'
+import PageHelpPanel from '@/components/console/PageHelpPanel.vue'
 
 const store = usePlanningStore()
 const planRuns = computed(() => store.planRuns)
+
+function isDemandOnlyRunId(id: number | null): boolean {
+  if (id == null) return false
+  const r = planRuns.value.find((x) => x.id === id)
+  return r != null && planRunPlanningMode(r) === 'demand_only'
+}
 const selectedRunId = ref<number | null>(null)
 const selectedRunIdOrders = ref<number | null>(null)
 const selectedRunIdExceptions = ref<number | null>(null)

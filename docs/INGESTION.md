@@ -15,6 +15,20 @@ Ingestion follows a **stage → execute** pattern:
 
 Each upload creates an `IngestionRun` record. Runs are auditable (who, when, file hash, metrics).
 
+### Import progress (platform standard)
+
+Long jobs update `ingestion_runs.progress_meta` with **v1** fields (see `backend/app/ingestion_progress.py`) so the Imports page can poll `GET /api/ingestion/runs/{run_id}` while **Execute** runs in parallel:
+
+| Field | Meaning |
+|-------|---------|
+| `import_version` | `1` |
+| `import_phase` | Short id (e.g. `soh_daily`, `sales_out_write`, `demand_transform`) |
+| `import_message` | Primary line for the UI |
+| `import_detail` | Optional secondary line |
+| `import_percent` | 0–100 when known; omitted for indeterminate |
+
+Older keys (`daily_batches_done`, `batches_done`, BLP coverage, etc.) are still mapped to human-readable lines in `frontend/src/config/importProgressSpec.ts`. The Imports UI shows upload byte progress separately, then server transform progress when polling returns data.
+
 ---
 
 ## Entities and Flows
@@ -125,6 +139,7 @@ Missing codes are rejected and recorded in `ingestion_rejections` with reason `p
 ## Idempotency
 
 - **Same file:** If a run with the same entity + file_sha256 has status=success, the API returns that run_id with `duplicate_noop: true` instead of creating a new run.
+- **After reset:** Pass `force_reimport=true` (or tick **Re-import same file if it was imported before** in the Imports UI) to create a fresh staged run from the same file after canonical data has been cleared.
 - **Re-execute:** Running execute on the same run_id multiple times is idempotent for canonical tables (UPSERT semantics where applicable).
 
 See [INGESTION_CONTRACT.md](INGESTION_CONTRACT.md) for full rules.

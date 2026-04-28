@@ -247,7 +247,14 @@ class PlanRunBase(BaseModel):
     created_by: Optional[str] = None
     notes: Optional[str] = None
     warehouses_scope: Optional[list[str]] = None
-    progress_meta: Optional[dict[str, Any]] = None
+    progress_meta: Optional[dict[str, Any]] = Field(
+        default=None,
+        description=(
+            "Run metadata: e.g. planning_mode (stock_aware | demand_only), "
+            "synthetic_starting_inventory (true if demand_only used zero anchor for missing SOH snapshots), "
+            "warehouses_planned, demand_source, row counts."
+        ),
+    )
 
 
 class PlanRun(PlanRunBase):

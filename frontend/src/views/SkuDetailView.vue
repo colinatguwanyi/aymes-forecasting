@@ -16,7 +16,7 @@
           <label class="form-label">Scenario</label>
           <select v-model="planRunIdInput" class="app-select" style="max-width: 18rem;">
             <option :value="null">Select scenario</option>
-            <option v-for="r in planRuns" :key="r.id" :value="r.id">{{ r.scenario_name }} ({{ r.created_at }})</option>
+            <option v-for="r in planRuns" :key="r.id" :value="r.id">{{ formatPlanRunLabel(r) }}</option>
           </select>
         </div>
         <div class="form-row">
@@ -28,8 +28,13 @@
     <template v-else>
       <header class="content-section sku-header">
         <h2>{{ sku }} / {{ warehouseCode }}</h2>
-        <p class="muted">Scenario: {{ selectedRunName ?? planRunId }}</p>
+        <p class="muted">Scenario: {{ selectedPlanRun ? formatPlanRunLabel(selectedPlanRun) : (selectedRunName ?? planRunId) }}</p>
       </header>
+
+      <!-- demand_only: timeline/explanation use modeled ledger — not physical SOH. -->
+      <section v-if="isDemandOnlyRun" class="content-section mb-3 p-3 rounded-lg bg-sky-50 border border-sky-200 text-sky-900 text-sm">
+        <strong>Demand-only run.</strong> Timeline and explanation use a modeled position (synthetic starts where applicable), not warehouse on-hand. Treat stockout and cover as model signals only.
+      </section>
 
       <div class="tabs">
         <button
@@ -44,12 +49,23 @@
 
       <section v-if="activeTab === 'timeline'" class="content-section">
         <div v-if="timelineLoading" class="muted">Loading timeline…</div>
-        <SkuTimeline
-          v-else
-          :projected="projected"
-          :planned-orders="plannedOrders"
-          :receipts="receipts"
-        />
+        <template v-else>
+          <div
+            v-if="projected.length === 0 && plannedOrders.length > 0"
+            class="mb-3 p-3 rounded-lg bg-amber-50 border border-amber-200 text-amber-900 text-sm"
+          >
+            <strong>No projected inventory rows</strong> for this SKU and warehouse in this scenario, but
+            <strong> planned orders</strong> exist. Usually that means the API returned no matching
+            <code>projected_inventory</code> rows (check SKU / warehouse spelling vs the plan) or the plan outputs
+            are inconsistent. Try the same scenario on the Weekly Planning Grid; if the grid shows projected qty here
+            but this page does not, report it as a bug.
+          </div>
+          <SkuTimeline
+            :projected="projected"
+            :planned-orders="plannedOrders"
+            :receipts="receipts"
+          />
+        </template>
       </section>
 
       <section v-if="activeTab === 'metrics'" class="content-section">
@@ -79,6 +95,25 @@
       </section>
 
       <section v-if="activeTab === 'explanation'" class="content-section">
+        <div v-if="stockBreakdownLoading" class="muted text-sm mb-3">Loading target &amp; ROP (stock position breakdown)…</div>
+        <div v-else-if="stockBreakdownRow" class="stock-target-snippet mb-4">
+          <h3 class="explanation-heading">Target &amp; ROP (units)</h3>
+          <p class="muted text-sm stock-target-snippet__note">
+            These values come from the <strong>stock position breakdown</strong> logic (policy and planning parameters for this scenario), not from new calculations on this page.
+            They describe a planning view of target level and reorder point in units, using average weekly demand from this plan run’s demand inputs.
+            <template v-if="isDemandOnlyRun">
+              For this demand-only run, <strong>projected position</strong> in the week detail below is a <strong>modeled ledger</strong>, not warehouse on-hand truth (see banner above); breakdown on-hand still reflects snapshots where present.
+            </template>
+          </p>
+          <dl class="explanation-dl">
+            <dt>Target stock (units)</dt><dd>{{ stockBreakdownRow.target_stock_units }}</dd>
+            <dt>Reorder point (units)</dt><dd>{{ stockBreakdownRow.reorder_point_units }}</dd>
+            <dt>Avg weekly demand</dt><dd>{{ stockBreakdownRow.avg_weekly_demand }}</dd>
+          </dl>
+        </div>
+        <p v-else-if="!stockBreakdownLoading && planRunId && sku && warehouseCode" class="muted text-sm mb-3">
+          No stock position breakdown row for this SKU and warehouse in this run (the breakdown needs projected inventory for the pair).
+        </p>
         <p class="muted">Select a week to see the explain-the-forecast breakdown.</p>
         <div class="form-row" style="max-width: 14rem;">
           <label class="form-label">Week</label>
@@ -224,17 +259,19 @@ import { ref, computed, watch, onMounted } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { usePlanningStore } from '@/stores/planning'
 import { useAdminStore } from '@/stores/admin'
-import api from '@/api/client'
-import SkuTimeline from '@/components/SkuTimeline.vue'
-import type {
-  SkuWeekExplanation,
-  PlanningPolicy,
-  ProjectedInventory,
-  PlannedOrder,
-  Receipt,
-  DemandActual,
-  InventorySnapshot,
+import api, {
+  formatPlanRunLabel,
+  planRunPlanningMode,
+  type SkuWeekExplanation,
+  type PlanningPolicy,
+  type ProjectedInventory,
+  type PlannedOrder,
+  type Receipt,
+  type DemandActual,
+  type InventorySnapshot,
+  type StockPositionBreakdown,
 } from '@/api/client'
+import SkuTimeline from '@/components/SkuTimeline.vue'
 
 interface ForecastMetricRow {
   model_name: string
@@ -287,17 +324,22 @@ const paramsLoading = ref(false)
 const explanationWeek = ref('')
 const explanationData = ref<SkuWeekExplanation | null>(null)
 const explanationLoading = ref(false)
+const stockBreakdownRow = ref<StockPositionBreakdown | null>(null)
+const stockBreakdownLoading = ref(false)
 const forecastMetricsRows = ref<ForecastMetricRow[]>([])
 const metricsLoading = ref(false)
 const metricsRunKey = ref('')
 
 const planRuns = computed(() => store.planRuns)
-const selectedRunName = computed(() => {
+const selectedPlanRun = computed(() => {
   const id = planRunId.value
   if (id == null) return null
-  const r = store.planRuns.find((x) => x.id === id)
-  return r?.scenario_name ?? null
+  return store.planRuns.find((x) => x.id === id) ?? null
 })
+const isDemandOnlyRun = computed(
+  () => selectedPlanRun.value != null && planRunPlanningMode(selectedPlanRun.value) === 'demand_only'
+)
+const selectedRunName = computed(() => selectedPlanRun.value?.scenario_name ?? null)
 const explanationWeeks = computed(() => {
   const weeks = new Set(projected.value.map((p) => p.week_start))
   return Array.from(weeks).sort()
@@ -435,6 +477,25 @@ async function loadExplanation() {
   }
 }
 
+async function loadStockBreakdownSnippet() {
+  if (!sku.value || !warehouseCode.value || !planRunId.value) {
+    stockBreakdownRow.value = null
+    return
+  }
+  stockBreakdownLoading.value = true
+  stockBreakdownRow.value = null
+  try {
+    const rows = await store.fetchStockPositionBreakdown(planRunId.value, {
+      sku: sku.value,
+      warehouseCode: warehouseCode.value,
+      limit: 5,
+    })
+    stockBreakdownRow.value = rows[0] ?? null
+  } finally {
+    stockBreakdownLoading.value = false
+  }
+}
+
 async function loadMetrics() {
   if (!sku.value || !warehouseCode.value) return
   metricsLoading.value = true
@@ -459,6 +520,8 @@ watch([sku, warehouseCode, planRunId], () => {
   loadParameters()
   explanationWeek.value = ''
   explanationData.value = null
+  stockBreakdownRow.value = null
+  if (activeTab.value === 'explanation') loadStockBreakdownSnippet()
 }, { immediate: true })
 
 watch(activeTab, (tab) => {
@@ -466,6 +529,7 @@ watch(activeTab, (tab) => {
   if (tab === 'history') loadHistory()
   if (tab === 'parameters') loadParameters()
   if (tab === 'metrics') loadMetrics()
+  if (tab === 'explanation') loadStockBreakdownSnippet()
 })
 
 onMounted(async () => {
@@ -516,5 +580,13 @@ onMounted(async () => {
 .metric-badge--ok { background: #fff3cd; color: #856404; }
 .metric-badge--poor { background: #f8d7da; color: #721c24; }
 .metric-badge--none { background: var(--hover); color: var(--muted); }
+.stock-target-snippet {
+  padding: 0.75rem 1rem;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--main-bg);
+}
+.stock-target-snippet__note { margin: 0 0 0.5rem; line-height: 1.45; }
+.text-sm { font-size: 0.8125rem; }
 code { font-size: 0.8125rem; background: var(--hover); padding: 0.1rem 0.3rem; border-radius: 2px; }
 </style>

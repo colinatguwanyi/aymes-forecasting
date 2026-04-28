@@ -13,6 +13,7 @@ from app.models import DemandActual, DemandType, InventorySnapshotWeekly, Planni
 def check_planning_readiness(
     db: Session,
     demand_source: str = "actuals",
+    planning_mode: str = "stock_aware",
 ) -> list[dict[str, Any]]:
     """
     Check planning readiness per warehouse.
@@ -22,7 +23,8 @@ def check_planning_readiness(
     - has_demand: demand_actuals exists for that warehouse. AAH: CUSTOMER only (Sales Out). BLP: CUSTOMER and/or SAMPLES.
     - has_policies: planning_policies exists for that warehouse
     - overlap_pairs: count of (sku, warehouse) present in BOTH SOH and policies (and demand for actuals)
-    - ready: has_soh && has_policies && has_demand (for demand_source=actuals)
+    - ready (stock_aware): has_soh && has_policies && has_demand (actuals) or has_soh && has_policies (baseline/blended)
+    - ready (demand_only): SOH not required; has_policies && has_demand (actuals) or has_policies (baseline/blended)
     """
     # All distinct warehouse codes from policies, SOH, and demand
     policy_wh = {r[0] for r in db.query(PlanningPolicy.warehouse_code).distinct().all() if r[0]}
@@ -125,7 +127,13 @@ def check_planning_readiness(
             overlap_pairs = overlap_soh_policy
 
         # ready
-        if demand_source == "actuals":
+        demand_only = planning_mode == "demand_only"
+        if demand_only:
+            if demand_source == "actuals":
+                ready = has_policies and has_demand
+            else:
+                ready = has_policies
+        elif demand_source == "actuals":
             ready = has_soh and has_policies and has_demand
         else:
             # baseline/blended: demand from forecast; SOH and policies required
@@ -133,7 +141,7 @@ def check_planning_readiness(
 
         # blockers
         blockers: list[str] = []
-        if not has_soh:
+        if not has_soh and not demand_only:
             blockers.append(f"No SOH loaded for {wh} → Import Stock On Hand for {wh}")
         if not has_demand and demand_source == "actuals":
             if wh == "AAH":

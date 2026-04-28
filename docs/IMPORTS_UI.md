@@ -1,45 +1,38 @@
-# Imports UI — Warehouse-First Design
+# Imports UI — Location-First Design
 
 **Route:** `/imports`
 
-**Query params:** `?warehouse=AAH` or `?warehouse=BLP` (persisted in localStorage)
+**Query params:** `?warehouse=<location_code>` (persisted in localStorage)
 
 ---
 
 ## 1. Top-Level Selectors
 
-1. **Warehouse:** AAH | BLP
+1. **Data location:** active locations from Admin → Warehouses
    - Persisted in query string and localStorage
-   - Drives which data types are shown
+   - Drives the location code passed to Sales Out and SOH uploads
+   - If no active locations exist, location-specific imports are unavailable
 
-2. **Data type:** Dropdown of import types for the selected warehouse
+2. **Data type:** Import cards for Product Master plus location-specific Sales Out, SOH and Demand
 
 ---
 
-## 2. AAH Weekly Flow
+## 2. Weekly Import Flow
 
 | Data type | Format | Endpoint | Notes |
 |-----------|--------|----------|-------|
-| **Sales Out** | AAH Sales Out (CSV/XLSX) | POST /ingestion/sales-out/upload | AAH_Product_Code, Business_Processed_Date, Invoiced_Qty. Stage → Execute build-weekly → demand_actuals (AAH, W-TUE) |
-| **Stock on Hand (SOH)** | AAH SOH (CSV/XLSX) | POST /ingestion/stock-on-hand/upload | Stock at, AAH Code, STOCK, ON ORDER. Stage → Execute → inventory_snapshots_daily → inventory_snapshots_weekly |
-| **Demand (pipeline)** | Demand weekly (CSV) | POST /ingestion/upload (entity=demand) | week_start, sku, warehouse_code, demand_type, qty. Use warehouse_code=AAH in CSV |
-| **Product Master** | Product Master (CSV) | POST /ingestion/upload (entity=product_master) | SKU code, Description. Shared across warehouses |
+| **Sales Out** | Sales Out (CSV/XLSX) | POST /ingestion/sales-out/upload | AAH_Product_Code, Business_Processed_Date, Invoiced_Qty. Stage → Execute build-weekly → demand_actuals for selected location |
+| **Stock on Hand (SOH)** | SOH (CSV/XLSX) | POST /ingestion/stock-on-hand/upload | Stock at/snapshot date, product code, stock quantity. Stage → Execute → inventory_snapshots_daily → inventory_snapshots_weekly for selected location |
+| **Demand (pipeline)** | Demand weekly (CSV) | POST /ingestion/upload (entity=demand) | week_start, sku, warehouse_code, demand_type, qty. Selected location is sent with the upload |
+| **Product Master** | Product Master (CSV) | POST /ingestion/upload (entity=product_master) | SKU code, Description. Shared across locations |
 
 **Historical backfill:** Supported for Sales Out, SOH, Demand. Use "Upload historical backfill" and set date range.
 
 ---
 
-## 3. BLP Weekly Flow
+## 3. Location Flow
 
-| Data type | Format | Endpoint | Notes |
-|-----------|--------|----------|-------|
-| **Sales (direct)** | Demand weekly (CSV) | POST /ingestion/upload (entity=demand) | week_start, sku, warehouse_code=BLP, demand_type=CUSTOMER |
-| **Samples** | Demand weekly (CSV) | POST /ingestion/upload (entity=demand) | week_start, sku, warehouse_code=BLP, demand_type=SAMPLES |
-| **Stock on Hand (SOH)** | BLP SOH (CSV/XLSX) | POST /ingestion/stock-on-hand/upload | Code, Balance. Select Warehouse=BLP. Requires Warehouse Product Codes mapping first |
-| **Product Master** | Product Master (CSV) | POST /ingestion/upload (entity=product_master) | Shared |
-| **Warehouse Product Codes** | — | Link to Admin | Map BLP external codes to canonical SKU before BLP SOH import |
-
-**BLP SOH historical:** Disabled with message "BLP SOH history not loaded yet" until BLP SOH is set up.
+All active Admin locations can be selected. The UI no longer provides built-in AAH/BLP options. Location-specific uploads use the selected location code.
 
 ---
 
@@ -47,9 +40,9 @@
 
 Each import card shows:
 
-- **Format name** (e.g. AAH SOH, BLP SOH)
+- **Format name**
 - **Required columns** (short list)
-- **Target warehouse** (from selection)
+- **Target location** (from selection)
 - **Last run** summary: status, inserted/rejected counts, date
 - **Upload** and **Template** (or link) actions
 - **Weekly** vs **Historical** (when supported)
@@ -60,7 +53,7 @@ Each import card shows:
 
 | Endpoint | Purpose |
 |----------|---------|
-| GET /api/ingestion/runs/latest?entity=&warehouse_code= | Latest run for entity+warehouse (for "Last run" panel) |
+| GET /api/ingestion/runs/latest?entity=&warehouse_code= | Latest run for entity+location (for "Last run" panel) |
 | GET /api/ingestion/runs | List all runs |
 | POST /api/ingestion/sales-out/upload | Sales Out upload |
 | POST /api/ingestion/stock-on-hand/upload | SOH upload |
@@ -74,4 +67,4 @@ Each import card shows:
 
 ## 6. Config Source
 
-`frontend/src/config/importCards.ts` — single source of truth for warehouse → import cards.
+`frontend/src/config/importCards.ts` — creates import cards for the selected Admin location.

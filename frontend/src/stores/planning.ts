@@ -31,12 +31,14 @@ export const usePlanningStore = defineStore('planning', () => {
     demandSource: string = 'actuals',
     freezeWeeks: number = 4,
     notes?: string,
-    warehousesScope?: string[] | null
+    warehousesScope?: string[] | null,
+    planningMode: 'stock_aware' | 'demand_only' = 'stock_aware'
   ) {
     const params = new URLSearchParams({
       scenario_name: scenarioName,
       demand_source: demandSource,
       freeze_weeks: String(freezeWeeks),
+      planning_mode: planningMode,
     })
     if (runAt) params.set('run_at', runAt)
     if (notes) params.set('notes', notes)

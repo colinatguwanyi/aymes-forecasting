@@ -26,22 +26,6 @@ def parse_date(s: str) -> tuple[bool, Any]:
         return False, "Invalid date (use YYYY-MM-DD, Monday)"
 
 
-def parse_date_ddmmyyyy(s: str) -> tuple[bool, Any]:
-    """Parse DD/MM/YYYY; return (ok, date or error message)."""
-    s = (s or "").strip()
-    if not s:
-        return False, "Empty date"
-    try:
-        d = datetime.strptime(s, "%d/%m/%Y").date()
-        return True, d
-    except ValueError:
-        try:
-            d = datetime.strptime(s, "%Y-%m-%d").date()
-            return True, d
-        except ValueError:
-            return False, "Invalid date (use DD/MM/YYYY or YYYY-MM-DD)"
-
-
 def parse_decimal(s: str) -> tuple[bool, Decimal | str]:
     s = (s or "0").strip()
     try:
@@ -51,19 +35,22 @@ def parse_decimal(s: str) -> tuple[bool, Decimal | str]:
 
 
 def parse_date_ddmmyyyy(s: str) -> tuple[bool, Any]:
-    """Parse DD/MM/YYYY; return (ok, date or error message)."""
+    """Parse UK-style dates; return (ok, date or error message).
+
+    Accepts DD/MM/YYYY, DD-MM-YYYY, DD.MM.YYYY, or ISO YYYY-MM-DD (common Excel exports).
+    """
     s = (s or "").strip()
     if not s:
         return False, "Empty date"
-    try:
-        d = datetime.strptime(s, "%d/%m/%Y").date()
-        return True, d
-    except ValueError:
+    for fmt in ("%d/%m/%Y", "%d-%m-%Y", "%d.%m.%Y"):
         try:
-            d = datetime.strptime(s, "%Y-%m-%d").date()
-            return True, d
+            return True, datetime.strptime(s, fmt).date()
         except ValueError:
-            return False, "Invalid date (use DD/MM/YYYY or YYYY-MM-DD)"
+            continue
+    try:
+        return True, datetime.strptime(s[:10], "%Y-%m-%d").date()
+    except ValueError:
+        return False, "Invalid date (use DD/MM/YYYY, DD-MM-YYYY, or YYYY-MM-DD)"
 
 
 def validate_inventory_snapshots(rows: list[dict[str, Any]]) -> ImportDryRunResult:

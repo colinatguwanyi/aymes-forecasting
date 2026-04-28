@@ -12,8 +12,10 @@ from typing import Any, cast
 
 from sqlalchemy.orm import Session
 
+from app.ingestion_progress import merge_ingest_progress
 from app.models import (
     BaselineForecastWeekly,
+    IngestionRun,
     ForecastRunOutputStage,
     Product,
     PublishedBaselineForecastWeekly,
@@ -110,12 +112,16 @@ def _aah_to_sku_map(db: Session) -> dict[str, str]:
     return out
 
 
-def _ensure_warehouse(db: Session, code: str) -> None:
-    """Create warehouse with code if it does not exist."""
-    existing = db.query(Warehouse).filter(Warehouse.code == code).first()
-    if not existing:
-        db.add(Warehouse(code=code, name=code, timezone="Europe/London", active=True))
-        db.flush()
+def _require_warehouse_exists(db: Session, code: str) -> None:
+    """Require warehouses.code to exist; forecast baseline/publish must not create warehouses."""
+    c = (code or "").strip()
+    if not c:
+        raise ValueError("warehouse_code is required for forecast baseline import.")
+    existing = db.query(Warehouse).filter(Warehouse.code == c).first()
+    if existing is None:
+        raise ValueError(
+            f"Unknown warehouse_code '{c}'. Load warehouse master before importing forecasts."
+        )
 
 
 def validate_and_stage_row(
@@ -245,7 +251,7 @@ def build_baseline_from_stage(db: Session, run_id: Any, warehouse_code: str = DE
     For each staged row with forecast not null: upsert baseline_forecasts_weekly.
     Returns count of baseline rows written.
     """
-    _ensure_warehouse(db, warehouse_code)
+    _require_warehouse_exists(db, warehouse_code)
     rows = (
         db.query(ForecastRunOutputStage)
         .filter(
@@ -399,7 +405,7 @@ def publish_baseline_from_stage(db: Session, run_id: Any, warehouse_code: str = 
     using the selected model per (sku, train_end). Selection rule applied in _select_best_model_per_sku_wh.
     Returns count of published rows written.
     """
-    _ensure_warehouse(db, warehouse_code)
+    _require_warehouse_exists(db, warehouse_code)
     selection = _select_best_model_per_sku_wh(db, run_id, warehouse_code=warehouse_code)
     if not selection:
         return 0
@@ -475,6 +481,14 @@ def import_from_stage(db: Session, run_id: Any) -> tuple[int, int]:
     Run full pipeline: build_baseline_from_stage then publish_baseline_from_stage.
     Returns (baseline_rows_written, published_rows_written).
     """
+    _run = db.query(IngestionRun).filter(IngestionRun.id == run_id).first()
+    if _run:
+        merge_ingest_progress(
+            db,
+            _run,
+            import_phase="forecast_output",
+            import_message="Building forecast baseline and published tables from stage…",
+        )
     baseline_count = build_baseline_from_stage(db, run_id)
     published_count = publish_baseline_from_stage(db, run_id)
     return baseline_count, published_count

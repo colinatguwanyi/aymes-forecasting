@@ -81,7 +81,7 @@ This document describes the required file format for every import type in the AY
 | Column                      | Required | Notes                                      |
 |-----------------------------|----------|--------------------------------------------|
 | AAH_Product_Code            | Yes      | Product code (maps to products.aah_code)  |
-| Business_Processed_Date     | Yes      | DD/MM/YYYY                                 |
+| Business_Processed_Date     | Yes      | DD/MM/YYYY, DD-MM-YYYY, DD.MM.YYYY, or YYYY-MM-DD |
 | Invoiced_Qty                | No       | Decimal                                   |
 | Account_Code                | No       |                                            |
 | Delivery_Address_Line_1      | No       |                                            |

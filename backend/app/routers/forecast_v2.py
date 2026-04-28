@@ -14,14 +14,17 @@ from __future__ import annotations
 import logging
 from datetime import date
 from decimal import Decimal
-from typing import Any
+from typing import Any, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel, ConfigDict
+from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from app.database import get_db
 from app.forecast_mysql_models import ForecastResultWeekly, ForecastRun
+from app.models import PlanRun, PublishedBaselineForecastWeekly
+from app.routers.data_health import get_data_health, get_sku_integrity_report
 from app.security.auth import require_admin_or_planner, require_any_auth
 from app.services.forecasting.forecast_services import (
     ForecastResultService,
@@ -205,6 +208,60 @@ class ForecastRunOut(BaseModel):
     created_at: str | None = None
 
 
+ForecastCheckStatus = Literal["green", "amber", "red"]
+
+
+class ForecastCheckSalesOut(BaseModel):
+    latest_week: str | None = None
+    weeks_available: int
+    sku_count: int
+    status: ForecastCheckStatus
+    message: str
+
+
+class ForecastCheckStockOnHand(BaseModel):
+    latest_week: str | None = None
+    sku_count: int
+    status: ForecastCheckStatus
+    message: str
+
+
+class ForecastCheckRun(BaseModel):
+    latest_run_id: int | None = None
+    run_status: str | None = None
+    inference_date: str | None = None
+    completed_at: str | None = None
+    status: ForecastCheckStatus
+    message: str
+
+
+class ForecastCheckPlanningAlignment(BaseModel):
+    latest_baseline: str | None = None
+    latest_plan_baseline: str | None = None
+    status: ForecastCheckStatus
+    message: str
+
+
+class ForecastCheckCoverage(BaseModel):
+    orphan_sku_count: int
+    policy_gaps: int
+    demand_without_soh_count: int | None = None
+    demand_without_soh_ratio: float | None = None
+    status: ForecastCheckStatus
+    message: str
+
+
+class ForecastCheckOut(BaseModel):
+    overall_status: ForecastCheckStatus
+    headline: str
+    sales_freshness: ForecastCheckSalesOut
+    soh_freshness: ForecastCheckStockOnHand
+    forecast_run: ForecastCheckRun
+    planning_alignment: ForecastCheckPlanningAlignment
+    sku_data_coverage: ForecastCheckCoverage
+    actions: list[str]
+
+
 class ForecastResultOut(BaseModel):
     model_config = ConfigDict(protected_namespaces=())
 
@@ -225,6 +282,232 @@ class ForecastResultOut(BaseModel):
     outlier_flag: bool | None
     stockout_flag: bool | None
     constrained_flag: bool | None
+
+
+def _status_rank(status: ForecastCheckStatus) -> int:
+    return {"green": 0, "amber": 1, "red": 2}[status]
+
+
+def _max_status(statuses: list[ForecastCheckStatus]) -> ForecastCheckStatus:
+    return max(statuses, key=_status_rank)
+
+
+def _iso_date(value: Any) -> str | None:
+    if value is None:
+        return None
+    if isinstance(value, date):
+        return value.isoformat()
+    return str(value)[:10] if str(value) else None
+
+
+def _parse_iso_date(value: str | None) -> date | None:
+    if not value:
+        return None
+    try:
+        return date.fromisoformat(value[:10])
+    except ValueError:
+        return None
+
+
+def _plan_run_baseline_week(run: PlanRun | None) -> date | None:
+    if run is None:
+        return None
+    baseline = getattr(run, "baseline_train_end_week_start", None)
+    selected = getattr(run, "selected_train_end_week_start", None)
+    return baseline if baseline is not None else selected
+
+
+def _model_id(value: Any) -> int | None:
+    if value is None:
+        return None
+    try:
+        return int(str(value))
+    except (TypeError, ValueError):
+        return None
+
+
+@router.get(
+    "/check",
+    dependencies=[Depends(require_any_auth)],
+    response_model=ForecastCheckOut,
+)
+def get_forecast_check(
+    db: Session = Depends(get_db),
+    forecast_db: Session = Depends(get_forecast_db),
+) -> dict[str, Any]:
+    """Single read-only planner trust check for today's forecast state."""
+    health = get_data_health(db)
+    integrity = get_sku_integrity_report(db=db, sample_limit=1, recent_weeks=26)
+    actions: list[str] = []
+
+    demand = health.get("demand", {})
+    sales_latest = demand.get("latest_week")
+    sales_weeks = int(demand.get("weeks_available") or 0)
+    sales_skus = int(demand.get("skus_with_demand") or 0)
+    sales_status: ForecastCheckStatus = "green" if sales_latest and sales_skus > 0 else "red"
+    sales_message = (
+        f"Sales history is loaded through {sales_latest} for {sales_skus:,} SKUs."
+        if sales_status == "green"
+        else "Sales Out is missing, so the forecast has no demand history to learn from."
+    )
+    if sales_status == "red":
+        actions.append("Import the latest Sales Out file before using the forecast.")
+
+    soh = health.get("soh", {})
+    soh_latest = soh.get("latest_week")
+    soh_skus = int(soh.get("skus_with_stock") or 0)
+    soh_status: ForecastCheckStatus = "green" if soh_latest and soh_skus > 0 else "red"
+    sales_latest_date = _parse_iso_date(str(sales_latest) if sales_latest else None)
+    soh_latest_date = _parse_iso_date(str(soh_latest) if soh_latest else None)
+    if soh_status == "green" and sales_latest_date and soh_latest_date and soh_latest_date < sales_latest_date:
+        soh_status = "amber"
+    if soh_status == "red":
+        soh_message = "Stock On Hand is missing, so stock-aware forecast checks cannot be trusted."
+        actions.append("Import the latest Stock On Hand file.")
+    elif soh_status == "amber":
+        soh_message = f"Stock On Hand is only loaded through {soh_latest}, which is behind Sales Out."
+        actions.append("Refresh Stock On Hand so it is at least as recent as Sales Out.")
+    else:
+        soh_message = f"Stock On Hand is loaded through {soh_latest} for {soh_skus:,} SKUs."
+
+    latest_run = forecast_db.query(ForecastRun).order_by(ForecastRun.created_at.desc(), ForecastRun.id.desc()).first()
+    completed_statuses = ["success", "completed", "complete"]
+    latest_completed_run = (
+        forecast_db.query(ForecastRun)
+        .filter(ForecastRun.run_status.in_(completed_statuses), ForecastRun.completed_at.is_not(None))
+        .order_by(ForecastRun.completed_at.desc(), ForecastRun.id.desc())
+        .first()
+    )
+    latest_run_id = _model_id(getattr(latest_run, "id", None))
+    latest_completed_run_id = _model_id(getattr(latest_completed_run, "id", None))
+    run_status: ForecastCheckStatus
+    if latest_completed_run is None:
+        run_status = "red"
+        run_message = "There is no completed forecast run yet."
+        actions.append("Run the forecast engine and wait for it to complete successfully.")
+    elif latest_run is not None and latest_run_id != latest_completed_run_id:
+        run_status = "amber"
+        run_message = (
+            f"The newest run is {latest_run.run_status}; the last completed run is #{latest_completed_run_id}."
+        )
+        actions.append("Check the latest forecast run and rerun it if it did not finish cleanly.")
+    else:
+        run_status = "green"
+        run_message = f"Latest forecast run #{latest_completed_run_id} completed successfully."
+    run_for_output = latest_run or latest_completed_run
+
+    latest_baseline = db.query(func.max(PublishedBaselineForecastWeekly.train_end_week_start)).scalar()
+    latest_plan = db.query(PlanRun).order_by(PlanRun.created_at.desc(), PlanRun.id.desc()).first()
+    latest_plan_baseline = _plan_run_baseline_week(latest_plan)
+    plan_demand_source = getattr(latest_plan, "demand_source", None) if latest_plan is not None else None
+    alignment_status: ForecastCheckStatus = "green"
+    if latest_baseline is None:
+        alignment_status = "amber"
+        alignment_message = "No published baseline forecast is available for planning yet."
+        actions.append("Publish or import a baseline forecast before trusting baseline-led plans.")
+    elif latest_plan is None:
+        alignment_status = "amber"
+        alignment_message = "No plan run is available to compare with the latest forecast baseline."
+        actions.append("Run a plan after the forecast is complete.")
+    elif latest_plan_baseline is None:
+        alignment_status = "amber"
+        alignment_message = "The latest plan is not pinned to a forecast baseline."
+        if plan_demand_source != "baseline":
+            alignment_message = "The latest plan is not using a forecast baseline."
+        actions.append("Use Scenario Manager to align the plan to the latest forecast baseline.")
+    elif latest_plan_baseline < latest_baseline:
+        alignment_status = "amber"
+        alignment_message = (
+            f"The latest plan uses baseline {latest_plan_baseline.isoformat()}, "
+            f"but {latest_baseline.isoformat()} is available."
+        )
+        actions.append("Reset the plan to the latest baseline or rerun planning.")
+    elif latest_plan_baseline > latest_baseline:
+        alignment_status = "amber"
+        alignment_message = "The latest plan baseline is newer than the latest published baseline list."
+        actions.append("Refresh forecast baselines and confirm the plan is using the intended week.")
+    else:
+        alignment_message = f"The latest plan is aligned to baseline {latest_plan_baseline.isoformat()}."
+
+    orphan_skus = integrity.get("orphan_skus", {})
+    demand_facts_orphans = orphan_skus.get("demand_facts_weekly_distinct_sku", {})
+    orphan_sku_count = int(orphan_skus.get("planning_policy_rows", {}).get("count") or 0)
+    orphan_sku_count += int(orphan_skus.get("inventory_snapshots_weekly_distinct_sku", {}).get("count") or 0)
+    orphan_sku_count += int(orphan_skus.get("demand_actuals_distinct_sku", {}).get("count") or 0)
+    orphan_sku_count += int(demand_facts_orphans.get("orphan_sku_distinct_count") or 0)
+
+    coverage_gaps = integrity.get("coverage_gaps", {})
+    demand_no_soh = int(coverage_gaps.get("demand_pair_no_soh_pair_ever", {}).get("pair_count") or 0)
+    policy_gaps = int(coverage_gaps.get("soh_pair_no_planning_policy", {}).get("pair_count") or 0)
+    policy_gaps += int(coverage_gaps.get("planning_policy_no_recent_demand", {}).get("pair_count") or 0)
+    policy_gaps += int(coverage_gaps.get("planning_policy_no_recent_soh", {}).get("pair_count") or 0)
+    demand_no_soh_ratio_raw = integrity.get("demand_without_soh_ratio")
+    demand_no_soh_ratio = float(demand_no_soh_ratio_raw) if demand_no_soh_ratio_raw is not None else None
+
+    if orphan_sku_count > 0:
+        coverage_status: ForecastCheckStatus = "red"
+        coverage_message = f"{orphan_sku_count:,} SKU references do not match the product master."
+        actions.append("Fix SKU mapping or product master gaps before trusting the forecast.")
+    elif policy_gaps > 0 or demand_no_soh > 0:
+        coverage_status = "amber"
+        coverage_message = (
+            f"Coverage is incomplete: {policy_gaps:,} policy gaps and "
+            f"{demand_no_soh:,} demand pairs without SOH."
+        )
+        actions.append("Review Data Health coverage gaps and fill missing policies or SOH.")
+    else:
+        coverage_status = "green"
+        coverage_message = "SKU coverage, policy coverage, and demand/SOH overlap look complete."
+
+    overall_status = _max_status([sales_status, soh_status, run_status, alignment_status, coverage_status])
+    headline = {
+        "green": "Forecast status: OK",
+        "amber": "Forecast status: Warning",
+        "red": "Forecast status: Blocked",
+    }[overall_status]
+    if not actions:
+        actions.append("No action needed today. The forecast is ready to use.")
+
+    return {
+        "overall_status": overall_status,
+        "headline": headline,
+        "sales_freshness": {
+            "latest_week": sales_latest,
+            "weeks_available": sales_weeks,
+            "sku_count": sales_skus,
+            "status": sales_status,
+            "message": sales_message,
+        },
+        "soh_freshness": {
+            "latest_week": soh_latest,
+            "sku_count": soh_skus,
+            "status": soh_status,
+            "message": soh_message,
+        },
+        "forecast_run": {
+            "latest_run_id": _model_id(getattr(run_for_output, "id", None)),
+            "run_status": str(run_for_output.run_status) if run_for_output is not None else None,
+            "inference_date": _iso_date(run_for_output.inference_date) if run_for_output is not None else None,
+            "completed_at": run_for_output.completed_at.isoformat() if run_for_output is not None and run_for_output.completed_at is not None else None,
+            "status": run_status,
+            "message": run_message,
+        },
+        "planning_alignment": {
+            "latest_baseline": _iso_date(latest_baseline),
+            "latest_plan_baseline": _iso_date(latest_plan_baseline),
+            "status": alignment_status,
+            "message": alignment_message,
+        },
+        "sku_data_coverage": {
+            "orphan_sku_count": orphan_sku_count,
+            "policy_gaps": policy_gaps,
+            "demand_without_soh_count": demand_no_soh,
+            "demand_without_soh_ratio": demand_no_soh_ratio,
+            "status": coverage_status,
+            "message": coverage_message,
+        },
+        "actions": actions,
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -343,7 +626,8 @@ def update_source_config(
 ) -> dict[str, Any]:
     """Update mutable fields of a source config."""
     svc = ForecastSourceConfigService(forecast_db)
-    obj = svc.update(config_id, **body.model_dump(exclude_none=True))
+    # exclude_unset so explicit nulls (e.g. clear mysql_host → use .env default) are applied.
+    obj = svc.update(config_id, **body.model_dump(exclude_unset=True))
     if obj is None:
         raise HTTPException(status_code=404, detail=f"SourceConfig id={config_id} not found")
     forecast_db.commit()

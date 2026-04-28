@@ -1,10 +1,12 @@
 from __future__ import annotations
 import logging
 from pathlib import Path
+from typing import Self
+
+from pydantic import model_validator
+from pydantic_settings import BaseSettings, SettingsConfigDict
 
 logger = logging.getLogger(__name__)
-
-from pydantic_settings import BaseSettings, SettingsConfigDict
 
 # Always load backend/.env regardless of process cwd (e.g. uvicorn started from repo root).
 _BACKEND_ROOT = Path(__file__).resolve().parent.parent
@@ -34,9 +36,11 @@ class Settings(BaseSettings):
     mysql_user: str = "aymes"
     mysql_password: str = ""
     mysql_database: str = "aymes_reports"
-    # Dedicated MySQL database for all forecast tables.
-    # Set MYSQL_FORECAST_DATABASE in .env to override.
-    mysql_forecast_database: str = "aymes_forecasting"
+    # Dedicated MySQL database for all forecast ORM tables (app/forecast_mysql_models).
+    # If unset or empty, the backend uses the same database name as DATABASE_URL (e.g. supply_planning)
+    # so the platform MySQL user does not need a second GRANT. Set to aymes_forecasting (or any name)
+    # to keep forecast tables in a separate database on the same server.
+    mysql_forecast_database: str | None = None
 
     # ---------------------------------------------------------------------------
     # Legacy output compatibility (Vertex pipeline shape)
@@ -86,6 +90,40 @@ class Settings(BaseSettings):
     # an error diagnostic is written.  False records a warning but does not
     # affect run status.
     legacy_parity_fail_on_mismatch: bool = False
+
+    @model_validator(mode="after")
+    def _sync_mysql_credentials_from_database_url(self) -> Self:
+        """
+        If MYSQL_PASSWORD is empty, copy host/port/user/password from DATABASE_URL
+        so forecast and legacy MySQL code paths use the same credentials as the
+        platform DB. Environment variables that were explicitly set still win
+        (we only fill fields not in model_fields_set, except we always set
+        mysql_password from the URL when it was empty and the URL includes one).
+        """
+        if (self.mysql_password or "").strip() != "":
+            return self
+        try:
+            from sqlalchemy.engine.url import make_url
+        except Exception as exc:  # pragma: no cover
+            logger.debug("sqlalchemy not available for DATABASE_URL parse: %s", exc)
+            return self
+        try:
+            u = make_url(self.database_url)
+        except Exception as exc:
+            logger.debug("Could not parse DATABASE_URL for MySQL sync: %s", exc)
+            return self
+        if "mysql" not in (u.drivername or "").lower():
+            return self
+        fields_set = getattr(self, "model_fields_set", None) or set()
+        if u.password is not None and str(u.password).strip() != "":
+            self.mysql_password = str(u.password)
+        if u.username and "mysql_user" not in fields_set:
+            self.mysql_user = u.username
+        if u.host and "mysql_host" not in fields_set:
+            self.mysql_host = u.host
+        if u.port is not None and "mysql_port" not in fields_set:
+            self.mysql_port = int(u.port)
+        return self
 
 
 settings: Settings = Settings()

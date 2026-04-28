@@ -3,6 +3,7 @@ from __future__ import annotations
 import logging
 from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal
+from enum import Enum
 from typing import Any, cast
 
 from fastapi import APIRouter, Body, Depends, HTTPException, Query
@@ -30,11 +31,19 @@ from app.schemas import (
     SkuWeekExplanationPolicy,
     SkuWeekExplanationProjection,
 )
+from app.routers.exports import planning_mode_from_run
 from app.services.demand_resolver import NoBaselineRunsError, published_run_exists, resolve_demand_for_run, _frozen_mondays_for_plan
 from app.services.planning import AllWarehousesSkippedError, _monday_before, run_plan
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
+
+
+class PlanRunPlanningMode(str, Enum):
+    """Explicit planning mode for a plan run (metadata + future demand-only behavior)."""
+
+    stock_aware = "stock_aware"
+    demand_only = "demand_only"
 
 
 def _human_breakdown(breakdown: dict[str, Any] | None, source: str) -> str | None:
@@ -60,12 +69,17 @@ def run_planning(
     created_by: str | None = Query(None),
     notes: str | None = Query(None),
     warehouses_scope: str | None = Query(None, description="Comma-separated warehouse codes, e.g. AAH,BLP. Omit for legacy (all from policies)."),
+    planning_mode: PlanRunPlanningMode | None = Query(
+        None,
+        description="stock_aware (default) | demand_only. Omitted means stock_aware.",
+    ),
     db: Session = Depends(get_db),
 ) -> PlanRun:
     run_date = date.fromisoformat(run_at) if run_at else date.today()
     wh_list: list[str] | None = None
     if warehouses_scope and warehouses_scope.strip():
         wh_list = [w.strip() for w in warehouses_scope.split(",") if w.strip()]
+    effective_planning_mode = planning_mode.value if planning_mode is not None else PlanRunPlanningMode.stock_aware.value
     try:
         plan_run = run_plan(
             db,
@@ -76,6 +90,7 @@ def run_planning(
             created_by=created_by,
             notes=notes,
             warehouses_scope=wh_list,
+            planning_mode=effective_planning_mode,
         )
     except NoBaselineRunsError as e:
         db.rollback()
@@ -214,10 +229,15 @@ def get_plan_exceptions(
     include_low_cover: bool = Query(True, description="Include low weeks-of-cover as warnings"),
     db: Session = Depends(get_db),
 ) -> list[PlanningException]:
-    """Exceptions queue: stockout and optionally low-cover SKU-weeks within horizon."""
+    """Exceptions queue: stockout and optionally low-cover SKU-weeks within horizon (stock_aware only).
+
+    demand_only runs return no exceptions: projected stockout/low-cover reflect a modeled ledger, not physical SOH.
+    """
     run = db.query(PlanRun).filter(PlanRun.id == plan_run_id).first()
     if not run:
         raise HTTPException(status_code=404, detail="Plan run not found")
+    if planning_mode_from_run(run) == "demand_only":
+        return []
     run_at: date = cast(date, run.run_at)
     cutoff = run_at + timedelta(weeks=within_weeks)
     q = (
